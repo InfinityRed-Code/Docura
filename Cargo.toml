@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pdf_types",
+    "crates/pdf_core",
+    "crates/pdf_pdfium",
+    "crates/pdf_services",
+    "crates/pdf_cache",
+    "apps/desktop-tauri/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+lopdf = "0.38"
+pdfium-render = "0.8"
+
+pdf_types = { path = "crates/pdf_types" }
+pdf_core = { path = "crates/pdf_core" }
+pdf_pdfium = { path = "crates/pdf_pdfium" }
+pdf_services = { path = "crates/pdf_services" }
+pdf_cache = { path = "crates/pdf_cache" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

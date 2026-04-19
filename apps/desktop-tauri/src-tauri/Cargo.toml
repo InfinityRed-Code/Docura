@@ -1,0 +1,37 @@
+[package]
+name = "desktop-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "desktop_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "desktop-tauri"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+pdf_core = { workspace = true }
+pdf_pdfium = { workspace = true }
+pdf_services = { workspace = true }
+pdf_cache = { workspace = true }
+pdf_types = { workspace = true }
+png = "0.17"
+base64 = "0.22"
+parking_lot = "0.12"

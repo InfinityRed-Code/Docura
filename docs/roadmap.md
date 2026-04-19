@@ -1,0 +1,247 @@
+# rustpdf — Roadmap
+
+Ziel: Native Windows-Desktop-App (Tauri 2 + Rust), die Foxit PDF, PDF24 und Adobe Acrobat in den alltäglichen Anwendungsfällen ersetzt. Priorisiert nach MVP-Prinzip: Essenzielles zuerst, Nischen zuletzt. Jede Meilensteinversion ist in sich nutzbar.
+
+Legende: **[C]** = Core-Rust, **[E]** = PDFium-Engine, **[S]** = Services, **[U]** = UI (TS), **[X]** = externe Bibliothek / neuer Crate.
+
+---
+
+## Meilenstein v0.1 — "Reader MVP" *(aktuelles Ziel)*
+
+Minimum, um eine PDF tatsächlich zu lesen. Ersetzt bereits den Browser-Reader für viele Nutzer.
+
+- [x] PDF öffnen (Dialog + FS-Plugin) [S][U]
+- [x] Seite als Bild rendern [E][U]
+- [x] Seitenwechsel per Mausrad [U]
+- [x] Zoom (Ctrl+Rad, Buttons) [U]
+- [x] Pfeiltasten / PageUp / PageDown [U]
+- [ ] Fit-to-Width / Fit-to-Page Modus [U]
+- [ ] Textsuche (aktuelle Seite) [E][U]
+- [ ] Textsuche (gesamtes Dokument) mit Treffermarkierung [C][E][U]
+- [ ] Text selektieren und kopieren (Selection-Layer über Bild) [C][E][U]
+- [ ] Thumbnail-Leiste links mit Klick-Navigation [U][X: pdf_cache]
+- [ ] Outline / Bookmarks (TOC-Sidebar) [E][U]
+- [ ] Asynchroner Render-Pool (kein UI-Freeze bei großen Seiten) [C][E]
+- [ ] Seiten-Cache mit LRU (Zoom-Level-keyed) [C][pdf_cache]
+- [ ] Zuletzt geöffnete Dateien [S][U]
+- [ ] Drag & Drop einer PDF ins Fenster [U]
+- [ ] Tastenkürzel: Strg+O, Strg+F, Strg+Plus/Minus/0, Strg+G (Go-to-page)
+
+---
+
+## Meilenstein v0.2 — "Navigation & Komfort"
+
+Nutzererwartung an einen ernsthaften Reader.
+
+- [ ] Kontinuierlicher Scroll-Modus (alle Seiten, virtualisiert) [U]
+- [ ] Doppelseiten-Modus [U]
+- [ ] Drehen pro Seite / dokumentweit (nur Anzeige) [C][U]
+- [ ] Goto-Page Popup (Strg+G) [U]
+- [ ] Verlaufs-Navigation: Zurück/Vor nach internen Links [C][U]
+- [ ] Links im PDF klickbar (interne Ziele + externe URLs via Opener-Plugin) [E][S][U]
+- [ ] Anhänge (Attachments) anzeigen + speichern [E][S][U]
+- [ ] Vollbildmodus (F11) + Präsentationsmodus [U]
+- [ ] Druck-Dialog (Windows-Native) [S]
+- [ ] Dark-/Invert-Mode für Seitenrendering [U]
+- [ ] Dokumenten-Eigenschaften (Metadaten, Schriftarten, Seitengröße) [E][U]
+
+---
+
+## Meilenstein v0.3 — "Organisation"
+
+Seiten manipulieren — klassischer PDF24-Einstieg.
+
+- [ ] Seiten löschen [E][X: lopdf]
+- [ ] Seiten einfügen (aus anderer PDF) [X: lopdf]
+- [ ] Seiten neu anordnen (Drag&Drop im Thumbnail-Panel) [X: lopdf][U]
+- [ ] Seiten rotieren (persistent im Dokument) [X: lopdf]
+- [ ] Seiten extrahieren → neue PDF [X: lopdf]
+- [ ] PDFs zusammenführen (Merge mehrerer Dateien) [X: lopdf]
+- [ ] PDF splitten (nach Seitenbereich / Größe / Lesezeichen) [X: lopdf]
+- [ ] Dateigrößenoptimierung (Bilder rekomprimieren, Metadaten strippen) [X: lopdf + image]
+- [ ] Speichern / Speichern unter [S]
+- [ ] Undo/Redo Stack für Organisations-Operationen [C]
+- [ ] Wasserzeichen (Text + Bild) [X: lopdf]
+- [ ] Kopf-/Fußzeile, Seitenzahlen einfügen [X: lopdf]
+
+---
+
+## Meilenstein v0.4 — "Annotation"
+
+Herzstück der Reviewer-Workflows.
+
+- [ ] Textmarker (Highlight) mit Farbwahl [E + X: lopdf]
+- [ ] Unterstrich / Durchstrich [E + X: lopdf]
+- [ ] Notizzettel (Sticky Notes) mit Kommentar-Popup [X: lopdf]
+- [ ] Freihand-Zeichnen (Ink Annotation) [X: lopdf]
+- [ ] Formen: Rechteck, Kreis, Linie, Pfeil [X: lopdf]
+- [ ] Textfeld-Annotation (Freitext auf Seite) [X: lopdf]
+- [ ] Stempel (vordefiniert + eigene Bild-Stempel) [X: lopdf]
+- [ ] Kommentar-Panel rechts mit Thread + Filter [U]
+- [ ] Annotationen exportieren / importieren (FDF/XFDF) [X: neuer Crate fdf]
+- [ ] Annotationen drucken/nicht drucken Flag [C][U]
+
+---
+
+## Meilenstein v0.5 — "Formulare ausfüllen"
+
+Abdeckung aller AcroForm-basierten Behörden-/Unternehmensformulare.
+
+- [ ] AcroForm-Felder erkennen und rendern [E]
+- [ ] Textfeld-, Checkbox-, Radio-, Dropdown-Eingabe [E][U]
+- [ ] Feld-Berechnungen (JS-Formeln für Summen/Format) [X: boa / quickjs-Bindung]
+- [ ] Formular speichern (ausgefüllt) [X: lopdf]
+- [ ] Formular zurücksetzen
+- [ ] Validierung + Required-Feld-Hinweise [U]
+- [ ] Signaturfelder vorbereiten (Platzhalter, noch ohne Krypto)
+
+---
+
+## Meilenstein v0.6 — "Fill & Sign"
+
+Unterschreiben — Adobe-Kernfeature.
+
+- [ ] Freihand-Unterschrift zeichnen + speichern [U]
+- [ ] Unterschrift als Bild einfügen [X: lopdf + image]
+- [ ] Initial-Stempel [U + X: lopdf]
+- [ ] Textfelder per Klick auf beliebige Stelle [U]
+- [ ] Datum, Häkchen, Kreuz-Stempel [U]
+- [ ] Digitale Signatur (PKCS#7, PAdES-B) — Zertifikat aus Windows-Keystore [X: ring / openssl / windows-crates]
+- [ ] Signaturprüfung (Validität, Trust-Chain, Zeitstempel) [X]
+- [ ] Zeitstempel-Dienst (RFC 3161) optional [X]
+
+---
+
+## Meilenstein v0.7 — "Sicherheit & Redaktion"
+
+Anforderung aus Legal/Compliance. Foxit/Adobe-Parität.
+
+- [ ] Passwort-geschützte PDFs öffnen (User + Owner Password) [E]
+- [ ] PDF mit Passwort schützen [X: lopdf + aes/rc4]
+- [ ] Berechtigungen setzen (Drucken, Kopieren, Ändern) [X: lopdf]
+- [ ] Redaktion: Text dauerhaft schwärzen (Inhalt entfernt, nicht nur überdeckt) [X: lopdf + pdfium-text]
+- [ ] Metadaten bereinigen (Sanitize) [X: lopdf]
+- [ ] Versteckte Inhalte finden (Layers, Kommentare, unsichtbarer Text)
+- [ ] Pattern-Redaktion (E-Mails, Telefonnummern per Regex) [C][U]
+
+---
+
+## Meilenstein v0.8 — "Export & Konvertierung"
+
+Ohne Konvertierung kein PDF24-Ersatz.
+
+- [ ] PDF → PNG / JPG (pro Seite oder Bereich) [E]
+- [ ] PDF → Plain Text [E]
+- [ ] PDF → HTML (einfach, für Copy-Paste) [E]
+- [ ] PDF → Word (.docx) — Textfluss-rekonstruiert [X: docx-rs + heuristics]
+- [ ] PDF → Excel (.xlsx) — Tabellen-Heuristik [X: rust_xlsxwriter + table-detection]
+- [ ] PDF → PowerPoint — optional, niedrige Prio
+- [ ] Bilder → PDF (Multi-Page aus PNG/JPG) [X: lopdf + image]
+- [ ] Office-Dateien → PDF (via System-Drucker-API oder LibreOffice-Headless) [S]
+- [ ] Druck als PDF-Drucker (Windows virtueller Drucker) [X: Windows-Crates]
+
+---
+
+## Meilenstein v0.9 — "OCR & Scans"
+
+Gescannte Dokumente. Ohne OCR bleibt die App für ca. 20 % der echten PDFs blind.
+
+- [ ] OCR-Integration über Tesseract [X: tesseract-rs oder leptess]
+- [ ] Sprachpakete nachladen (UI-gesteuert) [S]
+- [ ] OCR-Layer auf Seite (unsichtbarer Text über Bild) [X: lopdf]
+- [ ] Batch-OCR über mehrere Dokumente [S]
+- [ ] Bildqualität-Vorverarbeitung (Deskew, Despeckle, Kontrast) [X: image]
+- [ ] Auto-Erkennung: "Diese PDF enthält keinen Text, OCR starten?" [C][U]
+
+---
+
+## Meilenstein v1.0 — "Performance & Polish"
+
+Harter Schnitt: alles flüssig, stabil, mitnehmbar.
+
+- [ ] Render-Worker-Pool (N Threads, Priorisierung nach Viewport) [C]
+- [ ] Progressive Rendering (niedrige Auflösung zuerst, dann scharf) [C][E]
+- [ ] GPU-beschleunigtes Blitting der Seitenbilder (wgpu-Backed Canvas optional) [X: wgpu]
+- [ ] Virtuelles Scrollen im kontinuierlichen Modus (nur sichtbare Seiten) [U]
+- [ ] Thumbnail-Cache auf Disk persistieren [S][pdf_cache]
+- [ ] Memory-Footprint-Test mit 1000-Seiten-PDFs
+- [ ] MSI-Installer inkl. WebView2 Bootstrapper [X: WiX]
+- [ ] Auto-Update (Tauri Updater Plugin) [X]
+- [ ] Crash-Reporting opt-in (Sentry oder eigenes) [X]
+- [ ] Lokalisierung: de / en mindestens [U]
+- [ ] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U]
+- [ ] Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
+
+---
+
+## v1.1+ — Nischen & Pro-Features
+
+Reihenfolge nach Nutzerbedarf sortieren, nicht streng umsetzen.
+
+### Dokumentenvergleich
+- [ ] PDF-Vergleich Seite-an-Seite mit Diff-Markierung (Text + Layout) [C]
+- [ ] Report-Export des Vergleichs
+
+### Formular-Erstellung
+- [ ] Formular-Designer (Textfelder, Checkboxen platzieren) [U][X: lopdf]
+- [ ] XFA-Support read-only (seltener, aber vorhanden) [X]
+
+### Erweiterte PDF-Features
+- [ ] Optional Content Groups (Layer ein/aus) [E][U]
+- [ ] JavaScript-Actions in Formularen sicher ausführen [X: sandboxed JS]
+- [ ] 3D-Annotationen (U3D/PRC) — nur Anzeige [X: optional]
+- [ ] PDF/A-Konvertierung + Validierung [X: veraPDF-CLI Bindung]
+- [ ] PDF/X für Print-Workflows
+- [ ] Linearisierung (Fast Web View) beim Speichern [X: lopdf/qpdf-Bindung]
+- [ ] Bates-Nummerierung (Legal) [X: lopdf]
+
+### Enterprise / Workflow
+- [ ] Batch-Prozessor UI (Dateien rein → Aktion → Export) [U][S]
+- [ ] CLI-Modus (`rustpdf merge a.pdf b.pdf -o out.pdf`) [C]
+- [ ] Watch-Folder (Auto-OCR, Auto-Sign)
+- [ ] SharePoint / WebDAV / S3-Integration [S]
+- [ ] Plugin-System (WASM-basierte Erweiterungen) [C][X: wasmtime]
+
+### Kollaboration
+- [ ] Kommentar-Export als JSON/CSV
+- [ ] Multi-User-Annotations über Datei-Lock oder eigene Backend-API
+
+---
+
+## Linux-Portierung (parallel zur Roadmap)
+
+Wenn v0.3 erreicht ist, Linux als zweites Ziel:
+
+- [ ] `libpdfium.so` in `vendor/pdfium/linux/x64/` beschaffen
+- [ ] CI-Matrix erweitern: `ubuntu-latest` mit `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`
+- [ ] Dateidialoge/Opener auf XDG-Portal prüfen (Tauri-Plugin macht das automatisch)
+- [ ] AppImage + .deb Packaging
+- [ ] Signatur-Backend: Windows-Cert-Store → unter Linux auf PKCS#11 / Datei-Zertifikat umschalten (Trait `CertStore` in `pdf_services` erweitern)
+
+---
+
+## Architektur-Regeln für jedes Feature
+
+Bevor ein Feature umgesetzt wird, zuordnen:
+
+1. **Core-Logik** in `pdf_core` (UI-frei, OS-frei).
+2. **PDFium-spezifisch** in `pdf_pdfium`; reine Dokument-Mutation über `lopdf` in eigenem Adapter-Crate (z. B. `pdf_mutate`).
+3. **OS-Integration** (Drucker, Cert-Store, Dateidialog) als Trait in `pdf_services`, Impl im Tauri-Crate.
+4. **UI-State** nie aus Core übergehen — nur Deltas als serialisierbare Typen aus `pdf_types`.
+5. **Async**: alles > 16 ms läuft in `spawn_blocking` oder dediziertem Worker-Pool. UI nie blockieren.
+6. **Neue Abhängigkeit**: Lizenz prüfen (kompatibel zu MIT/Apache-2.0). PDFium ist Apache-2.0/BSD.
+
+---
+
+## Entscheidungen, die früh getroffen werden müssen
+
+Bevor v0.3+ anfängt, lohnt sich ein Proof-of-Concept:
+
+| Thema | Optionen | Empfehlung |
+|-------|----------|------------|
+| Mutations-Backend | `lopdf` vs. `pdfium-render` Edit-APIs vs. eigenes | `lopdf` für Strukturop, PDFium nur für Render/Text |
+| Digitale Signatur | `ring` + `pkcs7` vs. `openssl` vs. Windows CNG | Windows CNG für nativen Cert-Store, `pkcs7`-Crate für CMS-Encoding |
+| OCR-Laufzeit | Tesseract nativ vs. WASM-Port | Nativ via `leptess`, System-Tesseract optional bundeln |
+| JS-Engine für Formularskripte | `boa` (pure Rust) vs. `quickjs` vs. `v8` | `boa` — klein, sicher, reicht für AcroForm-Formeln |
+| Installer | WiX MSI vs. NSIS vs. MSIX | MSI via Tauri-Bundler + WiX — Enterprise-freundlich |
+| Rendering-Fallback | PDFium only vs. zusätzlich `mupdf` | PDFium bleibt primär; mupdf nur wenn Lizenz erlaubt und Features fehlen |

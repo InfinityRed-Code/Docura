@@ -1,0 +1,15 @@
+[package]
+name = "pdf_pdfium"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+pdfium-render = { workspace = true }
+pdf_core = { workspace = true }
+pdf_types = { workspace = true }
+parking_lot = "0.12"

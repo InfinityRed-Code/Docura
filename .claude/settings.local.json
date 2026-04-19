@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(rustup --version)",
+      "Bash(npm --version)",
+      "Bash(git --version)",
+      "Read(//c/Users/Lukas/.cargo/bin/**)",
+      "PowerShell(rustc *)",
+      "Bash(export PATH=\"/c/Users/Lukas/.cargo/bin:/c/Program Files/nodejs:$PATH\")",
+      "Bash(pnpm --version)",
+      "Bash(cargo install *)",
+      "Bash(git init *)",
+      "Bash(npm install *)",
+      "Bash(cargo check *)",
+      "Bash(powershell *)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm exec *)",
+      "Bash(curl -sSL -o pdfium-win-x64.tgz \"https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz\")",
+      "Bash(tar -xzf pdfium-win-x64.tgz)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm tauri *)",
+      "Bash(./ui/node_modules/.bin/tauri dev *)",
+      "Bash(echo \"EXIT:$?\")"
+    ]
+  }
+}

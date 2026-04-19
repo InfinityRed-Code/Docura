@@ -1,0 +1,25 @@
+/target/
+**/target/
+/node_modules/
+**/node_modules/
+/dist/
+**/dist/
+.DS_Store
+Thumbs.db
+*.log
+
+# Tauri
+apps/desktop-tauri/src-tauri/gen/
+apps/desktop-tauri/ui/.vite/
+
+# Vendored PDFium binaries are large; keep tracked via LFS or script
+vendor/pdfium/*.dll
+vendor/pdfium/*.so
+vendor/pdfium/*.dylib
+vendor/pdfium/*.lib
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
