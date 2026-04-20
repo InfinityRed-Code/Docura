@@ -10,8 +10,8 @@ use pdf_cache::{CacheKey, CachedImage, RenderCache};
 use pdf_core::{PdfEngine, RenderRequest};
 use pdf_pdfium::PdfiumEngine;
 use pdf_types::{
-    DocumentId, OutlineNode, PageIndex, PageSize, RecentFile, SearchHit, SearchQuery, TextRun,
-    ZoomLevel,
+    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode, PageIndex, PageLink,
+    PageSize, RecentFile, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -65,11 +65,12 @@ struct RenderedPayload {
     data_url: String,
 }
 
-fn make_cache_key(doc: DocumentId, page: u32, zoom: f32) -> CacheKey {
+fn make_cache_key(doc: DocumentId, page: u32, zoom: f32, rotation_q: u8) -> CacheKey {
     CacheKey {
         document: doc,
         page: PageIndex(page),
         zoom_milli: (zoom * 1000.0).round() as u32,
+        rotation_q: rotation_q % 4,
     }
 }
 
@@ -79,8 +80,11 @@ async fn render_page(
     document: DocumentId,
     page: u32,
     zoom: f32,
+    rotation: Option<u8>,
 ) -> Result<RenderedPayload, String> {
-    let key = make_cache_key(document, page, zoom);
+    let rot_q = rotation.unwrap_or(0) % 4;
+    let rotation = Rotation::from_quarter_turns(rot_q);
+    let key = make_cache_key(document, page, zoom, rot_q);
     if let Some(cached) = state.cache.lock().get(&key).cloned() {
         return Ok(encode_payload(cached.width, cached.height, &cached.rgba)?);
     }
@@ -91,6 +95,7 @@ async fn render_page(
                 document,
                 page: PageIndex(page),
                 zoom: ZoomLevel(zoom),
+                rotation,
             })
             .map_err(|e| e.to_string())
     })
@@ -124,10 +129,11 @@ async fn render_thumbnail(
     page: u32,
     max_width: u32,
     page_width_pt: f32,
+    rotation: Option<u8>,
 ) -> Result<RenderedPayload, String> {
     let pt = page_width_pt.max(1.0);
     let zoom = (max_width as f32 / pt).clamp(0.05, 1.0);
-    render_page(state, document, page, zoom).await
+    render_page(state, document, page, zoom, rotation).await
 }
 
 #[tauri::command]
@@ -144,6 +150,143 @@ async fn page_text_layout_cmd(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn page_links_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+) -> Result<Vec<PageLink>, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        engine
+            .page_links(document, PageIndex(page))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_attachments_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<Vec<AttachmentInfo>, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        engine.list_attachments(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn save_attachment_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    index: u32,
+    path: String,
+) -> Result<(), String> {
+    let engine = state.engine.clone();
+    let data = tokio::task::spawn_blocking(move || {
+        engine.read_attachment(document, index).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    tokio::task::spawn_blocking(move || std::fs::write(&path, &data).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn print_document(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<(), String> {
+    let engine = state.engine.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        engine.document_bytes(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut path = std::env::temp_dir();
+        path.push(format!("rustpdf-print-{}.pdf", uuid_v4_hex()));
+        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        shell_print(&path).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn uuid_v4_hex() -> String {
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{t:032x}")
+}
+
+#[cfg(target_os = "windows")]
+fn shell_print(path: &Path) -> std::io::Result<()> {
+    use std::process::Command;
+    let path_str = path.to_string_lossy().replace('\'', "''");
+    let cmd = format!(
+        "Start-Process -FilePath '{}' -Verb Print -WindowStyle Hidden",
+        path_str
+    );
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_print(path: &Path) -> std::io::Result<()> {
+    use std::process::Command;
+    Command::new("lp").arg(path).spawn().map(|_| ())
+}
+
+#[tauri::command]
+async fn document_metadata_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<DocMetadata, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        engine.document_metadata(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn document_permissions_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<DocPermissions, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        engine.document_permissions(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let allowed = ["http://", "https://", "mailto:"];
+    if !allowed.iter().any(|p| lower.starts_with(p)) {
+        return Err(format!("scheme not allowed: {trimmed}"));
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(trimmed, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -268,6 +411,13 @@ pub fn run() {
             render_thumbnail,
             page_text_layout_cmd,
             search_document,
+            page_links_cmd,
+            open_external,
+            list_attachments_cmd,
+            save_attachment_cmd,
+            document_metadata_cmd,
+            document_permissions_cmd,
+            print_document,
             recent_files,
             push_recent
         ])
@@ -303,6 +453,24 @@ impl PdfEngine for NullEngine {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
     fn search(&self, _: DocumentId, _: &SearchQuery) -> pdf_core::CoreResult<Vec<SearchHit>> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn page_links(&self, _: DocumentId, _: PageIndex) -> pdf_core::CoreResult<Vec<PageLink>> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn list_attachments(&self, _: DocumentId) -> pdf_core::CoreResult<Vec<AttachmentInfo>> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn read_attachment(&self, _: DocumentId, _: u32) -> pdf_core::CoreResult<Vec<u8>> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn document_metadata(&self, _: DocumentId) -> pdf_core::CoreResult<DocMetadata> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn document_permissions(&self, _: DocumentId) -> pdf_core::CoreResult<DocPermissions> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn document_bytes(&self, _: DocumentId) -> pdf_core::CoreResult<Vec<u8>> {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
 }

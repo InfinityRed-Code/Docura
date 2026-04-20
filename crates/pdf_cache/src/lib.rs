@@ -10,6 +10,7 @@ pub struct CacheKey {
     pub document: DocumentId,
     pub page: PageIndex,
     pub zoom_milli: u32,
+    pub rotation_q: u8,
 }
 
 #[derive(Debug, Clone)]

@@ -20,7 +20,8 @@ use std::sync::OnceLock;
 use parking_lot::Mutex;
 use pdf_core::{CoreError, CoreResult, PdfEngine, RenderRequest, RenderedPage};
 use pdf_types::{
-    DocumentId, OutlineNode, PageIndex, PageSize, RectPt, SearchHit, SearchQuery, TextRun,
+    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, LinkTarget, OutlineNode, PageIndex,
+    PageLink, PageSize, RectPt, Rotation, SearchHit, SearchQuery, TextRun,
 };
 use pdfium_render::prelude::*;
 
@@ -161,7 +162,15 @@ impl PdfEngine for PdfiumEngine {
             .pages()
             .get(req.page.0 as u16)
             .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
-        let config = PdfRenderConfig::new().scale_page_by_factor(req.zoom.0);
+        let rot = match req.rotation {
+            Rotation::R0 => PdfPageRenderRotation::None,
+            Rotation::R90 => PdfPageRenderRotation::Degrees90,
+            Rotation::R180 => PdfPageRenderRotation::Degrees180,
+            Rotation::R270 => PdfPageRenderRotation::Degrees270,
+        };
+        let config = PdfRenderConfig::new()
+            .scale_page_by_factor(req.zoom.0)
+            .rotate(rot, true);
         let bitmap = page
             .render_with_config(&config)
             .map_err(|e| CoreError::Engine(format!("render: {e}")))?;
@@ -252,6 +261,136 @@ impl PdfEngine for PdfiumEngine {
             roots.push(collect_bookmark(&bm, &document));
         }
         Ok(roots)
+    }
+
+    fn list_attachments(&self, doc: DocumentId) -> CoreResult<Vec<AttachmentInfo>> {
+        let bytes = self.bytes_for(doc)?;
+        let shared = shared_pdfium()?;
+        let pdfium = shared.0.lock();
+        let document = pdfium
+            .load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let attachments = document.attachments();
+        let mut out = Vec::new();
+        let n = attachments.len();
+        for i in 0..n {
+            let Ok(att) = attachments.get(i) else {
+                continue;
+            };
+            out.push(AttachmentInfo {
+                index: i as u32,
+                name: att.name(),
+                size: att.len() as u64,
+            });
+        }
+        Ok(out)
+    }
+
+    fn read_attachment(&self, doc: DocumentId, index: u32) -> CoreResult<Vec<u8>> {
+        let bytes = self.bytes_for(doc)?;
+        let shared = shared_pdfium()?;
+        let pdfium = shared.0.lock();
+        let document = pdfium
+            .load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let attachments = document.attachments();
+        let att = attachments
+            .get(index as u16)
+            .map_err(|e| CoreError::Engine(format!("attachment: {e}")))?;
+        att.save_to_bytes()
+            .map_err(|e| CoreError::Engine(format!("attachment read: {e}")))
+    }
+
+    fn document_metadata(&self, doc: DocumentId) -> CoreResult<DocMetadata> {
+        let bytes = self.bytes_for(doc)?;
+        let shared = shared_pdfium()?;
+        let pdfium = shared.0.lock();
+        let document = pdfium
+            .load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let md = document.metadata();
+        let get = |t: PdfDocumentMetadataTagType| -> Option<String> {
+            md.get(t).map(|tag| tag.value().to_string()).filter(|s| !s.is_empty())
+        };
+        Ok(DocMetadata {
+            title: get(PdfDocumentMetadataTagType::Title),
+            author: get(PdfDocumentMetadataTagType::Author),
+            subject: get(PdfDocumentMetadataTagType::Subject),
+            keywords: get(PdfDocumentMetadataTagType::Keywords),
+            creator: get(PdfDocumentMetadataTagType::Creator),
+            producer: get(PdfDocumentMetadataTagType::Producer),
+            creation_date: get(PdfDocumentMetadataTagType::CreationDate),
+            modification_date: get(PdfDocumentMetadataTagType::ModificationDate),
+        })
+    }
+
+    fn document_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>> {
+        self.bytes_for(doc)
+    }
+
+    fn document_permissions(&self, doc: DocumentId) -> CoreResult<DocPermissions> {
+        let bytes = self.bytes_for(doc)?;
+        let shared = shared_pdfium()?;
+        let pdfium = shared.0.lock();
+        let document = pdfium
+            .load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let perms = document.permissions();
+        let handler = perms
+            .security_handler_revision()
+            .map(|r| match r {
+                PdfSecurityHandlerRevision::Unprotected => "Unprotected".to_string(),
+                PdfSecurityHandlerRevision::Revision2 => "Standard (rev 2)".to_string(),
+                PdfSecurityHandlerRevision::Revision3 => "Standard (rev 3)".to_string(),
+                PdfSecurityHandlerRevision::Revision4 => "Standard (rev 4)".to_string(),
+            })
+            .unwrap_or_else(|_| "Unknown".to_string());
+        Ok(DocPermissions {
+            security_handler: handler,
+            can_print_high_quality: perms.can_print_high_quality().unwrap_or(false),
+            can_print_low_quality: perms.can_print_only_low_quality().unwrap_or(false),
+            can_modify_content: perms.can_modify_document_content().unwrap_or(false),
+            can_extract_text_and_graphics: perms.can_extract_text_and_graphics().unwrap_or(false),
+            can_annotate: perms.can_add_or_modify_text_annotations().unwrap_or(false),
+            can_fill_forms: perms
+                .can_fill_existing_interactive_form_fields()
+                .unwrap_or(false),
+            can_assemble: perms.can_assemble_document().unwrap_or(false),
+        })
+    }
+
+    fn page_links(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<PageLink>> {
+        let bytes = self.bytes_for(doc)?;
+        let shared = shared_pdfium()?;
+        let pdfium = shared.0.lock();
+        let document = pdfium
+            .load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let p = document
+            .pages()
+            .get(page.0 as u16)
+            .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+        let page_h = p.height().value;
+        let mut out: Vec<PageLink> = Vec::new();
+        for link in p.links().iter() {
+            let Ok(rect) = link.rect() else { continue };
+            let rect_pt = rect_to_top_origin(rect, page_h);
+            let target = match link.action() {
+                Some(PdfAction::LocalDestination(a)) => a
+                    .destination()
+                    .ok()
+                    .and_then(|d| d.page_index().ok())
+                    .map(|idx| LinkTarget::Page(PageIndex(idx as u32))),
+                Some(PdfAction::Uri(a)) => a.uri().ok().map(LinkTarget::Uri),
+                _ => link
+                    .destination()
+                    .and_then(|d| d.page_index().ok())
+                    .map(|idx| LinkTarget::Page(PageIndex(idx as u32))),
+            };
+            let Some(target) = target else { continue };
+            out.push(PageLink { rect_pt, target });
+        }
+        Ok(out)
     }
 
     fn search(&self, doc: DocumentId, query: &SearchQuery) -> CoreResult<Vec<SearchHit>> {

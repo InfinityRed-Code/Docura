@@ -22,7 +22,24 @@
       "Bash(pnpm add *)",
       "Bash(pnpm tauri *)",
       "Bash(./ui/node_modules/.bin/tauri dev *)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(where pnpm *)",
+      "Bash(corepack --version)",
+      "Bash(corepack enable *)",
+      "Bash(corepack prepare *)",
+      "Bash(npm config *)",
+      "Bash(pnpm --dir ../ui exec tauri dev)",
+      "Bash(node ../ui/node_modules/@tauri-apps/cli/tauri.js dev)",
+      "Bash(tasklist *)",
+      "Bash(grep -E --line-buffered \"error|Error|ERROR|Finished|Running \\\\`|panicked|pdfium|bound to PDFium\")",
+      "Bash(grep -i \"pdfium\\\\|error\\\\|Running \\\\`\" \"C:/Users/LOCALA~1/AppData/Local/Temp/claude/C--Users-localadmin-Documents-Repos-rustpdf/cb1bd829-cdab-4d31-91a0-8a8a15dc7765/tasks/bfbrqowha.output\")",
+      "Bash(grep -E --line-buffered \"error\\\\[|^error|^Error|ERROR|Finished|Running \\\\`C:|panicked|Compiling desktop\")",
+      "Bash(pnpm tsc *)",
+      "Bash(npx tsc *)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(cargo build *)",
+      "Bash(echo \"TS=$?\")"
     ]
   }
 }

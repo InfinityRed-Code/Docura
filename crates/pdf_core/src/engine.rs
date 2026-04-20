@@ -1,6 +1,7 @@
 use crate::error::CoreResult;
 use pdf_types::{
-    DocumentId, OutlineNode, PageIndex, PageSize, SearchHit, SearchQuery, TextRun, ZoomLevel,
+    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode, PageIndex, PageLink,
+    PageSize, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -8,6 +9,7 @@ pub struct RenderRequest {
     pub document: DocumentId,
     pub page: PageIndex,
     pub zoom: ZoomLevel,
+    pub rotation: Rotation,
 }
 
 #[derive(Debug, Clone)]
@@ -28,4 +30,10 @@ pub trait PdfEngine: Send + Sync {
     fn page_text_layout(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<TextRun>>;
     fn outline(&self, doc: DocumentId) -> CoreResult<Vec<OutlineNode>>;
     fn search(&self, doc: DocumentId, query: &SearchQuery) -> CoreResult<Vec<SearchHit>>;
+    fn page_links(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<PageLink>>;
+    fn list_attachments(&self, doc: DocumentId) -> CoreResult<Vec<AttachmentInfo>>;
+    fn read_attachment(&self, doc: DocumentId, index: u32) -> CoreResult<Vec<u8>>;
+    fn document_metadata(&self, doc: DocumentId) -> CoreResult<DocMetadata>;
+    fn document_permissions(&self, doc: DocumentId) -> CoreResult<DocPermissions>;
+    fn document_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>>;
 }
