@@ -52,6 +52,7 @@ const app = document.getElementById("app")!;
 app.innerHTML = `
 <main class="root">
   <header class="topbar">
+    <button id="sidebarBtn" title="Toggle sidebar (F4)">☰</button>
     <button id="open" title="Open (Ctrl+O)">Open</button>
     <button id="recentBtn" title="Recent files">Recent ▾</button>
     <div id="recentMenu" class="menu hidden"></div>
@@ -92,7 +93,7 @@ app.innerHTML = `
     <span id="status" class="status"></span>
   </header>
   <div class="body">
-    <aside id="sidebar" class="sidebar">
+    <aside id="sidebar" class="sidebar hidden">
       <div class="tabs">
         <button class="tab active" data-tab="thumbs">Thumbs</button>
         <button class="tab" data-tab="outline">Outline</button>
@@ -156,6 +157,7 @@ style.textContent = `
   .status { margin-left:auto; color:#999; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
   .body { flex:1; display:flex; min-height: 0; position:relative; }
   .sidebar { width: 200px; background:#252526; border-right:1px solid #333; display:flex; flex-direction:column; min-height:0; }
+  .sidebar.hidden { display:none; }
   .tabs { display:flex; border-bottom:1px solid #333; }
   .tab { flex:1; padding:0.4rem; background:#2a2a2b; color:#bbb; border:none; cursor:pointer; }
   .tab.active { background:#1e1e1e; color:#fff; border-bottom: 2px solid #4a8cff; }
@@ -524,10 +526,6 @@ async function ensureTextLayer(idx: number) {
   if (!currentDoc) return;
   const slot = slots[idx];
   if (!slot) return;
-  if (effectiveRotation(idx) !== 0) {
-    slot.selectLayer.innerHTML = "";
-    return;
-  }
   let runs = textRunsCache.get(idx);
   if (!runs) {
     try {
@@ -542,25 +540,56 @@ async function ensureTextLayer(idx: number) {
   }
   const sz = pageSizes[idx];
   if (!sz) return;
-  const scaleX = slot.img.width / sz.width_pt;
-  const scaleY = slot.img.height / sz.height_pt;
+  const rot = effectiveRotation(idx);
   slot.selectLayer.innerHTML = "";
   for (const run of runs) {
-    const r = run.rect_pt;
-    const left = r.x0 * scaleX;
-    const top = r.y0 * scaleY;
-    const width = (r.x1 - r.x0) * scaleX;
-    const height = (r.y1 - r.y0) * scaleY;
-    if (width <= 0 || height <= 0) continue;
+    const box = rotateRectToSlot(run.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    if (box.width <= 0 || box.height <= 0) continue;
     const span = document.createElement("span");
     span.textContent = run.text;
-    span.style.left = `${left}px`;
-    span.style.top = `${top}px`;
-    span.style.fontSize = `${height}px`;
-    span.style.height = `${height}px`;
-    span.style.width = `${width}px`;
+    span.style.left = `${box.left}px`;
+    span.style.top = `${box.top}px`;
+    span.style.fontSize = `${box.height}px`;
+    span.style.height = `${box.height}px`;
+    span.style.width = `${box.width}px`;
     slot.selectLayer.appendChild(span);
   }
+}
+
+function rotateRectToSlot(
+  r: RectPt,
+  rot: number,
+  sz: PageSize,
+  imgW: number,
+  imgH: number,
+): { left: number; top: number; width: number; height: number } {
+  const w0 = sz.width_pt;
+  const h0 = sz.height_pt;
+  let nx0 = r.x0, ny0 = r.y0, nx1 = r.x1, ny1 = r.y1;
+  let dw = w0, dh = h0;
+  switch (rot & 3) {
+    case 0:
+      break;
+    case 1:
+      nx0 = h0 - r.y1; ny0 = r.x0; nx1 = h0 - r.y0; ny1 = r.x1;
+      dw = h0; dh = w0;
+      break;
+    case 2:
+      nx0 = w0 - r.x1; ny0 = h0 - r.y1; nx1 = w0 - r.x0; ny1 = h0 - r.y0;
+      break;
+    case 3:
+      nx0 = r.y0; ny0 = w0 - r.x1; nx1 = r.y1; ny1 = w0 - r.x0;
+      dw = h0; dh = w0;
+      break;
+  }
+  const sx = imgW / dw;
+  const sy = imgH / dh;
+  return {
+    left: nx0 * sx,
+    top: ny0 * sy,
+    width: (nx1 - nx0) * sx,
+    height: (ny1 - ny0) * sy,
+  };
 }
 
 async function ensureLinkLayer(idx: number) {
@@ -568,7 +597,6 @@ async function ensureLinkLayer(idx: number) {
   const slot = slots[idx];
   if (!slot) return;
   slot.linkLayer.innerHTML = "";
-  if (effectiveRotation(idx) !== 0) return;
   let links = linksCache.get(idx);
   if (!links) {
     try {
@@ -583,20 +611,15 @@ async function ensureLinkLayer(idx: number) {
   }
   const sz = pageSizes[idx];
   if (!sz || links.length === 0) return;
-  const scaleX = slot.img.width / sz.width_pt;
-  const scaleY = slot.img.height / sz.height_pt;
+  const rot = effectiveRotation(idx);
   for (const link of links) {
-    const r = link.rect_pt;
-    const left = r.x0 * scaleX;
-    const top = r.y0 * scaleY;
-    const width = (r.x1 - r.x0) * scaleX;
-    const height = (r.y1 - r.y0) * scaleY;
-    if (width <= 0 || height <= 0) continue;
+    const box = rotateRectToSlot(link.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    if (box.width <= 0 || box.height <= 0) continue;
     const a = document.createElement("a");
-    a.style.left = `${left}px`;
-    a.style.top = `${top}px`;
-    a.style.width = `${width}px`;
-    a.style.height = `${height}px`;
+    a.style.left = `${box.left}px`;
+    a.style.top = `${box.top}px`;
+    a.style.width = `${box.width}px`;
+    a.style.height = `${box.height}px`;
     if (link.target.kind === "Page") {
       const targetPage = link.target.value;
       a.title = `Page ${targetPage + 1}`;
@@ -628,18 +651,18 @@ function renderHighlightsFor(idx: number) {
   const sz = pageSizes[idx];
   if (!sz) return;
   slot.highlightLayer.innerHTML = "";
-  if (effectiveRotation(idx) !== 0) return;
-  const scaleX = slot.img.width / sz.width_pt;
-  const scaleY = slot.img.height / sz.height_pt;
+  const rot = effectiveRotation(idx);
   hits.forEach((hit, hIdx) => {
     if (hit.page !== idx) return;
     for (const r of hit.rects_pt) {
+      const box = rotateRectToSlot(r, rot, sz, slot.img.width, slot.img.height);
+      if (box.width <= 0 || box.height <= 0) continue;
       const el = document.createElement("div");
       el.className = "hit" + (hIdx === currentHit ? " current" : "");
-      el.style.left = `${r.x0 * scaleX}px`;
-      el.style.top = `${r.y0 * scaleY}px`;
-      el.style.width = `${(r.x1 - r.x0) * scaleX}px`;
-      el.style.height = `${(r.y1 - r.y0) * scaleY}px`;
+      el.style.left = `${box.left}px`;
+      el.style.top = `${box.top}px`;
+      el.style.width = `${box.width}px`;
+      el.style.height = `${box.height}px`;
       slot.highlightLayer.appendChild(el);
     }
   });
@@ -742,13 +765,55 @@ function historyForward() {
   navigateTo(target, { recordHistory: false });
 }
 
+type OpenErr = { kind: "PasswordRequired" | "PasswordIncorrect" | "Other"; value?: string };
+
+async function tryOpen(
+  bytes: Uint8Array,
+  password: string | null,
+): Promise<OpenedDocument> {
+  return await invoke<OpenedDocument>("open_pdf", {
+    bytes: Array.from(bytes),
+    password,
+  });
+}
+
 async function openFromBytes(bytes: Uint8Array, label: string) {
   setStatus(`Opening ${label}…`);
+  let doc: OpenedDocument | null = null;
+  let password: string | null = null;
+  let attempts = 0;
+  while (doc === null) {
+    try {
+      doc = await tryOpen(bytes, password);
+    } catch (e) {
+      const err = e as OpenErr | string;
+      const kind = typeof err === "object" ? err.kind : "Other";
+      if (kind === "PasswordRequired" || kind === "PasswordIncorrect") {
+        if (attempts >= 3) {
+          setStatus("Too many password attempts");
+          return;
+        }
+        const prompt = kind === "PasswordIncorrect" ? "Password incorrect. Try again:" : "Password required:";
+        const input = window.prompt(prompt);
+        if (input === null) {
+          setStatus("Open cancelled");
+          return;
+        }
+        password = input;
+        attempts += 1;
+        continue;
+      }
+      const msg = typeof err === "string" ? err : err.value ?? "unknown error";
+      setStatus(`Error: ${msg}`);
+      return;
+    }
+  }
   try {
-    const doc = await invoke<OpenedDocument>("open_pdf", {
-      bytes: Array.from(bytes),
-    });
+    const prior = currentDoc;
     currentDoc = doc.id;
+    if (prior && prior !== doc.id) {
+      invoke("close_pdf", { document: prior }).catch(() => {});
+    }
     pageCount = doc.page_count;
     pageSizes = doc.page_sizes;
     outline = doc.outline;
@@ -766,6 +831,8 @@ async function openFromBytes(bytes: Uint8Array, label: string) {
     rebuildSlots();
     if (viewMode === "single") navigateTo(0, { recordHistory: false });
     else scheduleRender(0);
+    const prefetch = Math.min(5, pageCount - 1);
+    for (let i = 1; i <= prefetch; i++) scheduleRender(i);
     renderThumbsShell();
     loadAttachments();
     setStatus(`${label} — ${pageCount} pages`);
@@ -821,6 +888,18 @@ document.getElementById("recentBtn")!.addEventListener("click", async (ev) => {
   recentMenu.classList.remove("hidden");
 });
 document.addEventListener("click", () => recentMenu.classList.add("hidden"));
+
+const sidebarEl = document.getElementById("sidebar") as HTMLElement;
+function toggleSidebar() {
+  const becomingVisible = sidebarEl.classList.contains("hidden");
+  sidebarEl.classList.toggle("hidden");
+  if (becomingVisible) {
+    const activeTab = document.querySelector(".tab.active") as HTMLElement | null;
+    const tab = activeTab?.dataset.tab;
+    if (tab === "thumbs") armThumbObserver();
+  }
+}
+document.getElementById("sidebarBtn")!.addEventListener("click", toggleSidebar);
 
 backBtn.addEventListener("click", historyBack);
 forwardBtn.addEventListener("click", historyForward);
@@ -942,14 +1021,29 @@ function buildOutlineTree(nodes: OutlineNode[]): HTMLElement {
   return wrap;
 }
 
+let thumbObserver: IntersectionObserver | null = null;
+const thumbLoaded = new Set<number>();
+const thumbInFlight = new Set<number>();
+
 function renderThumbsShell() {
   thumbsPanel.innerHTML = "";
   thumbEls.length = 0;
+  thumbLoaded.clear();
+  thumbInFlight.clear();
+  if (thumbObserver) {
+    thumbObserver.disconnect();
+    thumbObserver = null;
+  }
   for (let i = 0; i < pageCount; i++) {
     const img = document.createElement("img");
     img.className = "thumb";
-    img.loading = "lazy";
     img.dataset.page = String(i);
+    const sz = pageSizes[i];
+    if (sz) {
+      const ratio = sz.height_pt / Math.max(sz.width_pt, 1);
+      img.style.width = "170px";
+      img.style.height = `${Math.round(170 * ratio)}px`;
+    }
     img.addEventListener("click", () => goToPage(i));
     const label = document.createElement("div");
     label.className = "thumbLabel";
@@ -958,27 +1052,48 @@ function renderThumbsShell() {
     thumbsPanel.appendChild(label);
     thumbEls.push(img);
   }
-  requestIdleCallback
-    ? requestIdleCallback(() => loadThumbs())
-    : setTimeout(loadThumbs, 50);
+  if (!sidebarEl.classList.contains("hidden")) {
+    const activeTab = document.querySelector(".tab.active") as HTMLElement | null;
+    if (activeTab?.dataset.tab === "thumbs") armThumbObserver();
+  }
 }
 
-async function loadThumbs() {
+function armThumbObserver() {
+  if (thumbObserver || thumbEls.length === 0) return;
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const i = parseInt((e.target as HTMLElement).dataset.page || "-1", 10);
+        if (i < 0) continue;
+        loadThumb(i);
+      }
+    },
+    { root: thumbsPanel, rootMargin: "300px 0px", threshold: 0.01 },
+  );
+  for (const img of thumbEls) thumbObserver.observe(img);
+}
+
+async function loadThumb(i: number) {
   if (!currentDoc) return;
+  if (thumbLoaded.has(i) || thumbInFlight.has(i)) return;
   const doc = currentDoc;
-  for (let i = 0; i < pageCount; i++) {
+  const sz = pageSizes[i];
+  if (!sz) return;
+  thumbInFlight.add(i);
+  try {
+    const res = await invoke<Rendered>("render_thumbnail", {
+      document: doc,
+      page: i,
+      maxWidth: 170,
+      pageWidthPt: sz.width_pt,
+    });
     if (doc !== currentDoc) return;
-    const sz = pageSizes[i];
-    if (!sz) continue;
-    try {
-      const res = await invoke<Rendered>("render_thumbnail", {
-        document: doc,
-        page: i,
-        maxWidth: 170,
-        pageWidthPt: sz.width_pt,
-      });
-      thumbEls[i].src = res.data_url;
-    } catch {}
+    thumbEls[i].src = res.data_url;
+    thumbLoaded.add(i);
+  } catch {
+  } finally {
+    thumbInFlight.delete(i);
   }
 }
 
@@ -990,6 +1105,7 @@ document.querySelectorAll(".tab").forEach((el) => {
     thumbsPanel.classList.toggle("hidden", tab !== "thumbs");
     outlinePanel.classList.toggle("hidden", tab !== "outline");
     attachmentsPanel.classList.toggle("hidden", tab !== "attachments");
+    if (tab === "thumbs" && !sidebarEl.classList.contains("hidden")) armThumbObserver();
   });
 });
 
@@ -1294,6 +1410,11 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "F5") {
     e.preventDefault();
     togglePresentation();
+    return;
+  }
+  if (e.key === "F4") {
+    e.preventDefault();
+    toggleSidebar();
     return;
   }
   if (e.altKey && e.key === "ArrowLeft") {

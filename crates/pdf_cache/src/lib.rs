@@ -49,4 +49,8 @@ impl RenderCache {
     pub fn clear(&mut self) {
         self.entries.clear();
     }
+
+    pub fn remove_document(&mut self, doc: DocumentId) {
+        self.entries.retain(|k, _| k.document != doc);
+    }
 }

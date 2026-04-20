@@ -39,7 +39,11 @@
       "Bash(./node_modules/.bin/tsc --noEmit)",
       "Bash(echo \"EXIT=$?\")",
       "Bash(cargo build *)",
-      "Bash(echo \"TS=$?\")"
+      "Bash(echo \"TS=$?\")",
+      "Bash(git -C C:/Users/localadmin/Documents/Repos/rustpdf status --short)",
+      "Bash(git -C C:/Users/localadmin/Documents/Repos/rustpdf log --oneline -5)",
+      "Bash(cargo tauri *)",
+      "Bash(cargo clippy *)"
     ]
   }
 }

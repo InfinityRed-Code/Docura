@@ -1,9 +1,14 @@
 //! Concrete `PdfEngine` implementation backed by `pdfium-render`.
 //!
-//! PDFium is not thread-safe. We serialise every call through a single
-//! process-wide mutex and expose the engine as `Send + Sync` so the Tauri
-//! app can share it across async handlers; the actual native work still
-//! runs one call at a time.
+//! PDFium is not thread-safe. The `Pdfium` binding is leaked to `'static`
+//! and every call is serialised through an internal `Mutex`, so the engine
+//! can be shared across async handlers while the native work still runs
+//! one call at a time.
+//!
+//! Performance strategy: parse each PDF **once** on open, keep the
+//! `PdfDocument` resident (lifetime extended to `'static` by leaking the
+//! underlying byte buffer), and reuse it for every later render / text /
+//! link / search / attachment call. Closing a doc reclaims the bytes.
 //!
 //! Binding strategy: look for a bundled `pdfium.dll` / `libpdfium.so` in
 //! `./vendor/pdfium`, `./`, or `../vendor/pdfium`; fall back to the system
@@ -25,24 +30,26 @@ use pdf_types::{
 };
 use pdfium_render::prelude::*;
 
-struct SharedPdfium(Mutex<Pdfium>);
+struct SyncPdfium(Pdfium);
 
-unsafe impl Send for SharedPdfium {}
-unsafe impl Sync for SharedPdfium {}
+// SAFETY: All calls into PDFium are serialised through `PdfiumEngine::inner`.
+// Nothing touches `Pdfium` without first holding that mutex, so exposing a
+// `&Pdfium` across threads is safe in this crate's usage.
+unsafe impl Sync for SyncPdfium {}
+unsafe impl Send for SyncPdfium {}
 
-static PDFIUM: OnceLock<SharedPdfium> = OnceLock::new();
+static PDFIUM: OnceLock<SyncPdfium> = OnceLock::new();
 
-fn shared_pdfium() -> CoreResult<&'static SharedPdfium> {
+fn shared_pdfium() -> CoreResult<&'static Pdfium> {
     if let Some(p) = PDFIUM.get() {
-        return Ok(p);
+        return Ok(&p.0);
     }
     let bindings = bind_to_bundled().or_else(|_| {
         Pdfium::bind_to_system_library()
             .map_err(|e| CoreError::Engine(format!("pdfium system bind: {e}")))
     })?;
-    let wrapped = SharedPdfium(Mutex::new(Pdfium::new(bindings)));
-    let _ = PDFIUM.set(wrapped);
-    Ok(PDFIUM.get().expect("pdfium initialised"))
+    let _ = PDFIUM.set(SyncPdfium(Pdfium::new(bindings)));
+    Ok(&PDFIUM.get().expect("pdfium initialised").0)
 }
 
 fn bind_to_bundled() -> CoreResult<Box<dyn PdfiumLibraryBindings>> {
@@ -72,24 +79,52 @@ fn bind_to_bundled() -> CoreResult<Box<dyn PdfiumLibraryBindings>> {
     ))
 }
 
+/// Per-document state. Owns the leaked byte buffer and the resident
+/// `PdfDocument`. Dropping this entry tears down the document handle and
+/// reclaims the bytes.
+struct DocEntry {
+    doc: Option<PdfDocument<'static>>,
+    bytes_raw: *mut [u8],
+    page_count: u32,
+    sizes: Vec<PageSize>,
+    outline: Vec<OutlineNode>,
+}
+
+impl Drop for DocEntry {
+    fn drop(&mut self) {
+        // Tear down the PDFium handle before releasing its backing bytes.
+        self.doc.take();
+        // SAFETY: `bytes_raw` came from `Box::into_raw` on open and has not
+        // been freed elsewhere. The `PdfDocument` that borrowed this slice
+        // has just been dropped above.
+        unsafe {
+            drop(Box::from_raw(self.bytes_raw));
+        }
+    }
+}
+
+struct Inner {
+    docs: HashMap<DocumentId, DocEntry>,
+}
+
+// SAFETY: All access to `Inner` (and therefore to any `PdfDocument` it
+// holds) is serialised through `PdfiumEngine::inner: Mutex<Inner>`. PDFium
+// itself is not thread-safe, so only one thread ever touches these
+// handles at a time. The raw `*mut [u8]` in `DocEntry` is not shared.
+unsafe impl Send for Inner {}
+
 pub struct PdfiumEngine {
-    docs: Mutex<HashMap<DocumentId, Vec<u8>>>,
+    inner: Mutex<Inner>,
 }
 
 impl PdfiumEngine {
     pub fn new() -> CoreResult<Self> {
         shared_pdfium()?;
         Ok(Self {
-            docs: Mutex::new(HashMap::new()),
+            inner: Mutex::new(Inner {
+                docs: HashMap::new(),
+            }),
         })
-    }
-
-    fn bytes_for(&self, id: DocumentId) -> CoreResult<Vec<u8>> {
-        self.docs
-            .lock()
-            .get(&id)
-            .cloned()
-            .ok_or(CoreError::DocumentNotLoaded)
     }
 }
 
@@ -106,58 +141,102 @@ fn rect_to_top_origin(rect: PdfRect, page_height_pt: f32) -> RectPt {
     }
 }
 
+fn password_error<E: std::fmt::Display>(e: E, had_password: bool) -> CoreError {
+    let msg = e.to_string().to_ascii_lowercase();
+    if msg.contains("password") {
+        if had_password {
+            CoreError::PasswordIncorrect
+        } else {
+            CoreError::PasswordRequired
+        }
+    } else {
+        CoreError::Engine(format!("open: {e}"))
+    }
+}
+
 impl PdfEngine for PdfiumEngine {
-    fn open_bytes(&self, bytes: Vec<u8>) -> CoreResult<DocumentId> {
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
-        drop(pdfium);
+    fn open_bytes_with_password(
+        &self,
+        bytes: Vec<u8>,
+        password: Option<String>,
+    ) -> CoreResult<DocumentId> {
+        let pdfium = shared_pdfium()?;
+        // Leak bytes so the PdfDocument can borrow them for 'static.
+        let bytes_box: Box<[u8]> = bytes.into_boxed_slice();
+        let bytes_raw: *mut [u8] = Box::into_raw(bytes_box);
+        // SAFETY: we just created `bytes_raw` and retain it until this
+        // DocEntry is dropped.
+        let bytes_static: &'static [u8] = unsafe { &*bytes_raw };
+
+        let document = match pdfium.load_pdf_from_byte_slice(bytes_static, password.as_deref()) {
+            Ok(d) => d,
+            Err(e) => {
+                // SAFETY: bytes_raw still owns the leaked buffer, reclaim it.
+                unsafe {
+                    drop(Box::from_raw(bytes_raw));
+                }
+                return Err(password_error(e, password.is_some()));
+            }
+        };
+
+        let pages = document.pages();
+        let page_count = pages.len() as u32;
+        let mut sizes = Vec::with_capacity(page_count as usize);
+        for i in 0..pages.len() {
+            let p = pages
+                .get(i)
+                .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+            sizes.push(PageSize {
+                width_pt: p.width().value,
+                height_pt: p.height().value,
+            });
+        }
+        let _ = pages;
+
+        let mut outline = Vec::new();
+        for bm in document.bookmarks().iter() {
+            outline.push(collect_bookmark(&bm, &document));
+        }
+
         let id = DocumentId::new();
-        self.docs.lock().insert(id, bytes);
+        let entry = DocEntry {
+            doc: Some(document),
+            bytes_raw,
+            page_count,
+            sizes,
+            outline,
+        };
+        self.inner.lock().docs.insert(id, entry);
         Ok(id)
     }
 
     fn close(&self, doc: DocumentId) -> CoreResult<()> {
-        self.docs.lock().remove(&doc);
+        self.inner.lock().docs.remove(&doc);
         Ok(())
     }
 
     fn page_count(&self, doc: DocumentId) -> CoreResult<u32> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
-        Ok(document.pages().len() as u32)
+        let inner = self.inner.lock();
+        let e = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        Ok(e.page_count)
     }
 
     fn page_size(&self, doc: DocumentId, page: PageIndex) -> CoreResult<PageSize> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
-        let p = document
-            .pages()
-            .get(page.0 as u16)
-            .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
-        Ok(PageSize {
-            width_pt: p.width().value,
-            height_pt: p.height().value,
-        })
+        let inner = self.inner.lock();
+        let e = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        e.sizes
+            .get(page.0 as usize)
+            .copied()
+            .ok_or_else(|| CoreError::PageOutOfRange(page.0, e.page_count))
     }
 
     fn render(&self, req: RenderRequest) -> CoreResult<RenderedPage> {
-        let bytes = self.bytes_for(req.document)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner
+            .docs
+            .get(&req.document)
+            .ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let page = document
             .pages()
             .get(req.page.0 as u16)
@@ -185,12 +264,9 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn extract_text(&self, doc: DocumentId, page: PageIndex) -> CoreResult<String> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let page = document
             .pages()
             .get(page.0 as u16)
@@ -202,12 +278,9 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn page_text_layout(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<TextRun>> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let p = document
             .pages()
             .get(page.0 as u16)
@@ -225,7 +298,6 @@ impl PdfEngine for PdfiumEngine {
             let Ok(rect) = ch.loose_bounds() else { continue };
             let rect = rect_to_top_origin(rect, page_h);
             if let Some(last) = runs.last_mut() {
-                // Merge if on same line (similar y) and contiguous x.
                 let same_line = (last.rect_pt.y0 - rect.y0).abs() < 1.5
                     && (last.rect_pt.y1 - rect.y1).abs() < 1.5;
                 let adjacent = rect.x0 >= last.rect_pt.x0 - 1.0
@@ -249,27 +321,15 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn outline(&self, doc: DocumentId) -> CoreResult<Vec<OutlineNode>> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
-        let bookmarks = document.bookmarks();
-        let mut roots = Vec::new();
-        for bm in bookmarks.iter() {
-            roots.push(collect_bookmark(&bm, &document));
-        }
-        Ok(roots)
+        let inner = self.inner.lock();
+        let e = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        Ok(e.outline.clone())
     }
 
     fn list_attachments(&self, doc: DocumentId) -> CoreResult<Vec<AttachmentInfo>> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let attachments = document.attachments();
         let mut out = Vec::new();
         let n = attachments.len();
@@ -287,12 +347,9 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn read_attachment(&self, doc: DocumentId, index: u32) -> CoreResult<Vec<u8>> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let attachments = document.attachments();
         let att = attachments
             .get(index as u16)
@@ -302,15 +359,14 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn document_metadata(&self, doc: DocumentId) -> CoreResult<DocMetadata> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let md = document.metadata();
         let get = |t: PdfDocumentMetadataTagType| -> Option<String> {
-            md.get(t).map(|tag| tag.value().to_string()).filter(|s| !s.is_empty())
+            md.get(t)
+                .map(|tag| tag.value().to_string())
+                .filter(|s| !s.is_empty())
         };
         Ok(DocMetadata {
             title: get(PdfDocumentMetadataTagType::Title),
@@ -325,16 +381,18 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn document_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>> {
-        self.bytes_for(doc)
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        // SAFETY: `bytes_raw` is live until the entry is dropped and we
+        // hold the lock preventing that.
+        let bytes = unsafe { &*entry.bytes_raw };
+        Ok(bytes.to_vec())
     }
 
     fn document_permissions(&self, doc: DocumentId) -> CoreResult<DocPermissions> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let perms = document.permissions();
         let handler = perms
             .security_handler_revision()
@@ -360,12 +418,9 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn page_links(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<PageLink>> {
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
         let p = document
             .pages()
             .get(page.0 as u16)
@@ -397,12 +452,9 @@ impl PdfEngine for PdfiumEngine {
         if query.term.is_empty() {
             return Ok(Vec::new());
         }
-        let bytes = self.bytes_for(doc)?;
-        let shared = shared_pdfium()?;
-        let pdfium = shared.0.lock();
-        let document = pdfium
-            .load_pdf_from_byte_slice(&bytes, None)
-            .map_err(|e| CoreError::Engine(format!("open: {e}")))?;
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
 
         let needle: String = if query.case_sensitive {
             query.term.clone()
@@ -414,7 +466,6 @@ impl PdfEngine for PdfiumEngine {
         for (page_idx, p) in document.pages().iter().enumerate() {
             let page_h = p.height().value;
             let Ok(text) = p.text() else { continue };
-            // Build haystack char-by-char with aligned bounds.
             let mut chars: Vec<(char, RectPt)> = Vec::new();
             for ch in text.chars().iter() {
                 let Some(c) = ch.unicode_char() else { continue };
@@ -429,7 +480,6 @@ impl PdfEngine for PdfiumEngine {
                 .map(|(c, _)| if query.case_sensitive { *c } else { c.to_ascii_lowercase() })
                 .collect();
             let needle_len_chars = needle.chars().count();
-            // Simple substring scan with char-index tracking.
             let mut char_positions: Vec<usize> = Vec::with_capacity(haystack.len());
             for (i, _) in haystack.char_indices() {
                 char_positions.push(i);

@@ -21,7 +21,14 @@ pub struct RenderedPage {
 
 /// Abstraction over the concrete PDF backend. Implemented by `pdf_pdfium`.
 pub trait PdfEngine: Send + Sync {
-    fn open_bytes(&self, bytes: Vec<u8>) -> CoreResult<DocumentId>;
+    fn open_bytes(&self, bytes: Vec<u8>) -> CoreResult<DocumentId> {
+        self.open_bytes_with_password(bytes, None)
+    }
+    fn open_bytes_with_password(
+        &self,
+        bytes: Vec<u8>,
+        password: Option<String>,
+    ) -> CoreResult<DocumentId>;
     fn close(&self, doc: DocumentId) -> CoreResult<()>;
     fn page_count(&self, doc: DocumentId) -> CoreResult<u32>;
     fn page_size(&self, doc: DocumentId, page: PageIndex) -> CoreResult<PageSize>;

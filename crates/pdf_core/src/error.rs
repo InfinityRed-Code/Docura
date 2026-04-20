@@ -10,6 +10,10 @@ pub enum CoreError {
     PageOutOfRange(u32, u32),
     #[error("engine error: {0}")]
     Engine(String),
+    #[error("password required")]
+    PasswordRequired,
+    #[error("password incorrect")]
+    PasswordIncorrect,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

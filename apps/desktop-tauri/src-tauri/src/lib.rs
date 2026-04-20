@@ -2,12 +2,13 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use parking_lot::Mutex;
 use pdf_cache::{CacheKey, CachedImage, RenderCache};
-use pdf_core::{PdfEngine, RenderRequest};
+use pdf_core::{CoreError, PdfEngine, RenderRequest};
 use pdf_pdfium::PdfiumEngine;
 use pdf_types::{
     AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode, PageIndex, PageLink,
@@ -30,23 +31,66 @@ struct OpenedDocument {
     outline: Vec<OutlineNode>,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", content = "value")]
+enum OpenError {
+    PasswordRequired,
+    PasswordIncorrect,
+    Other(String),
+}
+
+impl From<CoreError> for OpenError {
+    fn from(e: CoreError) -> Self {
+        match e {
+            CoreError::PasswordRequired => OpenError::PasswordRequired,
+            CoreError::PasswordIncorrect => OpenError::PasswordIncorrect,
+            other => OpenError::Other(other.to_string()),
+        }
+    }
+}
+
+#[tauri::command]
+async fn close_pdf(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<(), String> {
+    let engine = state.engine.clone();
+    state.cache.lock().remove_document(document);
+    tokio::task::spawn_blocking(move || engine.close(document).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn open_pdf(
     state: tauri::State<'_, AppState>,
     bytes: Vec<u8>,
-) -> Result<OpenedDocument, String> {
+    password: Option<String>,
+) -> Result<OpenedDocument, OpenError> {
     let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || {
-        let id = engine.open_bytes(bytes).map_err(|e| e.to_string())?;
-        let page_count = engine.page_count(id).map_err(|e| e.to_string())?;
+    let size_mb = bytes.len() as f64 / 1024.0 / 1024.0;
+    tokio::task::spawn_blocking(move || -> Result<OpenedDocument, OpenError> {
+        let t0 = std::time::Instant::now();
+        let id = engine.open_bytes_with_password(bytes, password)?;
+        let t_parse = t0.elapsed();
+        let page_count = engine
+            .page_count(id)
+            .map_err(|e| OpenError::Other(e.to_string()))?;
         let mut page_sizes = Vec::with_capacity(page_count as usize);
         for i in 0..page_count {
             let sz = engine
                 .page_size(id, PageIndex(i))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| OpenError::Other(e.to_string()))?;
             page_sizes.push(sz);
         }
         let outline = engine.outline(id).unwrap_or_default();
+        tracing::info!(
+            "open_pdf: size={:.1}MB pages={} parse={:?} total={:?}",
+            size_mb,
+            page_count,
+            t_parse,
+            t0.elapsed()
+        );
         Ok(OpenedDocument {
             id,
             page_count,
@@ -55,7 +99,7 @@ async fn open_pdf(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| OpenError::Other(e.to_string()))?
 }
 
 #[derive(Serialize)]
@@ -90,14 +134,17 @@ async fn render_page(
     }
     let engine = state.engine.clone();
     let rendered = tokio::task::spawn_blocking(move || {
-        engine
+        let t0 = std::time::Instant::now();
+        let r = engine
             .render(RenderRequest {
                 document,
                 page: PageIndex(page),
                 zoom: ZoomLevel(zoom),
                 rotation,
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        tracing::debug!("render page={} zoom={} t={:?}", page, zoom, t0.elapsed());
+        r
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -211,8 +258,9 @@ async fn print_document(
     .await
     .map_err(|e| e.to_string())??;
     tokio::task::spawn_blocking(move || -> Result<(), String> {
+        sweep_old_print_tempfiles();
         let mut path = std::env::temp_dir();
-        path.push(format!("rustpdf-print-{}.pdf", uuid_v4_hex()));
+        path.push(format!("rustpdf-print-{}.pdf", tempfile_suffix()));
         std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
         shell_print(&path).map_err(|e| e.to_string())?;
         Ok(())
@@ -221,26 +269,71 @@ async fn print_document(
     .map_err(|e| e.to_string())?
 }
 
-fn uuid_v4_hex() -> String {
+static TEMPFILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn tempfile_suffix() -> String {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{t:032x}")
+    let c = TEMPFILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    format!("{pid:x}-{t:x}-{c:x}")
+}
+
+fn sweep_old_print_tempfiles() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let now = SystemTime::now();
+    let max_age = Duration::from_secs(60 * 60);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(s) = name.to_str() else { continue };
+        if !(s.starts_with("rustpdf-print-") && s.ends_with(".pdf")) {
+            continue;
+        }
+        let age = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|mt| now.duration_since(mt).ok());
+        if age.map(|a| a > max_age).unwrap_or(false) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 fn shell_print(path: &Path) -> std::io::Result<()> {
     use std::process::Command;
     let path_str = path.to_string_lossy().replace('\'', "''");
-    let cmd = format!(
+    let ps = format!(
         "Start-Process -FilePath '{}' -Verb Print -WindowStyle Hidden",
         path_str
     );
+    let encoded = encode_powershell_command(&ps);
     Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &cmd])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            &encoded,
+        ])
         .spawn()
         .map(|_| ())
+}
+
+#[cfg(target_os = "windows")]
+fn encode_powershell_command(cmd: &str) -> String {
+    let utf16: Vec<u16> = cmd.encode_utf16().collect();
+    let mut bytes = Vec::with_capacity(utf16.len() * 2);
+    for u in utf16 {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    base64::engine::general_purpose::STANDARD.encode(&bytes)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -384,7 +477,7 @@ pub fn run() {
         }
     };
 
-    let cache = RenderCache::new(NonZeroUsize::new(32).unwrap());
+    let cache = RenderCache::new(NonZeroUsize::new(256).unwrap());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -407,6 +500,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf,
+            close_pdf,
             render_page,
             render_thumbnail,
             page_text_layout_cmd,
@@ -428,7 +522,11 @@ pub fn run() {
 struct NullEngine;
 
 impl PdfEngine for NullEngine {
-    fn open_bytes(&self, _: Vec<u8>) -> pdf_core::CoreResult<DocumentId> {
+    fn open_bytes_with_password(
+        &self,
+        _: Vec<u8>,
+        _: Option<String>,
+    ) -> pdf_core::CoreResult<DocumentId> {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
     fn close(&self, _: DocumentId) -> pdf_core::CoreResult<()> {
