@@ -55,6 +55,7 @@ app.innerHTML = `
     <div class="ribbonTabs">
       <button class="ribbonTab active" data-ribbon-tab="reader">Reader</button>
       <button class="ribbonTab" data-ribbon-tab="edit">Edit</button>
+      <button class="ribbonTab" data-ribbon-tab="organize">Organize</button>
     </div>
     <div class="ribbonBody" data-active="reader">
       <button data-ribbon="both" id="sidebarBtn" title="Toggle sidebar (F4)">☰</button>
@@ -78,7 +79,16 @@ app.innerHTML = `
         <option value="page">Fit Page</option>
         <option value="actual">100% (Actual)</option>
       </select>
-      <span data-ribbon="reader" id="zoomLabel">100%</span>
+      <select data-ribbon="reader" id="zoomSelect" title="Zoom">
+        <option value="custom" id="zoomCustomOpt">100%</option>
+        <option value="0.1">10%</option>
+        <option value="0.5">50%</option>
+        <option value="0.8">80%</option>
+        <option value="1">100%</option>
+        <option value="1.2">120%</option>
+        <option value="1.5">150%</option>
+        <option value="2">200%</option>
+      </select>
       <button data-ribbon="reader" id="zoomIn" title="Zoom in (Ctrl++)">+</button>
       <span data-ribbon="reader" class="sep"></span>
       <select data-ribbon="reader" id="viewModeSelect" title="View mode">
@@ -103,7 +113,18 @@ app.innerHTML = `
         <button class="modeBtn" data-mode="delete" title="Select pages with click / Ctrl+click / Shift+click, then press the trash button">🗑 Delete mode</button>
       </div>
       <button data-ribbon="edit" id="deleteSelectionBtn" class="deleteAction" disabled title="Delete selected pages">🗑 Delete selected</button>
+      <button data-ribbon="edit" id="extractSelectionBtn" disabled title="Save selected pages as a new PDF">⬇ Extract selected</button>
+      <span data-ribbon="edit" class="sep"></span>
+      <div data-ribbon="edit" class="menuHost">
+        <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Rotate pages">⟳ Rotate ▾</button>
+        <div id="rotateMenu" class="popover hidden" role="menu">
+          <button id="rotateLeftBtn" role="menuitem" title="Rotate 90° counter-clockwise">↺ 90°</button>
+          <button id="rotateRightBtn" role="menuitem" title="Rotate 90° clockwise">↻ 90°</button>
+          <button id="rotate180Btn" role="menuitem" title="Rotate 180°">↻ 180°</button>
+        </div>
+      </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
+      <span data-ribbon="organize" id="organizeHint" class="modeHint">Drag thumbnails to reorder. Click / Ctrl+click / Shift+click to select multiple.</span>
       <span data-ribbon="both" id="status" class="status"></span>
     </div>
   </header>
@@ -172,8 +193,12 @@ style.textContent = `
   }
   .ribbonBody button:hover:not(:disabled) { background:#4a4a4a; }
   .ribbonBody button:disabled { opacity:0.4; cursor:default; }
-  .ribbonBody[data-active="reader"] > [data-ribbon="edit"] { display:none; }
-  .ribbonBody[data-active="edit"] > [data-ribbon="reader"] { display:none; }
+  .ribbonBody[data-active="reader"] > [data-ribbon="edit"],
+  .ribbonBody[data-active="reader"] > [data-ribbon="organize"] { display:none; }
+  .ribbonBody[data-active="edit"] > [data-ribbon="reader"],
+  .ribbonBody[data-active="edit"] > [data-ribbon="organize"] { display:none; }
+  .ribbonBody[data-active="organize"] > [data-ribbon="reader"],
+  .ribbonBody[data-active="organize"] > [data-ribbon="edit"] { display:none; }
   .ribbonLabel { color:#888; font-size:0.85rem; margin-left:0.2rem; }
   .modeGroup { display:inline-flex; gap: 0; border:1px solid #4a4a4a; border-radius:4px;
                overflow:hidden; }
@@ -185,6 +210,15 @@ style.textContent = `
   .modeGroup .modeBtn.active.danger { background:#c0392b; }
   .modeHint { color:#999; font-size:0.82rem; margin-left:0.3rem; }
   body.edit-delete .modeHint { color:#c0392b; font-weight:500; }
+  .menuHost { position:relative; display:inline-block; }
+  .popover { position:absolute; top:calc(100% + 4px); left:0; background:#2a2a2a;
+             border:1px solid #444; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.5);
+             padding:0.25rem; display:flex; flex-direction:column; min-width:120px; z-index:100; }
+  .popover.hidden { display:none; }
+  .popover button { background:transparent; color:#ddd; border:none; padding:0.4rem 0.6rem;
+                    text-align:left; border-radius:3px; cursor:pointer; font-size:0.9rem; }
+  .popover button:hover { background:#3a3a3a; }
+  .menuTrigger[aria-expanded="true"] { background:#3a3a3a; }
   body.edit-delete .thumb { outline:1px dashed transparent; cursor: pointer; }
   body.edit-delete .thumb:hover { outline:2px solid #c0392b; }
   .thumb.selected { outline:2px solid #4a8cff; box-shadow: 0 0 0 3px rgba(74,140,255,0.35); }
@@ -202,12 +236,17 @@ style.textContent = `
   .tab.active { background:#1e1e1e; color:#fff; border-bottom: 2px solid #4a8cff; }
   .panel { flex:1; overflow:auto; padding:0.4rem; }
   .panel.hidden { display:none; }
-  .thumb { display:block; margin: 0 auto 0.4rem; cursor:pointer; background:white;
-           border:2px solid transparent; max-width: 100%; box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-           -webkit-user-drag:none; user-select:none; -webkit-user-select:none; }
+  .thumb { position:relative; display:block; margin:0 auto 0.6rem; cursor:pointer;
+           border:2px solid transparent; max-width:100%; width:fit-content;
+           user-select:none; -webkit-user-select:none; }
   .thumb.active { border-color:#4a8cff; }
   .thumb.selected.active { border-color:transparent; }
-  .thumbLabel { text-align:center; font-size:0.7rem; color:#888; margin-bottom:0.6rem; }
+  .thumbImg { display:block; background:white; max-width:100%;
+              box-shadow:0 1px 3px rgba(0,0,0,0.4); -webkit-user-drag:none; }
+  .thumbLabel { position:absolute; top:4px; right:4px;
+                background:rgba(0,0,0,0.72); color:#fff; font-size:0.72rem;
+                padding:1px 6px; border-radius:3px; pointer-events:none;
+                font-variant-numeric: tabular-nums; }
   .outlineItem { padding: 0.15rem 0.3rem; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:0.85rem; }
   .outlineItem:hover { background:#333; }
   .outlineChildren { margin-left: 0.8rem; border-left:1px solid #333; padding-left:0.3rem; }
@@ -254,6 +293,32 @@ style.textContent = `
   .dropOverlay.hidden { display:none; }
   body.presentation .ribbon, body.presentation .sidebar { display:none; }
   body.presentation .viewer { padding:0; background:#000; }
+  body.organize .sidebar { display:flex; width:100%; border-right:none; }
+  body.organize .sidebar.hidden { display:flex; }
+  body.organize .sidebar .tabs { display:none; }
+  body.organize .viewer { display:none; }
+  body.organize #thumbsPanel {
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap:1rem; padding:1.2rem; align-content:start;
+  }
+  body.organize #thumbsPanel .thumb {
+    width:100%; max-width:200px; margin:0 auto;
+  }
+  body.organize #thumbsPanel .thumbImg { width:100%; height:auto; }
+  body.organize #outlinePanel, body.organize #attachmentsPanel { display:none !important; }
+  body.organize .thumb { cursor:grab; }
+  body.organize .thumb:active { cursor:grabbing; }
+  body.organize .thumb.dragging { opacity:0.35; }
+  body.organize .thumb.dropBefore { box-shadow: inset 4px 0 0 #4a8cff; }
+  body.organize .thumb.dropAfter  { box-shadow: inset -4px 0 0 #4a8cff; }
+  body.organize .thumbLabel { font-size:0.78rem; padding:2px 7px; }
+  .dragPreview {
+    position:fixed; pointer-events:none; z-index:9999;
+    background:#4a8cff; color:#fff; padding:4px 10px; border-radius:999px;
+    font-size:0.82rem; box-shadow:0 3px 10px rgba(0,0,0,0.5);
+  }
+  .dropMark { outline:3px solid #4a8cff; outline-offset:2px; }
   body.presentation .pageList { gap:0; }
   body.dark .pageSlot img.page { filter: invert(0.92) hue-rotate(180deg); }
   body.dark .pageSlot { background:#222; }
@@ -286,7 +351,15 @@ document.head.appendChild(style);
 const statusEl = document.getElementById("status") as HTMLSpanElement;
 const viewer = document.getElementById("viewer") as HTMLDivElement;
 const pageList = document.getElementById("pageList") as HTMLDivElement;
-const zoomLabel = document.getElementById("zoomLabel") as HTMLSpanElement;
+const zoomSelect = document.getElementById("zoomSelect") as HTMLSelectElement;
+const zoomCustomOpt = document.getElementById("zoomCustomOpt") as HTMLOptionElement;
+const ZOOM_PRESETS = [0.1, 0.5, 0.8, 1, 1.2, 1.5, 2];
+function syncZoomUi() {
+  const pct = Math.round(zoom * 100);
+  zoomCustomOpt.textContent = `${pct}%`;
+  const hit = ZOOM_PRESETS.find((v) => Math.abs(v - zoom) < 0.005);
+  zoomSelect.value = hit !== undefined ? String(hit) : "custom";
+}
 const fitSelect = document.getElementById("fitSelect") as HTMLSelectElement;
 const viewModeSelect = document.getElementById("viewModeSelect") as HTMLSelectElement;
 const pageInput = document.getElementById("pageInput") as HTMLInputElement;
@@ -322,7 +395,7 @@ type Slot = {
 
 let currentDoc: string | null = null;
 let currentDocPath: string | null = null;
-type RibbonTab = "reader" | "edit";
+type RibbonTab = "reader" | "edit" | "organize";
 type EditMode = "select" | "delete";
 let ribbonTab: RibbonTab = "reader";
 let editMode: EditMode = "select";
@@ -343,6 +416,7 @@ let darkMode = false;
 const textRunsCache: Map<number, TextRun[]> = new Map();
 const linksCache: Map<number, PageLink[]> = new Map();
 const thumbEls: HTMLImageElement[] = [];
+const thumbWraps: HTMLElement[] = [];
 let slots: Slot[] = [];
 let observer: IntersectionObserver | null = null;
 const renderQueue: Set<number> = new Set();
@@ -358,7 +432,7 @@ function updateChrome() {
   if (!currentDoc) {
     pageInput.value = "1";
     pageTotal.textContent = "/ 0";
-    zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+    syncZoomUi();
     backBtn.disabled = true;
     forwardBtn.disabled = true;
     return;
@@ -366,8 +440,8 @@ function updateChrome() {
   pageInput.value = String(currentPage + 1);
   pageInput.max = String(pageCount);
   pageTotal.textContent = `/ ${pageCount}`;
-  zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
-  thumbEls.forEach((img, i) => img.classList.toggle("active", i === currentPage));
+  syncZoomUi();
+  thumbWraps.forEach((w, i) => w.classList.toggle("active", i === currentPage));
   backBtn.disabled = backStack.length === 0;
   forwardBtn.disabled = forwardStack.length === 0;
 }
@@ -378,6 +452,7 @@ function computeZoom(): number {
   if (rs.w === 0) return zoom;
   const vw = viewer.clientWidth - 32;
   const vh = viewer.clientHeight - 32;
+  if (vw <= 0 || vh <= 0) return zoom;
   const cols = viewMode === "double" ? 2 : 1;
   const colW = (vw - (cols - 1) * 10) / cols;
   switch (fitMode) {
@@ -1040,6 +1115,16 @@ fitSelect.addEventListener("change", () => {
   reflow();
 });
 fitSelect.value = fitMode;
+zoomSelect.addEventListener("change", () => {
+  const v = zoomSelect.value;
+  if (v === "custom") { syncZoomUi(); return; }
+  const z = parseFloat(v);
+  if (!isFinite(z)) return;
+  fitMode = "custom";
+  fitSelect.value = "custom";
+  zoom = clampZoom(z);
+  reflow();
+});
 
 viewModeSelect.addEventListener("change", () => {
   viewMode = viewModeSelect.value as ViewMode;
@@ -1146,26 +1231,31 @@ function renderThumbsShell() {
     thumbObserver.disconnect();
     thumbObserver = null;
   }
+  thumbWraps.length = 0;
   for (let i = 0; i < pageCount; i++) {
+    const wrap = document.createElement("div");
+    wrap.className = "thumb";
+    wrap.dataset.page = String(i);
+    wrap.draggable = false;
     const img = document.createElement("img");
-    img.className = "thumb";
-    img.draggable = false;
+    img.className = "thumbImg";
     img.dataset.page = String(i);
+    img.draggable = false;
     const sz = pageSizes[i];
     if (sz) {
       const ratio = sz.height_pt / Math.max(sz.width_pt, 1);
+      wrap.style.width = "170px";
       img.style.width = "170px";
       img.style.height = `${Math.round(170 * ratio)}px`;
     }
-    // Click handling is delegated to thumbsPanel in capture phase below —
-    // bypasses any modifier-swallowing from native image drag or the
-    // WebView's own click logic.
     const label = document.createElement("div");
     label.className = "thumbLabel";
     label.textContent = `${i + 1}`;
-    thumbsPanel.appendChild(img);
-    thumbsPanel.appendChild(label);
+    wrap.appendChild(img);
+    wrap.appendChild(label);
+    thumbsPanel.appendChild(wrap);
     thumbEls.push(img);
+    thumbWraps.push(wrap);
   }
   if (!sidebarEl.classList.contains("hidden")) {
     const activeTab = document.querySelector(".tab.active") as HTMLElement | null;
@@ -1370,6 +1460,7 @@ function applyDocSnapshot(snap: DocSnapshot) {
   pageCount = snap.page_count;
   pageSizes = snap.page_sizes;
   outline = snap.outline;
+  pageRotation.clear();
   if (currentPage >= pageCount) currentPage = Math.max(0, pageCount - 1);
   textRunsCache.clear();
   linksCache.clear();
@@ -1391,14 +1482,19 @@ function clearSelection() {
 }
 
 function refreshSelectionUi() {
-  for (const img of thumbEls) {
-    const idx = parseInt(img.dataset.page || "-1", 10);
-    img.classList.toggle("selected", selectedPages.has(idx));
+  for (const w of thumbWraps) {
+    const idx = parseInt(w.dataset.page || "-1", 10);
+    w.classList.toggle("selected", selectedPages.has(idx));
   }
   const btn = document.getElementById("deleteSelectionBtn") as HTMLButtonElement | null;
   if (btn) {
     btn.disabled = selectedPages.size === 0;
     btn.textContent = selectedPages.size > 0 ? `🗑 Delete ${selectedPages.size} page${selectedPages.size === 1 ? "" : "s"}` : "🗑 Delete selected";
+  }
+  const ex = document.getElementById("extractSelectionBtn") as HTMLButtonElement | null;
+  if (ex) {
+    ex.disabled = selectedPages.size === 0;
+    ex.textContent = selectedPages.size > 0 ? `⬇ Extract ${selectedPages.size} page${selectedPages.size === 1 ? "" : "s"}` : "⬇ Extract selected";
   }
   if (modeHint) {
     const base = selectedPages.size === 0
@@ -1454,6 +1550,54 @@ async function deleteSelectedPages() {
     setStatus(`Deleted ${label}`);
   } catch (e) {
     setStatus(`Delete error: ${e}`);
+  }
+}
+
+async function extractSelectedPages() {
+  if (!currentDoc || selectedPages.size === 0) return;
+  const pages = [...selectedPages].sort((a, b) => a - b);
+  const base = currentDocPath
+    ? currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
+    : "document";
+  const suffix = pages.length === 1
+    ? `page_${pages[0] + 1}`
+    : `pages_${pages[0] + 1}-${pages[pages.length - 1] + 1}`;
+  const defaultName = `${base}_${suffix}.pdf`;
+  const path = await save({
+    title: "Extract pages to…",
+    defaultPath: defaultName,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!path) return;
+  setStatus(`Extracting ${pages.length} page${pages.length === 1 ? "" : "s"}…`);
+  try {
+    await invoke("extract_pages", { document: currentDoc, pages, path });
+    setStatus(`Extracted ${pages.length} page${pages.length === 1 ? "" : "s"} → ${path}`);
+  } catch (e) {
+    setStatus(`Extract error: ${e}`);
+  }
+}
+
+async function rotateSelectionOrCurrent(degrees: number) {
+  if (!currentDoc) return;
+  const pages = selectedPages.size > 0
+    ? [...selectedPages].sort((a, b) => a - b)
+    : [currentPage];
+  const label = pages.length === 1
+    ? `page ${pages[0] + 1}`
+    : `${pages.length} pages`;
+  setStatus(`Rotating ${label}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("rotate_pages", {
+      document: currentDoc,
+      pages,
+      degrees,
+    });
+    applyDocSnapshot(snap);
+    refreshSelectionUi();
+    setStatus(`Rotated ${label} by ${degrees}°`);
+  } catch (e) {
+    setStatus(`Rotate error: ${e}`);
   }
 }
 
@@ -1533,11 +1677,19 @@ function setRibbonTab(tab: RibbonTab) {
   document.querySelectorAll(".ribbonTab").forEach((el) => {
     el.classList.toggle("active", (el as HTMLElement).dataset.ribbonTab === tab);
   });
-  if (tab === "reader") {
-    // Leaving Edit drops any selection and resets to Select so keys and
-    // thumb clicks revert to plain reader behavior.
+  const wasOrganize = document.body.classList.contains("organize");
+  document.body.classList.toggle("organize", tab === "organize");
+  if (tab === "organize") {
+    // Show sidebar so the full-width thumbs grid is visible.
+    document.getElementById("sidebar")!.classList.remove("hidden");
+    setEditMode("select");
+  } else if (tab === "reader") {
     setEditMode("select");
     clearSelection();
+  }
+  // Viewer was hidden during organize so fit-mode zoom is stale — recompute.
+  if (wasOrganize && tab !== "organize" && currentDoc) {
+    requestAnimationFrame(() => reflow());
   }
 }
 
@@ -1572,6 +1724,31 @@ document.querySelectorAll(".modeBtn").forEach((el) => {
   });
 });
 document.getElementById("deleteSelectionBtn")!.addEventListener("click", deleteSelectedPages);
+document.getElementById("extractSelectionBtn")!.addEventListener("click", extractSelectedPages);
+const rotateMenuBtn = document.getElementById("rotateMenuBtn") as HTMLButtonElement;
+const rotateMenu = document.getElementById("rotateMenu") as HTMLDivElement;
+function setRotateMenuOpen(open: boolean) {
+  rotateMenu.classList.toggle("hidden", !open);
+  rotateMenuBtn.setAttribute("aria-expanded", String(open));
+}
+rotateMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setRotateMenuOpen(rotateMenu.classList.contains("hidden"));
+});
+document.addEventListener("click", (e) => {
+  if (!rotateMenu.classList.contains("hidden")
+      && !rotateMenu.contains(e.target as Node)
+      && e.target !== rotateMenuBtn) {
+    setRotateMenuOpen(false);
+  }
+});
+function runRotate(deg: number) {
+  setRotateMenuOpen(false);
+  rotateSelectionOrCurrent(deg);
+}
+document.getElementById("rotateLeftBtn")!.addEventListener("click", () => runRotate(-90));
+document.getElementById("rotateRightBtn")!.addEventListener("click", () => runRotate(90));
+document.getElementById("rotate180Btn")!.addEventListener("click", () => runRotate(180));
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // Delegated thumb click handler: runs in capture phase before WebView2 can
@@ -1581,10 +1758,14 @@ window.addEventListener("contextmenu", (e) => e.preventDefault());
 thumbsPanel.addEventListener(
   "pointerdown",
   (e) => {
-    const t = e.target as HTMLElement | null;
-    if (!t || !t.classList.contains("thumb")) return;
+    const t = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
+    if (!t) return;
     const idx = parseInt(t.dataset.page || "-1", 10);
     if (idx < 0) return;
+    // In organize mode we rely on a separate click listener (below) so that
+    // mousedown can still initiate a native drag without first mutating
+    // selection state.
+    if (ribbonTab === "organize") return;
     e.preventDefault();
     e.stopPropagation();
     if (ribbonTab === "edit") {
@@ -1595,6 +1776,176 @@ thumbsPanel.addEventListener(
   },
   true,
 );
+
+// Organize-mode pointer-based drag-to-reorder. WebView2's native HTML5 drag
+// misfires on div wrappers, so we track pointer events ourselves.
+type PDrag = {
+  tracking: boolean;
+  active: boolean;
+  startX: number;
+  startY: number;
+  startIdx: number;
+  pages: number[];
+  preview: HTMLElement | null;
+  target: HTMLElement | null;
+  after: boolean;
+};
+let pdrag: PDrag = {
+  tracking: false, active: false, startX: 0, startY: 0, startIdx: -1,
+  pages: [], preview: null, target: null, after: false,
+};
+let lastWasDrag = false;
+
+function findDropTarget(x: number, y: number): { el: HTMLElement; after: boolean } | null {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  const hit = el?.closest(".thumb") as HTMLElement | null;
+  if (hit) {
+    const r = hit.getBoundingClientRect();
+    return { el: hit, after: x > r.left + r.width / 2 };
+  }
+  // cursor in gap between thumbs — pick nearest by center distance
+  let best: HTMLElement | null = null;
+  let bestRect: DOMRect | null = null;
+  let bestDist = Infinity;
+  for (const w of thumbWraps) {
+    if (w.classList.contains("dragging")) continue;
+    const r = w.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const dx = cx - x;
+    const dy = cy - y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) { bestDist = d; best = w; bestRect = r; }
+  }
+  if (!best || !bestRect) return null;
+  return { el: best, after: x > bestRect.left + bestRect.width / 2 };
+}
+
+function resetPdrag() {
+  if (pdrag.preview) pdrag.preview.remove();
+  thumbWraps.forEach((w) => w.classList.remove("dragging"));
+  document.querySelectorAll(".thumb.dropBefore, .thumb.dropAfter").forEach((el) => {
+    el.classList.remove("dropBefore");
+    el.classList.remove("dropAfter");
+  });
+  pdrag = {
+    tracking: false, active: false, startX: 0, startY: 0, startIdx: -1,
+    pages: [], preview: null, target: null, after: false,
+  };
+}
+
+thumbsPanel.addEventListener("pointerdown", (e) => {
+  if (ribbonTab !== "organize") return;
+  if (e.button !== 0) return;
+  const t = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
+  if (!t) return;
+  const idx = parseInt(t.dataset.page || "-1", 10);
+  if (idx < 0) return;
+  pdrag = {
+    tracking: true, active: false, startX: e.clientX, startY: e.clientY,
+    startIdx: idx, pages: [], preview: null, target: null, after: false,
+  };
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!pdrag.tracking) return;
+  if (!pdrag.active) {
+    const dx = e.clientX - pdrag.startX;
+    const dy = e.clientY - pdrag.startY;
+    if (dx * dx + dy * dy < 25) return;
+    pdrag.active = true;
+    if (selectedPages.has(pdrag.startIdx) && selectedPages.size > 1) {
+      pdrag.pages = [...selectedPages].sort((a, b) => a - b);
+    } else {
+      pdrag.pages = [pdrag.startIdx];
+      selectedPages.clear();
+      selectedPages.add(pdrag.startIdx);
+      selectionAnchor = pdrag.startIdx;
+      refreshSelectionUi();
+    }
+    const pageSet = new Set(pdrag.pages);
+    thumbWraps.forEach((w, i) => {
+      if (pageSet.has(i)) w.classList.add("dragging");
+    });
+    const prev = document.createElement("div");
+    prev.className = "dragPreview";
+    prev.textContent = `Move ${pdrag.pages.length} page${pdrag.pages.length === 1 ? "" : "s"}`;
+    document.body.appendChild(prev);
+    pdrag.preview = prev;
+  }
+  if (pdrag.preview) {
+    pdrag.preview.style.left = `${e.clientX + 14}px`;
+    pdrag.preview.style.top = `${e.clientY + 14}px`;
+  }
+  const hit = findDropTarget(e.clientX, e.clientY);
+  const target = hit?.el ?? null;
+  if (pdrag.target && pdrag.target !== target) {
+    pdrag.target.classList.remove("dropBefore");
+    pdrag.target.classList.remove("dropAfter");
+  }
+  pdrag.target = target;
+  if (hit && target) {
+    pdrag.after = hit.after;
+    target.classList.toggle("dropBefore", !pdrag.after);
+    target.classList.toggle("dropAfter", pdrag.after);
+  }
+});
+
+window.addEventListener("pointerup", async () => {
+  if (!pdrag.tracking) return;
+  const wasActive = pdrag.active;
+  const pages = pdrag.pages;
+  const target = pdrag.target;
+  const after = pdrag.after;
+  resetPdrag();
+  if (!wasActive) return;
+  lastWasDrag = true;
+  setTimeout(() => { lastWasDrag = false; }, 0);
+  if (pages.length === 0) return;
+  const dragSet = new Set(pages);
+  const remaining = [...Array(pageCount).keys()].filter((i) => !dragSet.has(i));
+  let insertAt: number;
+  if (!target) {
+    insertAt = remaining.length;
+  } else {
+    const tIdx = parseInt(target.dataset.page || "-1", 10);
+    if (dragSet.has(tIdx)) {
+      insertAt = remaining.length;
+    } else {
+      insertAt = remaining.indexOf(tIdx);
+      if (after) insertAt += 1;
+    }
+  }
+  const newOrder = [
+    ...remaining.slice(0, insertAt),
+    ...pages,
+    ...remaining.slice(insertAt),
+  ];
+  if (newOrder.length !== pageCount) return;
+  if (newOrder.every((v, i) => v === i)) return;
+  setStatus(`Reordering ${pages.length} page${pages.length === 1 ? "" : "s"}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("reorder_pages", { document: currentDoc, order: newOrder });
+    clearSelection();
+    applyDocSnapshot(snap);
+    setStatus(`Reordered ${pages.length} page${pages.length === 1 ? "" : "s"}`);
+  } catch (err) {
+    setStatus(`Reorder error: ${err}`);
+  }
+});
+
+window.addEventListener("pointercancel", () => resetPdrag());
+
+// Organize-mode selection via click — suppressed if a drag just completed.
+thumbsPanel.addEventListener("click", (e) => {
+  if (ribbonTab !== "organize") return;
+  if (lastWasDrag) return;
+  const t = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
+  if (!t) return;
+  const idx = parseInt(t.dataset.page || "-1", 10);
+  if (idx < 0) return;
+  handleThumbSelect(idx, e);
+});
 
 
 document.getElementById("printBtn")!.addEventListener("click", triggerPrint);

@@ -401,6 +401,140 @@ async fn delete_pages_inner(
 }
 
 #[tauri::command]
+async fn extract_pages(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pages: Vec<u32>,
+    path: String,
+) -> Result<(), String> {
+    if pages.is_empty() {
+        return Err("extract_pages: no pages given".to_string());
+    }
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let out = mdoc.extract_to_bytes(&pages).map_err(|e| e.to_string())?;
+        std::fs::write(&path, &out).map_err(|e| e.to_string())?;
+        tracing::info!(
+            "extract_pages {:?} → {} ({:.1}KB) in {:?}",
+            pages,
+            path,
+            out.len() as f64 / 1024.0,
+            t.elapsed()
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
+async fn reorder_pages(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    order: Vec<u32>,
+) -> Result<DocSnapshot, String> {
+    if order.is_empty() {
+        return Err("reorder_pages: empty order".to_string());
+    }
+    let engine = state.engine.clone();
+    let order_for_task = order.clone();
+    let new_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        mdoc.reorder_pages(&order_for_task).map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("reorder_pages n={}: {:?}", order_for_task.len(), t.elapsed());
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
+        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut page_sizes = Vec::with_capacity(page_count as usize);
+        for i in 0..page_count {
+            let sz = engine.page_size(document, PageIndex(i)).map_err(|e| e.to_string())?;
+            page_sizes.push(sz);
+        }
+        let outline = engine.outline(document).unwrap_or_default();
+        Ok(DocSnapshot { page_count, page_sizes, outline })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn rotate_pages(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pages: Vec<u32>,
+    degrees: i32,
+) -> Result<DocSnapshot, String> {
+    if pages.is_empty() {
+        return Err("rotate_pages: no pages given".to_string());
+    }
+    let engine = state.engine.clone();
+    let pages_for_task = pages.clone();
+    let new_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        mdoc.rotate_pages(&pages_for_task, degrees)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!(
+            "rotate_pages {:?} deg={}: {:?}",
+            pages_for_task,
+            degrees,
+            t.elapsed()
+        );
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
+        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut page_sizes = Vec::with_capacity(page_count as usize);
+        for i in 0..page_count {
+            let sz = engine
+                .page_size(document, PageIndex(i))
+                .map_err(|e| e.to_string())?;
+            page_sizes.push(sz);
+        }
+        let outline = engine.outline(document).unwrap_or_default();
+        Ok(DocSnapshot {
+            page_count,
+            page_sizes,
+            outline,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn print_document(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
@@ -689,6 +823,9 @@ pub fn run() {
             save_pdf_as,
             delete_page,
             delete_pages,
+            rotate_pages,
+            reorder_pages,
+            extract_pages,
             recent_files,
             push_recent
         ])
