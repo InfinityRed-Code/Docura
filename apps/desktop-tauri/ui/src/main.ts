@@ -135,8 +135,7 @@ app.innerHTML = `
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
       <button data-ribbon="organize" id="mergePdfsBtn" title="Merge PDFs: pick files and append them">⊕ Merge PDFs…</button>
       <button data-ribbon="organize" id="splitPdfBtn" title="Split into multiple PDFs by page ranges">✂ Split…</button>
-      <button data-ribbon="edit" id="watermarkBtn" title="Stamp a text watermark on every page">💧 Watermark…</button>
-      <button data-ribbon="edit" id="imageWatermarkBtn" title="Stamp an image watermark on every page">🖼 Image watermark…</button>
+      <button data-ribbon="edit" id="watermarkBtn" title="Stamp a text or image watermark on every page">💧 Watermark…</button>
       <button data-ribbon="edit" id="headerFooterBtn" title="Add headers / footers / page numbers">🅷 Header/Footer…</button>
       <span data-ribbon="organize" id="organizeHint" class="modeHint">Drag thumbnails to reorder. Click / Ctrl+click / Shift+click to select multiple.</span>
       <span data-ribbon="both" id="status" class="status"></span>
@@ -198,20 +197,18 @@ app.innerHTML = `
   <div id="wmOverlay" class="propsOverlay hidden">
     <div class="propsModal">
       <div class="propsHeader"><strong>Watermark</strong><button id="wmClose" class="propsClose">✕</button></div>
-      <div class="propsPanel wmPanel">
+      <div class="ribbonTabs" role="tablist">
+        <button id="wmTabText" class="ribbonTab active" data-wm-tab="text">Text</button>
+        <button id="wmTabImage" class="ribbonTab" data-wm-tab="image">Image</button>
+      </div>
+      <div id="wmSectionText" class="propsPanel wmPanel">
         <label>Text<input id="wmText" type="text" placeholder="DRAFT" /></label>
         <label>Font size<input id="wmFontSize" type="number" min="8" max="400" step="1" value="72" /></label>
         <label>Rotation (°)<input id="wmRot" type="number" min="-180" max="180" step="1" value="45" /></label>
         <label>Opacity<input id="wmOpacity" type="number" min="0.05" max="1" step="0.05" value="0.25" /></label>
         <label>Gray (0=black,1=white)<input id="wmGray" type="number" min="0" max="1" step="0.05" value="0.5" /></label>
-        <div class="wmActions"><button id="wmCommit">Apply</button><button id="wmCancel">Cancel</button></div>
       </div>
-    </div>
-  </div>
-  <div id="iwOverlay" class="propsOverlay hidden">
-    <div class="propsModal">
-      <div class="propsHeader"><strong>Image watermark</strong><button id="iwClose" class="propsClose">✕</button></div>
-      <div class="propsPanel wmPanel">
+      <div id="wmSectionImage" class="propsPanel wmPanel hidden">
         <label>Image file<span style="display:flex;gap:0.3rem;align-items:center;"><input id="iwPath" type="text" readonly placeholder="Pick an image…" style="flex:1;" /><button id="iwPick">Browse…</button></span></label>
         <label>Scale (fraction of page width)<input id="iwScale" type="number" min="0.05" max="1.5" step="0.05" value="0.4" /></label>
         <label>Rotation (°)<input id="iwRot" type="number" min="-180" max="180" step="1" value="0" /></label>
@@ -226,8 +223,8 @@ app.innerHTML = `
           </select>
         </label>
         <label>Margin (pt)<input id="iwMargin" type="number" min="0" max="400" step="1" value="36" /></label>
-        <div class="wmActions"><button id="iwCommit">Apply</button><button id="iwCancel">Cancel</button></div>
       </div>
+      <div class="wmActions" style="padding: 0.5rem 0.8rem;"><button id="wmCommit">Apply</button><button id="wmCancel">Cancel</button></div>
     </div>
   </div>
   <div id="hfOverlay" class="propsOverlay hidden">
@@ -1841,7 +1838,7 @@ const modeHint = document.getElementById("modeHint") as HTMLSpanElement;
 function setRibbonTab(tab: RibbonTab) {
   ribbonTab = tab;
   ribbonBody.dataset.active = tab;
-  document.querySelectorAll(".ribbonTab").forEach((el) => {
+  document.querySelectorAll(".ribbonTab[data-ribbon-tab]").forEach((el) => {
     el.classList.toggle("active", (el as HTMLElement).dataset.ribbonTab === tab);
   });
   const wasOrganize = document.body.classList.contains("organize");
@@ -1879,7 +1876,7 @@ async function setEditMode(mode: EditMode) {
   refreshSelectionUi();
 }
 
-document.querySelectorAll(".ribbonTab").forEach((el) => {
+document.querySelectorAll(".ribbonTab[data-ribbon-tab]").forEach((el) => {
   el.addEventListener("click", () => {
     const t = (el as HTMLElement).dataset.ribbonTab as RibbonTab;
     setRibbonTab(t);
@@ -1969,35 +1966,85 @@ document.getElementById("splitPdfBtn")!.addEventListener("click", () => void run
 
 const wmOverlay = document.getElementById("wmOverlay") as HTMLDivElement;
 const hfOverlay = document.getElementById("hfOverlay") as HTMLDivElement;
+const wmSectionText = document.getElementById("wmSectionText") as HTMLDivElement;
+const wmSectionImage = document.getElementById("wmSectionImage") as HTMLDivElement;
+const wmTabText = document.getElementById("wmTabText") as HTMLButtonElement;
+const wmTabImage = document.getElementById("wmTabImage") as HTMLButtonElement;
+let wmMode: "text" | "image" = "text";
+function setWmMode(mode: "text" | "image") {
+  wmMode = mode;
+  wmTabText.classList.toggle("active", mode === "text");
+  wmTabImage.classList.toggle("active", mode === "image");
+  wmSectionText.classList.toggle("hidden", mode !== "text");
+  wmSectionImage.classList.toggle("hidden", mode !== "image");
+}
+wmTabText.addEventListener("click", () => setWmMode("text"));
+wmTabImage.addEventListener("click", () => setWmMode("image"));
+
 document.getElementById("watermarkBtn")!.addEventListener("click", () => {
   if (!currentDoc) { setStatus("Open a PDF first"); return; }
   wmOverlay.classList.remove("hidden");
-  (document.getElementById("wmText") as HTMLInputElement).focus();
+  if (wmMode === "text") (document.getElementById("wmText") as HTMLInputElement).focus();
 });
 document.getElementById("wmClose")!.addEventListener("click", () => wmOverlay.classList.add("hidden"));
 document.getElementById("wmCancel")!.addEventListener("click", () => wmOverlay.classList.add("hidden"));
 document.getElementById("wmCommit")!.addEventListener("click", () => void runWatermark());
+document.getElementById("iwPick")!.addEventListener("click", () => void pickImageWatermark());
+
+async function pickImageWatermark() {
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    title: "Pick image for watermark",
+  });
+  if (picked && typeof picked === "string") {
+    (document.getElementById("iwPath") as HTMLInputElement).value = picked;
+  }
+}
 
 async function runWatermark() {
   if (!currentDoc) return;
-  const text = (document.getElementById("wmText") as HTMLInputElement).value.trim();
-  if (!text) { setStatus("Watermark text is empty"); return; }
-  const args = {
-    text,
-    font_size: parseFloat((document.getElementById("wmFontSize") as HTMLInputElement).value) || 72,
-    rotation_deg: parseFloat((document.getElementById("wmRot") as HTMLInputElement).value) || 0,
-    opacity: parseFloat((document.getElementById("wmOpacity") as HTMLInputElement).value) || 0.25,
-    gray: parseFloat((document.getElementById("wmGray") as HTMLInputElement).value),
-  };
-  if (!Number.isFinite(args.gray)) args.gray = 0.5;
-  wmOverlay.classList.add("hidden");
-  setStatus("Applying watermark…");
-  try {
-    const snap = await invoke<DocSnapshot>("add_watermark", { document: currentDoc, args });
-    applyDocSnapshot(snap);
-    setStatus("Watermark applied");
-  } catch (e) {
-    setStatus(`Watermark error: ${e}`);
+  if (wmMode === "text") {
+    const text = (document.getElementById("wmText") as HTMLInputElement).value.trim();
+    if (!text) { setStatus("Watermark text is empty"); return; }
+    const args = {
+      text,
+      font_size: parseFloat((document.getElementById("wmFontSize") as HTMLInputElement).value) || 72,
+      rotation_deg: parseFloat((document.getElementById("wmRot") as HTMLInputElement).value) || 0,
+      opacity: parseFloat((document.getElementById("wmOpacity") as HTMLInputElement).value) || 0.25,
+      gray: parseFloat((document.getElementById("wmGray") as HTMLInputElement).value),
+    };
+    if (!Number.isFinite(args.gray)) args.gray = 0.5;
+    wmOverlay.classList.add("hidden");
+    setStatus("Applying watermark…");
+    try {
+      const snap = await invoke<DocSnapshot>("add_watermark", { document: currentDoc, args });
+      applyDocSnapshot(snap);
+      setStatus("Watermark applied");
+    } catch (e) {
+      setStatus(`Watermark error: ${e}`);
+    }
+  } else {
+    const image_path = (document.getElementById("iwPath") as HTMLInputElement).value.trim();
+    if (!image_path) { setStatus("Pick an image first"); return; }
+    const args = {
+      image_path,
+      scale_frac: parseFloat((document.getElementById("iwScale") as HTMLInputElement).value) || 0.4,
+      rotation_deg: parseFloat((document.getElementById("iwRot") as HTMLInputElement).value) || 0,
+      opacity: parseFloat((document.getElementById("iwOpacity") as HTMLInputElement).value) || 0.5,
+      anchor: (document.getElementById("iwAnchor") as HTMLSelectElement).value || "center",
+      margin_pt: parseFloat((document.getElementById("iwMargin") as HTMLInputElement).value) || 36,
+    };
+    wmOverlay.classList.add("hidden");
+    setStatus("Applying image watermark…");
+    try {
+      const snap = await invoke<DocSnapshot>("add_image_watermark", { document: currentDoc, args });
+      applyDocSnapshot(snap);
+      setStatus("Image watermark applied");
+    } catch (e) {
+      setStatus(`Image watermark error: ${e}`);
+    }
   }
 }
 
@@ -2035,51 +2082,6 @@ async function runHeaderFooter() {
     setStatus("Header/footer applied");
   } catch (e) {
     setStatus(`Header/footer error: ${e}`);
-  }
-}
-
-const iwOverlay = document.getElementById("iwOverlay") as HTMLDivElement;
-document.getElementById("imageWatermarkBtn")!.addEventListener("click", () => {
-  if (!currentDoc) { setStatus("Open a PDF first"); return; }
-  iwOverlay.classList.remove("hidden");
-});
-document.getElementById("iwClose")!.addEventListener("click", () => iwOverlay.classList.add("hidden"));
-document.getElementById("iwCancel")!.addEventListener("click", () => iwOverlay.classList.add("hidden"));
-document.getElementById("iwPick")!.addEventListener("click", () => void pickImageWatermark());
-document.getElementById("iwCommit")!.addEventListener("click", () => void runImageWatermark());
-
-async function pickImageWatermark() {
-  const picked = await open({
-    multiple: false,
-    directory: false,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
-    title: "Pick image for watermark",
-  });
-  if (picked && typeof picked === "string") {
-    (document.getElementById("iwPath") as HTMLInputElement).value = picked;
-  }
-}
-
-async function runImageWatermark() {
-  if (!currentDoc) return;
-  const image_path = (document.getElementById("iwPath") as HTMLInputElement).value.trim();
-  if (!image_path) { setStatus("Pick an image first"); return; }
-  const args = {
-    image_path,
-    scale_frac: parseFloat((document.getElementById("iwScale") as HTMLInputElement).value) || 0.4,
-    rotation_deg: parseFloat((document.getElementById("iwRot") as HTMLInputElement).value) || 0,
-    opacity: parseFloat((document.getElementById("iwOpacity") as HTMLInputElement).value) || 0.5,
-    anchor: (document.getElementById("iwAnchor") as HTMLSelectElement).value || "center",
-    margin_pt: parseFloat((document.getElementById("iwMargin") as HTMLInputElement).value) || 36,
-  };
-  iwOverlay.classList.add("hidden");
-  setStatus("Applying image watermark…");
-  try {
-    const snap = await invoke<DocSnapshot>("add_image_watermark", { document: currentDoc, args });
-    applyDocSnapshot(snap);
-    setStatus("Image watermark applied");
-  } catch (e) {
-    setStatus(`Image watermark error: ${e}`);
   }
 }
 
