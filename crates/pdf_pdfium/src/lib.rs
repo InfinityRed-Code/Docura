@@ -422,6 +422,37 @@ impl PdfEngine for PdfiumEngine {
         Ok(bytes.to_vec())
     }
 
+    fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()> {
+        let pdfium = shared_pdfium()?;
+        let bytes_box: Box<[u8]> = bytes.into_boxed_slice();
+        let bytes_raw: *mut [u8] = Box::into_raw(bytes_box);
+        let bytes_static: &'static [u8] = unsafe { &*bytes_raw };
+        let document = match pdfium.load_pdf_from_byte_slice(bytes_static, None) {
+            Ok(d) => d,
+            Err(e) => {
+                unsafe { drop(Box::from_raw(bytes_raw)); }
+                return Err(CoreError::Engine(format!("reload: {e}")));
+            }
+        };
+        let page_count = document.pages().len() as u32;
+        let mut inner = self.inner.lock();
+        if !inner.docs.contains_key(&doc) {
+            unsafe { drop(Box::from_raw(bytes_raw)); }
+            return Err(CoreError::DocumentNotLoaded);
+        }
+        // Drop old entry (reclaims old bytes + PdfDocument) before inserting new.
+        inner.docs.remove(&doc);
+        let entry = DocEntry {
+            doc: Some(document),
+            bytes_raw,
+            page_count,
+            sizes: vec![None; page_count as usize],
+            outline: None,
+        };
+        inner.docs.insert(doc, entry);
+        Ok(())
+    }
+
     fn document_permissions(&self, doc: DocumentId) -> CoreResult<DocPermissions> {
         let inner = self.inner.lock();
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;

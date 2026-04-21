@@ -6,6 +6,7 @@ members = [
     "crates/pdf_pdfium",
     "crates/pdf_services",
     "crates/pdf_cache",
+    "crates/pdf_mutate",
     "apps/desktop-tauri/src-tauri",
 ]
 
@@ -32,6 +33,7 @@ pdf_core = { path = "crates/pdf_core" }
 pdf_pdfium = { path = "crates/pdf_pdfium" }
 pdf_services = { path = "crates/pdf_services" }
 pdf_cache = { path = "crates/pdf_cache" }
+pdf_mutate = { path = "crates/pdf_mutate" }
 
 [profile.release]
 lto = "thin"

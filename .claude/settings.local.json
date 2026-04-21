@@ -52,7 +52,9 @@
       "Bash(lsof -ti:1420)",
       "Bash(xargs -r kill -9)",
       "Bash(pnpm --dir ../ui tauri dev)",
-      "Bash(../ui/node_modules/.bin/tauri.CMD dev *)"
+      "Bash(../ui/node_modules/.bin/tauri.CMD dev *)",
+      "Bash(apps/desktop-tauri/ui/node_modules/.bin/tsc.CMD --noEmit -p apps/desktop-tauri/ui)",
+      "Bash(netstat -ano)"
     ]
   }
 }

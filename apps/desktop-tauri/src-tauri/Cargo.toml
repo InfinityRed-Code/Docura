@@ -31,6 +31,7 @@ pdf_core = { workspace = true }
 pdf_pdfium = { workspace = true }
 pdf_services = { workspace = true }
 pdf_cache = { workspace = true }
+pdf_mutate = { workspace = true }
 pdf_types = { workspace = true }
 mozjpeg = "0.10"
 base64 = "0.22"

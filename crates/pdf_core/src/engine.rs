@@ -43,4 +43,8 @@ pub trait PdfEngine: Send + Sync {
     fn document_metadata(&self, doc: DocumentId) -> CoreResult<DocMetadata>;
     fn document_permissions(&self, doc: DocumentId) -> CoreResult<DocPermissions>;
     fn document_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>>;
+    /// Replace the resident document for `doc` with freshly parsed `bytes`.
+    /// The `DocumentId` is preserved so callers (UI, cache) don't need to
+    /// re-key. Used after structural mutations (delete/insert/reorder pages).
+    fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()>;
 }

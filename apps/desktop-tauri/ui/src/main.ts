@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 
 type PageSize = { width_pt: number; height_pt: number };
@@ -51,46 +51,61 @@ type ViewMode = "single" | "continuous" | "double";
 const app = document.getElementById("app")!;
 app.innerHTML = `
 <main class="root">
-  <header class="topbar">
-    <button id="sidebarBtn" title="Toggle sidebar (F4)">☰</button>
-    <button id="open" title="Open (Ctrl+O)">Open</button>
-    <button id="recentBtn" title="Recent files">Recent ▾</button>
-    <div id="recentMenu" class="menu hidden"></div>
-    <span class="sep"></span>
-    <button id="backBtn" title="Back (Alt+Left)" disabled>←</button>
-    <button id="forwardBtn" title="Forward (Alt+Right)" disabled>→</button>
-    <span class="sep"></span>
-    <button id="prevPage" title="Previous page (PageUp)">◀</button>
-    <input id="pageInput" type="number" min="1" value="1" style="width:4rem" />
-    <span id="pageTotal">/ 0</span>
-    <button id="nextPage" title="Next page (PageDown)">▶</button>
-    <button id="gotoBtn" title="Go to page (Ctrl+G)">⇥</button>
-    <span class="sep"></span>
-    <button id="zoomOut" title="Zoom out (Ctrl+-)">−</button>
-    <select id="fitSelect" title="Fit mode">
-      <option value="custom">Custom</option>
-      <option value="width">Fit Width</option>
-      <option value="page">Fit Page</option>
-      <option value="actual">100% (Actual)</option>
-    </select>
-    <span id="zoomLabel">100%</span>
-    <button id="zoomIn" title="Zoom in (Ctrl++)">+</button>
-    <span class="sep"></span>
-    <select id="viewModeSelect" title="View mode">
-      <option value="single">Single Page</option>
-      <option value="continuous">Continuous</option>
-      <option value="double">Two Pages</option>
-    </select>
-    <button id="rotLeft" title="Rotate left (Ctrl+Shift+L for doc)">↶</button>
-    <button id="rotRight" title="Rotate right (Ctrl+Shift+R for doc)">↷</button>
-    <button id="darkToggle" title="Invert colors">☾</button>
-    <button id="fullscreenBtn" title="Fullscreen (F11)">⛶</button>
-    <button id="presentBtn" title="Presentation (F5)">▶▶</button>
-    <span class="sep"></span>
-    <button id="searchBtn" title="Search (Ctrl+F)">Search</button>
-    <button id="printBtn" title="Print (Ctrl+P)">🖨</button>
-    <button id="propsBtn" title="Document properties">ⓘ</button>
-    <span id="status" class="status"></span>
+  <header class="ribbon">
+    <div class="ribbonTabs">
+      <button class="ribbonTab active" data-ribbon-tab="reader">Reader</button>
+      <button class="ribbonTab" data-ribbon-tab="edit">Edit</button>
+    </div>
+    <div class="ribbonBody" data-active="reader">
+      <button data-ribbon="both" id="sidebarBtn" title="Toggle sidebar (F4)">☰</button>
+      <button data-ribbon="both" id="open" title="Open (Ctrl+O)">Open</button>
+      <button data-ribbon="both" id="recentBtn" title="Recent files">Recent ▾</button>
+      <div id="recentMenu" class="menu hidden"></div>
+      <span data-ribbon="both" class="sep"></span>
+      <button data-ribbon="both" id="backBtn" title="Back (Alt+Left)" disabled>←</button>
+      <button data-ribbon="both" id="forwardBtn" title="Forward (Alt+Right)" disabled>→</button>
+      <span data-ribbon="both" class="sep"></span>
+      <button data-ribbon="both" id="prevPage" title="Previous page (PageUp)">◀</button>
+      <input data-ribbon="both" id="pageInput" type="number" min="1" value="1" style="width:4rem" />
+      <span data-ribbon="both" id="pageTotal">/ 0</span>
+      <button data-ribbon="both" id="nextPage" title="Next page (PageDown)">▶</button>
+      <button data-ribbon="both" id="gotoBtn" title="Go to page (Ctrl+G)">⇥</button>
+      <span data-ribbon="reader" class="sep"></span>
+      <button data-ribbon="reader" id="zoomOut" title="Zoom out (Ctrl+-)">−</button>
+      <select data-ribbon="reader" id="fitSelect" title="Fit mode">
+        <option value="custom">Custom</option>
+        <option value="width">Fit Width</option>
+        <option value="page">Fit Page</option>
+        <option value="actual">100% (Actual)</option>
+      </select>
+      <span data-ribbon="reader" id="zoomLabel">100%</span>
+      <button data-ribbon="reader" id="zoomIn" title="Zoom in (Ctrl++)">+</button>
+      <span data-ribbon="reader" class="sep"></span>
+      <select data-ribbon="reader" id="viewModeSelect" title="View mode">
+        <option value="single">Single Page</option>
+        <option value="continuous">Continuous</option>
+        <option value="double">Two Pages</option>
+      </select>
+      <button data-ribbon="reader" id="rotLeft" title="Rotate left (Ctrl+Shift+L for doc)">↶</button>
+      <button data-ribbon="reader" id="rotRight" title="Rotate right (Ctrl+Shift+R for doc)">↷</button>
+      <button data-ribbon="reader" id="darkToggle" title="Invert colors">☾</button>
+      <button data-ribbon="reader" id="fullscreenBtn" title="Fullscreen (F11)">⛶</button>
+      <button data-ribbon="reader" id="presentBtn" title="Presentation (F5)">▶▶</button>
+      <span data-ribbon="reader" class="sep"></span>
+      <button data-ribbon="reader" id="searchBtn" title="Search (Ctrl+F)">Search</button>
+      <button data-ribbon="both" id="saveAsBtn" title="Save As (Ctrl+Shift+S)">💾 Save As</button>
+      <button data-ribbon="reader" id="printBtn" title="Print (Ctrl+P)">🖨</button>
+      <button data-ribbon="reader" id="propsBtn" title="Document properties">ⓘ</button>
+      <span data-ribbon="edit" class="sep"></span>
+      <span data-ribbon="edit" class="ribbonLabel">Mode:</span>
+      <div data-ribbon="edit" class="modeGroup" role="radiogroup">
+        <button class="modeBtn active" data-mode="select" title="Select (no page edits)">👆 Select</button>
+        <button class="modeBtn" data-mode="delete" title="Select pages with click / Ctrl+click / Shift+click, then press the trash button">🗑 Delete mode</button>
+      </div>
+      <button data-ribbon="edit" id="deleteSelectionBtn" class="deleteAction" disabled title="Delete selected pages">🗑 Delete selected</button>
+      <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
+      <span data-ribbon="both" id="status" class="status"></span>
+    </div>
   </header>
   <div class="body">
     <aside id="sidebar" class="sidebar hidden">
@@ -143,16 +158,40 @@ style.textContent = `
   html, body { margin:0; padding:0; height:100%; font-family: system-ui; background:#1e1e1e; color:#ddd; }
   #app, .root { height: 100%; }
   .root { display:flex; flex-direction:column; }
-  .topbar {
-    padding: 0.4rem 0.6rem; border-bottom: 1px solid #333;
-    display: flex; gap: 0.4rem; align-items: center; background:#252526; position:relative;
-  }
-  .topbar button, .topbar select, .topbar input {
+  .ribbon { border-bottom: 1px solid #333; background:#252526; position:relative; }
+  .ribbonTabs { display:flex; gap:0; border-bottom:1px solid #2f2f2f; padding: 0 0.4rem; }
+  .ribbonTab { background:transparent; color:#bbb; border:none; padding:0.35rem 0.9rem;
+               cursor:pointer; font:inherit; font-size:0.88rem; border-radius:3px 3px 0 0; }
+  .ribbonTab:hover { background:#2f2f31; color:#ddd; }
+  .ribbonTab.active { background:#1e1e1e; color:#fff; border-bottom:2px solid #4a8cff; }
+  .ribbonBody { padding: 0.4rem 0.6rem; display:flex; gap: 0.4rem; align-items:center;
+                flex-wrap: wrap; }
+  .ribbonBody button, .ribbonBody select, .ribbonBody input {
     background:#3a3a3a; color:#ddd; border:1px solid #4a4a4a; border-radius:3px;
     padding:0.2rem 0.5rem; font: inherit;
   }
-  .topbar button:hover:not(:disabled) { background:#4a4a4a; }
-  .topbar button:disabled { opacity:0.4; cursor:default; }
+  .ribbonBody button:hover:not(:disabled) { background:#4a4a4a; }
+  .ribbonBody button:disabled { opacity:0.4; cursor:default; }
+  .ribbonBody[data-active="reader"] > [data-ribbon="edit"] { display:none; }
+  .ribbonBody[data-active="edit"] > [data-ribbon="reader"] { display:none; }
+  .ribbonLabel { color:#888; font-size:0.85rem; margin-left:0.2rem; }
+  .modeGroup { display:inline-flex; gap: 0; border:1px solid #4a4a4a; border-radius:4px;
+               overflow:hidden; }
+  .modeGroup .modeBtn { background:#3a3a3a; color:#ddd; border:none; border-right:1px solid #4a4a4a;
+                        padding:0.25rem 0.6rem; cursor:pointer; font:inherit; font-size:0.88rem; }
+  .modeGroup .modeBtn:last-child { border-right:none; }
+  .modeGroup .modeBtn:hover { background:#4a4a4a; }
+  .modeGroup .modeBtn.active { background:#4a8cff; color:#fff; }
+  .modeGroup .modeBtn.active.danger { background:#c0392b; }
+  .modeHint { color:#999; font-size:0.82rem; margin-left:0.3rem; }
+  body.edit-delete .modeHint { color:#c0392b; font-weight:500; }
+  body.edit-delete .thumb { outline:1px dashed transparent; cursor: pointer; }
+  body.edit-delete .thumb:hover { outline:2px solid #c0392b; }
+  .thumb.selected { outline:2px solid #4a8cff; box-shadow: 0 0 0 3px rgba(74,140,255,0.35); }
+  body.edit-delete .thumb.selected { outline:2px solid #c0392b; box-shadow: 0 0 0 3px rgba(192,57,43,0.35); }
+  .deleteAction { background:#3a2a2a !important; color:#e09f9f !important; border:1px solid #5a3a3a !important; }
+  .deleteAction:not(:disabled):hover { background:#c0392b !important; color:#fff !important; border-color:#c0392b !important; }
+  .deleteAction:disabled { opacity:0.35; }
   .sep { display:inline-block; width:1px; height:20px; background:#444; margin: 0 0.2rem; }
   .status { margin-left:auto; color:#999; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
   .body { flex:1; display:flex; min-height: 0; position:relative; }
@@ -164,8 +203,10 @@ style.textContent = `
   .panel { flex:1; overflow:auto; padding:0.4rem; }
   .panel.hidden { display:none; }
   .thumb { display:block; margin: 0 auto 0.4rem; cursor:pointer; background:white;
-           border:2px solid transparent; max-width: 100%; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+           border:2px solid transparent; max-width: 100%; box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+           -webkit-user-drag:none; user-select:none; -webkit-user-select:none; }
   .thumb.active { border-color:#4a8cff; }
+  .thumb.selected.active { border-color:transparent; }
   .thumbLabel { text-align:center; font-size:0.7rem; color:#888; margin-bottom:0.6rem; }
   .outlineItem { padding: 0.15rem 0.3rem; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:0.85rem; }
   .outlineItem:hover { background:#333; }
@@ -211,7 +252,7 @@ style.textContent = `
                  border: 4px dashed #4a8cff; display:flex; align-items:center;
                  justify-content:center; font-size: 2rem; color:white; pointer-events:none; z-index:1000; }
   .dropOverlay.hidden { display:none; }
-  body.presentation .topbar, body.presentation .sidebar { display:none; }
+  body.presentation .ribbon, body.presentation .sidebar { display:none; }
   body.presentation .viewer { padding:0; background:#000; }
   body.presentation .pageList { gap:0; }
   body.dark .pageSlot img.page { filter: invert(0.92) hue-rotate(180deg); }
@@ -280,6 +321,13 @@ type Slot = {
 };
 
 let currentDoc: string | null = null;
+let currentDocPath: string | null = null;
+type RibbonTab = "reader" | "edit";
+type EditMode = "select" | "delete";
+let ribbonTab: RibbonTab = "reader";
+let editMode: EditMode = "select";
+const selectedPages = new Set<number>();
+let selectionAnchor: number | null = null;
 let pageCount = 0;
 let pageSizes: PageSize[] = [];
 let outline: OutlineNode[] = [];
@@ -855,6 +903,8 @@ function applyOpenedDoc(doc: OpenedDocument, label: string) {
   try {
     const prior = currentDoc;
     currentDoc = doc.id;
+    currentDocPath = label.endsWith(".pdf") ? label : null;
+    clearSelection();
     if (prior && prior !== doc.id) {
       invoke("close_pdf", { document: prior }).catch(() => {});
     }
@@ -1099,6 +1149,7 @@ function renderThumbsShell() {
   for (let i = 0; i < pageCount; i++) {
     const img = document.createElement("img");
     img.className = "thumb";
+    img.draggable = false;
     img.dataset.page = String(i);
     const sz = pageSizes[i];
     if (sz) {
@@ -1106,7 +1157,9 @@ function renderThumbsShell() {
       img.style.width = "170px";
       img.style.height = `${Math.round(170 * ratio)}px`;
     }
-    img.addEventListener("click", () => goToPage(i));
+    // Click handling is delegated to thumbsPanel in capture phase below —
+    // bypasses any modifier-swallowing from native image drag or the
+    // WebView's own click logic.
     const label = document.createElement("div");
     label.className = "thumbLabel";
     label.textContent = `${i + 1}`;
@@ -1118,6 +1171,7 @@ function renderThumbsShell() {
     const activeTab = document.querySelector(".tab.active") as HTMLElement | null;
     if (activeTab?.dataset.tab === "thumbs") armThumbObserver();
   }
+  refreshSelectionUi();
 }
 
 function armThumbObserver() {
@@ -1306,6 +1360,157 @@ function closeProperties() {
   propsOverlay.classList.add("hidden");
 }
 
+type DocSnapshot = {
+  page_count: number;
+  page_sizes: PageSize[];
+  outline: OutlineNode[];
+};
+
+function applyDocSnapshot(snap: DocSnapshot) {
+  pageCount = snap.page_count;
+  pageSizes = snap.page_sizes;
+  outline = snap.outline;
+  if (currentPage >= pageCount) currentPage = Math.max(0, pageCount - 1);
+  textRunsCache.clear();
+  linksCache.clear();
+  hits = [];
+  currentHit = -1;
+  searchCount.textContent = "";
+  renderOutline();
+  rebuildSlots();
+  if (viewMode === "single") navigateTo(currentPage, { recordHistory: false });
+  else scheduleRender(currentPage);
+  renderThumbsShell();
+  updateChrome();
+}
+
+function clearSelection() {
+  selectedPages.clear();
+  selectionAnchor = null;
+  refreshSelectionUi();
+}
+
+function refreshSelectionUi() {
+  for (const img of thumbEls) {
+    const idx = parseInt(img.dataset.page || "-1", 10);
+    img.classList.toggle("selected", selectedPages.has(idx));
+  }
+  const btn = document.getElementById("deleteSelectionBtn") as HTMLButtonElement | null;
+  if (btn) {
+    btn.disabled = selectedPages.size === 0;
+    btn.textContent = selectedPages.size > 0 ? `🗑 Delete ${selectedPages.size} page${selectedPages.size === 1 ? "" : "s"}` : "🗑 Delete selected";
+  }
+  if (modeHint) {
+    const base = selectedPages.size === 0
+      ? "Click / Ctrl+click / Shift+click thumbnails to select pages"
+      : `${selectedPages.size} selected`;
+    modeHint.textContent = editMode === "delete"
+      ? `⚠ Delete mode — selected pages will be removed. ${base}`
+      : base;
+  }
+}
+
+function handleThumbSelect(i: number, ev: MouseEvent | PointerEvent) {
+  if (ev.shiftKey && selectionAnchor !== null) {
+    const [a, b] = selectionAnchor <= i ? [selectionAnchor, i] : [i, selectionAnchor];
+    selectedPages.clear();
+    for (let k = a; k <= b; k++) selectedPages.add(k);
+    goToPage(i);
+  } else if (ev.ctrlKey || ev.metaKey) {
+    if (selectedPages.has(i)) selectedPages.delete(i);
+    else selectedPages.add(i);
+    selectionAnchor = i;
+  } else {
+    selectedPages.clear();
+    selectedPages.add(i);
+    selectionAnchor = i;
+    goToPage(i);
+  }
+  refreshSelectionUi();
+}
+
+async function deleteSelectedPages() {
+  if (!currentDoc || selectedPages.size === 0) return;
+  const pages = [...selectedPages].sort((a, b) => a - b);
+  if (pages.length >= pageCount) {
+    setStatus("Can't delete every page");
+    return;
+  }
+  const label = pages.length === 1
+    ? `page ${pages[0] + 1}`
+    : `${pages.length} pages (${pages[0] + 1}–${pages[pages.length - 1] + 1})`;
+  if (editMode === "select") {
+    const ok = await confirmDialog(
+      `Are you sure you want to delete all selected pages?\n\n(${label} — this can only be undone by not saving.)`,
+      { title: "Delete pages", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+    );
+    if (!ok) return;
+  }
+  setStatus(`Deleting ${label}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("delete_pages", { document: currentDoc, pages });
+    clearSelection();
+    applyDocSnapshot(snap);
+    setStatus(`Deleted ${label}`);
+  } catch (e) {
+    setStatus(`Delete error: ${e}`);
+  }
+}
+
+async function deleteCurrentPage() {
+  if (!currentDoc) return;
+  if (pageCount <= 1) {
+    setStatus("Can't delete the only page");
+    return;
+  }
+  const page = currentPage;
+  if (!window.confirm(`Delete page ${page + 1}? This can only be undone by not saving.`)) return;
+  setStatus(`Deleting page ${page + 1}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("delete_page", { document: currentDoc, page });
+    applyDocSnapshot(snap);
+    setStatus(`Deleted page ${page + 1}`);
+  } catch (e) {
+    setStatus(`Delete error: ${e}`);
+  }
+}
+
+async function deletePageAt(page: number) {
+  if (!currentDoc) return;
+  if (pageCount <= 1) {
+    setStatus("Can't delete the only page");
+    return;
+  }
+  if (!window.confirm(`Delete page ${page + 1}? This can only be undone by not saving.`)) return;
+  setStatus(`Deleting page ${page + 1}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("delete_page", { document: currentDoc, page });
+    applyDocSnapshot(snap);
+    setStatus(`Deleted page ${page + 1}`);
+  } catch (e) {
+    setStatus(`Delete error: ${e}`);
+  }
+}
+
+async function triggerSaveAs() {
+  if (!currentDoc) return;
+  const suggestion = currentDocPath
+    ? currentDocPath.replace(/\.pdf$/i, "") + "-copy.pdf"
+    : "document.pdf";
+  const dest = await save({
+    defaultPath: suggestion,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!dest || typeof dest !== "string") return;
+  setStatus(`Saving to ${dest}…`);
+  try {
+    await invoke("save_pdf_as", { document: currentDoc, path: dest });
+    setStatus(`Saved: ${dest}`);
+  } catch (e) {
+    setStatus(`Save error: ${e}`);
+  }
+}
+
 async function triggerPrint() {
   if (!currentDoc) return;
   setStatus("Opening print dialog…");
@@ -1316,6 +1521,81 @@ async function triggerPrint() {
     setStatus(`Print error: ${e}`);
   }
 }
+
+document.getElementById("saveAsBtn")!.addEventListener("click", triggerSaveAs);
+
+const ribbonBody = document.querySelector(".ribbonBody") as HTMLDivElement;
+const modeHint = document.getElementById("modeHint") as HTMLSpanElement;
+
+function setRibbonTab(tab: RibbonTab) {
+  ribbonTab = tab;
+  ribbonBody.dataset.active = tab;
+  document.querySelectorAll(".ribbonTab").forEach((el) => {
+    el.classList.toggle("active", (el as HTMLElement).dataset.ribbonTab === tab);
+  });
+  if (tab === "reader") {
+    // Leaving Edit drops any selection and resets to Select so keys and
+    // thumb clicks revert to plain reader behavior.
+    setEditMode("select");
+    clearSelection();
+  }
+}
+
+async function setEditMode(mode: EditMode) {
+  if (mode === "delete" && editMode !== "delete") {
+    const ok = await confirmDialog(
+      "When entering Delete mode, no further confirmation is needed to delete pages.\n\nMake sure to use with caution!",
+      { title: "Enter Delete mode", kind: "warning", okLabel: "Enter Delete mode", cancelLabel: "Cancel" },
+    );
+    if (!ok) return;
+  }
+  editMode = mode;
+  document.querySelectorAll(".modeBtn").forEach((el) => {
+    const m = (el as HTMLElement).dataset.mode;
+    el.classList.toggle("active", m === mode);
+    el.classList.toggle("danger", m === mode && mode === "delete");
+  });
+  document.body.classList.toggle("edit-delete", mode === "delete");
+  refreshSelectionUi();
+}
+
+document.querySelectorAll(".ribbonTab").forEach((el) => {
+  el.addEventListener("click", () => {
+    const t = (el as HTMLElement).dataset.ribbonTab as RibbonTab;
+    setRibbonTab(t);
+  });
+});
+document.querySelectorAll(".modeBtn").forEach((el) => {
+  el.addEventListener("click", () => {
+    const m = (el as HTMLElement).dataset.mode as EditMode;
+    setEditMode(m);
+  });
+});
+document.getElementById("deleteSelectionBtn")!.addEventListener("click", deleteSelectedPages);
+window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// Delegated thumb click handler: runs in capture phase before WebView2 can
+// apply native image behavior. Reading modifier keys from MouseEvent on
+// pointerdown/mousedown proved unreliable on Edge WebView2; pointerup fires
+// late enough that modifier state is always populated.
+thumbsPanel.addEventListener(
+  "pointerdown",
+  (e) => {
+    const t = e.target as HTMLElement | null;
+    if (!t || !t.classList.contains("thumb")) return;
+    const idx = parseInt(t.dataset.page || "-1", 10);
+    if (idx < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (ribbonTab === "edit") {
+      handleThumbSelect(idx, e);
+    } else {
+      goToPage(idx);
+    }
+  },
+  true,
+);
+
 
 document.getElementById("printBtn")!.addEventListener("click", triggerPrint);
 document.getElementById("propsBtn")!.addEventListener("click", openProperties);
@@ -1507,6 +1787,16 @@ window.addEventListener("keydown", (e) => {
   if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
     e.preventDefault();
     triggerPrint();
+    return;
+  }
+  if (e.ctrlKey && e.shiftKey && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    triggerSaveAs();
+    return;
+  }
+  if (!inField && ribbonTab === "edit" && (e.key === "Delete" || e.key === "Del")) {
+    e.preventDefault();
+    if (selectedPages.size > 0) deleteSelectedPages();
     return;
   }
   if (e.key === "F3") {

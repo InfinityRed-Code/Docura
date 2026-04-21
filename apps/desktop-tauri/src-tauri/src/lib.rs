@@ -308,6 +308,99 @@ async fn save_attachment_cmd(
 }
 
 #[tauri::command]
+async fn save_pdf_as(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+) -> Result<(), String> {
+    let engine = state.engine.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        engine.document_bytes(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| format!("write {path}: {e}"))?;
+    tracing::info!("save_pdf_as: wrote {} bytes to {}", bytes.len(), path);
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct DocSnapshot {
+    page_count: u32,
+    page_sizes: Vec<PageSize>,
+    outline: Vec<OutlineNode>,
+}
+
+#[tauri::command]
+async fn delete_page(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+) -> Result<DocSnapshot, String> {
+    delete_pages_inner(state, document, vec![page]).await
+}
+
+#[tauri::command]
+async fn delete_pages(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pages: Vec<u32>,
+) -> Result<DocSnapshot, String> {
+    delete_pages_inner(state, document, pages).await
+}
+
+async fn delete_pages_inner(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pages: Vec<u32>,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let pages_for_task = pages.clone();
+    let new_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let _new_count = mdoc.delete_pages(&pages_for_task).map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("delete_pages {:?}: {:?}", pages_for_task, t.elapsed());
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Invalidate render cache for this doc before reload so stale keys don't
+    // resolve to removed pages.
+    state.cache.lock().remove_document(document);
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
+        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut page_sizes = Vec::with_capacity(page_count as usize);
+        for i in 0..page_count {
+            let sz = engine
+                .page_size(document, PageIndex(i))
+                .map_err(|e| e.to_string())?;
+            page_sizes.push(sz);
+        }
+        let outline = engine.outline(document).unwrap_or_default();
+        Ok(DocSnapshot {
+            page_count,
+            page_sizes,
+            outline,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn print_document(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
@@ -593,6 +686,9 @@ pub fn run() {
             document_metadata_cmd,
             document_permissions_cmd,
             print_document,
+            save_pdf_as,
+            delete_page,
+            delete_pages,
             recent_files,
             push_recent
         ])
@@ -650,6 +746,9 @@ impl PdfEngine for NullEngine {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
     fn document_bytes(&self, _: DocumentId) -> pdf_core::CoreResult<Vec<u8>> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn reload_bytes(&self, _: DocumentId, _: Vec<u8>) -> pdf_core::CoreResult<()> {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
 }
