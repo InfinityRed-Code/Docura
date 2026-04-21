@@ -6,63 +6,63 @@ Legende: **[C]** = Core-Rust, **[E]** = PDFium-Engine, **[S]** = Services, **[U]
 
 ---
 
-## Meilenstein v0.1 — "Reader MVP" *(aktuelles Ziel)*
+## Meilenstein v0.1 — "Reader MVP" ✅
 
 Minimum, um eine PDF tatsächlich zu lesen. Ersetzt bereits den Browser-Reader für viele Nutzer.
 
 - [x] PDF öffnen (Dialog + FS-Plugin) [S][U]
 - [x] Seite als Bild rendern [E][U]
 - [x] Seitenwechsel per Mausrad [U]
-- [x] Zoom (Ctrl+Rad, Buttons) [U]
+- [x] Zoom (Ctrl+Rad, Buttons, Preset-Dropdown) [U]
 - [x] Pfeiltasten / PageUp / PageDown [U]
-- [ ] Fit-to-Width / Fit-to-Page Modus [U]
-- [ ] Textsuche (aktuelle Seite) [E][U]
-- [ ] Textsuche (gesamtes Dokument) mit Treffermarkierung [C][E][U]
-- [ ] Text selektieren und kopieren (Selection-Layer über Bild) [C][E][U]
-- [ ] Thumbnail-Leiste links mit Klick-Navigation [U][X: pdf_cache]
-- [ ] Outline / Bookmarks (TOC-Sidebar) [E][U]
-- [ ] Asynchroner Render-Pool (kein UI-Freeze bei großen Seiten) [C][E]
-- [ ] Seiten-Cache mit LRU (Zoom-Level-keyed) [C][pdf_cache]
-- [ ] Zuletzt geöffnete Dateien [S][U]
-- [ ] Drag & Drop einer PDF ins Fenster [U]
-- [ ] Tastenkürzel: Strg+O, Strg+F, Strg+Plus/Minus/0, Strg+G (Go-to-page)
+- [x] Fit-to-Width / Fit-to-Page Modus [U]
+- [x] Textsuche (aktuelle Seite) [E][U]
+- [x] Textsuche (gesamtes Dokument) mit Treffermarkierung [C][E][U]
+- [x] Text selektieren und kopieren (Selection-Layer über Bild) [C][E][U]
+- [x] Thumbnail-Leiste links mit Klick-Navigation [U][X: pdf_cache]
+- [x] Outline / Bookmarks (TOC-Sidebar) [E][U]
+- [x] Asynchroner Render-Pool (kein UI-Freeze bei großen Seiten) [C][E]
+- [x] Seiten-Cache mit LRU (Zoom-Level-keyed) [C][pdf_cache]
+- [x] Zuletzt geöffnete Dateien [S][U]
+- [x] Drag & Drop einer PDF ins Fenster [U]
+- [x] Tastenkürzel: Strg+O, Strg+F, Strg+Plus/Minus/0, Strg+G (Go-to-page)
 
 ---
 
-## Meilenstein v0.2 — "Navigation & Komfort"
+## Meilenstein v0.2 — "Navigation & Komfort" ✅
 
 Nutzererwartung an einen ernsthaften Reader.
 
-- [ ] Kontinuierlicher Scroll-Modus (alle Seiten, virtualisiert) [U]
-- [ ] Doppelseiten-Modus [U]
-- [ ] Drehen pro Seite / dokumentweit (nur Anzeige) [C][U]
-- [ ] Goto-Page Popup (Strg+G) [U]
-- [ ] Verlaufs-Navigation: Zurück/Vor nach internen Links [C][U]
-- [ ] Links im PDF klickbar (interne Ziele + externe URLs via Opener-Plugin) [E][S][U]
-- [ ] Anhänge (Attachments) anzeigen + speichern [E][S][U]
-- [ ] Vollbildmodus (F11) + Präsentationsmodus [U]
-- [ ] Druck-Dialog (Windows-Native) [S]
-- [ ] Dark-/Invert-Mode für Seitenrendering [U]
-- [ ] Dokumenten-Eigenschaften (Metadaten, Schriftarten, Seitengröße) [E][U]
+- [x] Kontinuierlicher Scroll-Modus (alle Seiten, virtualisiert) [U]
+- [x] Doppelseiten-Modus [U]
+- [x] Drehen pro Seite / dokumentweit (nur Anzeige) [C][U]
+- [x] Goto-Page Popup (Strg+G) [U]
+- [x] Verlaufs-Navigation: Zurück/Vor nach internen Links [C][U]
+- [x] Links im PDF klickbar (interne Ziele + externe URLs via Opener-Plugin) [E][S][U]
+- [x] Anhänge (Attachments) anzeigen + speichern [E][S][U]
+- [x] Vollbildmodus (F11) + Präsentationsmodus [U]
+- [x] Druck-Dialog (Windows-Native) [S]
+- [x] Dark-/Invert-Mode für Seitenrendering [U]
+- [x] Dokumenten-Eigenschaften (Metadaten, Schriftarten, Seitengröße) [E][U]
 
 ---
 
-## Meilenstein v0.3 — "Organisation"
+## Meilenstein v0.3 — "Organisation" *(aktuelles Ziel)*
 
 Seiten manipulieren — klassischer PDF24-Einstieg.
 
-- [ ] Seiten löschen [E][X: lopdf]
-- [ ] Seiten einfügen (aus anderer PDF) [X: lopdf]
-- [ ] Seiten neu anordnen (Drag&Drop im Thumbnail-Panel) [X: lopdf][U]
-- [ ] Seiten rotieren (persistent im Dokument) [X: lopdf]
-- [ ] Seiten extrahieren → neue PDF [X: lopdf]
-- [ ] PDFs zusammenführen (Merge mehrerer Dateien) [X: lopdf]
-- [ ] PDF splitten (nach Seitenbereich / Größe / Lesezeichen) [X: lopdf]
-- [ ] Dateigrößenoptimierung (Bilder rekomprimieren, Metadaten strippen) [X: lopdf + image]
-- [ ] Speichern / Speichern unter [S]
-- [ ] Undo/Redo Stack für Organisations-Operationen [C]
-- [ ] Wasserzeichen (Text + Bild) [X: lopdf]
-- [ ] Kopf-/Fußzeile, Seitenzahlen einfügen [X: lopdf]
+- [x] Seiten löschen [E][X: lopdf]
+- [x] Seiten einfügen (aus anderer PDF) [X: lopdf]
+- [x] Seiten neu anordnen (Drag&Drop im Thumbnail-Panel) [X: lopdf][U]
+- [x] Seiten rotieren (persistent im Dokument) [X: lopdf]
+- [x] Seiten extrahieren → neue PDF [X: lopdf]
+- [x] PDFs zusammenführen (Merge mehrerer Dateien, Organize-Subview + Temp-Datei) [X: lopdf]
+- [x] PDF splitten (nach Seitenbereich) [X: lopdf]
+- [x] Speichern / Speichern unter [S]
+- [x] Undo/Redo Stack für Organisations-Operationen [C]
+- [x] Wasserzeichen (Text) [X: lopdf]
+- [x] Wasserzeichen Bild [X: lopdf + image]
+- [x] Kopf-/Fußzeile, Seitenzahlen einfügen [X: lopdf]
 
 ---
 
@@ -187,6 +187,7 @@ Reihenfolge nach Nutzerbedarf sortieren, nicht streng umsetzen.
 - [ ] XFA-Support read-only (seltener, aber vorhanden) [X]
 
 ### Erweiterte PDF-Features
+- [ ] Dateigrößenoptimierung (Bilder rekomprimieren, Metadaten strippen) [X: lopdf + image]
 - [ ] Optional Content Groups (Layer ein/aus) [E][U]
 - [ ] JavaScript-Actions in Formularen sicher ausführen [X: sandboxed JS]
 - [ ] 3D-Annotationen (U3D/PRC) — nur Anzeige [X: optional]

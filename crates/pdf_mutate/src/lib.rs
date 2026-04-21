@@ -11,6 +11,10 @@ use std::io::Cursor;
 
 use lopdf::Document;
 
+mod overlay;
+
+pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
+
 pub type MutateResult<T> = Result<T, MutateError>;
 
 #[derive(Debug, thiserror::Error)]
@@ -241,5 +245,144 @@ impl MutableDoc {
         let one_indexed: Vec<u32> = dedup.iter().map(|p| p + 1).collect();
         self.inner.delete_pages(&one_indexed);
         Ok(self.page_count())
+    }
+
+    /// Insert pages from another PDF at 0-indexed position `at_index` (0..=page_count).
+    /// `src_pages = None` imports every page from source; otherwise only the listed
+    /// 0-indexed source pages, preserving given order. Returns new page count.
+    pub fn insert_pdf(
+        &mut self,
+        src_bytes: &[u8],
+        src_pages: Option<&[u32]>,
+        at_index: u32,
+    ) -> MutateResult<u32> {
+        let t = std::time::Instant::now();
+        let total = self.page_count();
+        if at_index > total {
+            return Err(MutateError::PageOutOfRange(at_index, total));
+        }
+        let mut src =
+            Document::load_mem(src_bytes).map_err(|e| MutateError::Parse(e.to_string()))?;
+        let start_id = self.inner.max_id + 1;
+        src.renumber_objects_with(start_id);
+        let src_max = src.max_id;
+
+        let src_page_ids: Vec<lopdf::ObjectId> = src.page_iter().collect();
+        let src_count = src_page_ids.len() as u32;
+        let keep_page_ids: Vec<lopdf::ObjectId> = match src_pages {
+            None => src_page_ids.clone(),
+            Some(indices) => {
+                let mut v = Vec::with_capacity(indices.len());
+                for &i in indices {
+                    if i >= src_count {
+                        return Err(MutateError::PageOutOfRange(i, src_count));
+                    }
+                    v.push(src_page_ids[i as usize]);
+                }
+                v
+            }
+        };
+        if keep_page_ids.is_empty() {
+            return Err(MutateError::Parse("insert_pdf: empty page list".into()));
+        }
+
+        let root_id = self
+            .inner
+            .trailer
+            .get(b"Root")
+            .map_err(|e| MutateError::Parse(e.to_string()))?
+            .as_reference()
+            .map_err(|e| MutateError::Parse(e.to_string()))?;
+        let pages_id = self
+            .inner
+            .get_dictionary(root_id)
+            .map_err(|e| MutateError::Parse(e.to_string()))?
+            .get(b"Pages")
+            .map_err(|e| MutateError::Parse(e.to_string()))?
+            .as_reference()
+            .map_err(|e| MutateError::Parse(e.to_string()))?;
+
+        let keep_set: std::collections::HashSet<lopdf::ObjectId> =
+            keep_page_ids.iter().copied().collect();
+        for (oid, obj) in src.objects.into_iter() {
+            let typ = obj.type_name().unwrap_or(b"").to_vec();
+            match typ.as_slice() {
+                b"Catalog" | b"Pages" | b"Outlines" | b"Outline" => continue,
+                b"Page" => {
+                    if keep_set.contains(&oid) {
+                        if let Ok(d) = obj.as_dict() {
+                            let mut d = d.clone();
+                            d.set("Parent", lopdf::Object::Reference(pages_id));
+                            self.inner.objects.insert(oid, lopdf::Object::Dictionary(d));
+                        }
+                    }
+                }
+                _ => {
+                    self.inner.objects.insert(oid, obj);
+                }
+            }
+        }
+        self.inner.max_id = self.inner.max_id.max(src_max);
+
+        // Flatten existing Pages tree, splice new refs at `at_index`, rewrite root Kids.
+        let ordered_ids: Vec<lopdf::ObjectId> = self.inner.page_iter().collect();
+        for &pid in &ordered_ids {
+            if let Ok(d) = self.inner.get_dictionary_mut(pid) {
+                d.set("Parent", lopdf::Object::Reference(pages_id));
+            }
+        }
+        let mut flat: Vec<lopdf::Object> = ordered_ids
+            .iter()
+            .map(|&id| lopdf::Object::Reference(id))
+            .collect();
+        let new_refs: Vec<lopdf::Object> = keep_page_ids
+            .iter()
+            .map(|&id| lopdf::Object::Reference(id))
+            .collect();
+        let at = at_index as usize;
+        flat.splice(at..at, new_refs);
+        let new_count = flat.len() as i64;
+        if let Ok(d) = self.inner.get_dictionary_mut(pages_id) {
+            d.set("Kids", lopdf::Object::Array(flat));
+            d.set("Count", lopdf::Object::Integer(new_count));
+        }
+        self.inner.prune_objects();
+        tracing::info!(
+            "pdf_mutate::insert_pdf n={} at={} total={} in {:?}",
+            keep_page_ids.len(),
+            at_index,
+            new_count,
+            t.elapsed()
+        );
+        Ok(new_count as u32)
+    }
+
+    /// Stamp a text watermark on every page.
+    pub fn add_text_watermark(&mut self, text: &str, opts: &WatermarkOptions) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        overlay::add_text_watermark(&mut self.inner, text, opts)?;
+        tracing::info!("pdf_mutate::add_text_watermark in {:?}", t.elapsed());
+        Ok(())
+    }
+
+    /// Add headers / footers / page numbers on every page.
+    /// `{page}` and `{total}` tokens in slot strings are replaced per page.
+    pub fn add_header_footer(&mut self, opts: &HeaderFooterOptions) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        overlay::add_header_footer(&mut self.inner, opts)?;
+        tracing::info!("pdf_mutate::add_header_footer in {:?}", t.elapsed());
+        Ok(())
+    }
+
+    /// Stamp an image watermark on every page.
+    pub fn add_image_watermark(
+        &mut self,
+        image_bytes: &[u8],
+        opts: &ImageWatermarkOptions,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        overlay::add_image_watermark(&mut self.inner, image_bytes, opts)?;
+        tracing::info!("pdf_mutate::add_image_watermark in {:?}", t.elapsed());
+        Ok(())
     }
 }

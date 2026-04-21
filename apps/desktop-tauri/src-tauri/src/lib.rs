@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,10 +17,65 @@ use pdf_types::{
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+const UNDO_CAP: usize = 50;
+
+#[derive(Default)]
+struct DocUndo {
+    undo: VecDeque<Vec<u8>>,
+    redo: VecDeque<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct UndoStacks {
+    map: HashMap<DocumentId, DocUndo>,
+}
+
+impl UndoStacks {
+    fn entry(&mut self, id: DocumentId) -> &mut DocUndo {
+        self.map.entry(id).or_default()
+    }
+    fn record(&mut self, id: DocumentId, pre: Vec<u8>) {
+        let e = self.entry(id);
+        e.undo.push_back(pre);
+        while e.undo.len() > UNDO_CAP {
+            e.undo.pop_front();
+        }
+        e.redo.clear();
+    }
+    fn pop_undo(&mut self, id: DocumentId, current: Vec<u8>) -> Option<Vec<u8>> {
+        let e = self.entry(id);
+        let prev = e.undo.pop_back()?;
+        e.redo.push_back(current);
+        while e.redo.len() > UNDO_CAP {
+            e.redo.pop_front();
+        }
+        Some(prev)
+    }
+    fn pop_redo(&mut self, id: DocumentId, current: Vec<u8>) -> Option<Vec<u8>> {
+        let e = self.entry(id);
+        let next = e.redo.pop_back()?;
+        e.undo.push_back(current);
+        while e.undo.len() > UNDO_CAP {
+            e.undo.pop_front();
+        }
+        Some(next)
+    }
+    fn clear_doc(&mut self, id: DocumentId) {
+        self.map.remove(&id);
+    }
+    fn lengths(&self, id: DocumentId) -> (usize, usize) {
+        self.map
+            .get(&id)
+            .map(|e| (e.undo.len(), e.redo.len()))
+            .unwrap_or((0, 0))
+    }
+}
+
 struct AppState {
     engine: Arc<dyn PdfEngine>,
     cache: Mutex<RenderCache>,
     settings_path: Mutex<Option<PathBuf>>,
+    undo: Mutex<UndoStacks>,
 }
 
 #[derive(Serialize)]
@@ -56,6 +111,7 @@ async fn close_pdf(
 ) -> Result<(), String> {
     let engine = state.engine.clone();
     state.cache.lock().remove_document(document);
+    state.undo.lock().clear_doc(document);
     tokio::task::spawn_blocking(move || engine.close(document).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())?
@@ -333,6 +389,31 @@ struct DocSnapshot {
     outline: Vec<OutlineNode>,
 }
 
+async fn snapshot_doc(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
+        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut page_sizes = Vec::with_capacity(page_count as usize);
+        for i in 0..page_count {
+            let sz = engine
+                .page_size(document, PageIndex(i))
+                .map_err(|e| e.to_string())?;
+            page_sizes.push(sz);
+        }
+        let outline = engine.outline(document).unwrap_or_default();
+        Ok(DocSnapshot {
+            page_count,
+            page_sizes,
+            outline,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn delete_page(
     state: tauri::State<'_, AppState>,
@@ -358,14 +439,14 @@ async fn delete_pages_inner(
 ) -> Result<DocSnapshot, String> {
     let engine = state.engine.clone();
     let pages_for_task = pages.clone();
-    let new_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
         let t = std::time::Instant::now();
         let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
         let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
         let _new_count = mdoc.delete_pages(&pages_for_task).map_err(|e| e.to_string())?;
         let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
         tracing::info!("delete_pages {:?}: {:?}", pages_for_task, t.elapsed());
-        Ok(out)
+        Ok((bytes, out))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -378,26 +459,9 @@ async fn delete_pages_inner(
     tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
 
-    let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
-        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
-        let mut page_sizes = Vec::with_capacity(page_count as usize);
-        for i in 0..page_count {
-            let sz = engine
-                .page_size(document, PageIndex(i))
-                .map_err(|e| e.to_string())?;
-            page_sizes.push(sz);
-        }
-        let outline = engine.outline(document).unwrap_or_default();
-        Ok(DocSnapshot {
-            page_count,
-            page_sizes,
-            outline,
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    snapshot_doc(state, document).await
 }
 
 #[tauri::command]
@@ -442,14 +506,14 @@ async fn reorder_pages(
     }
     let engine = state.engine.clone();
     let order_for_task = order.clone();
-    let new_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
         let t = std::time::Instant::now();
         let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
         let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
         mdoc.reorder_pages(&order_for_task).map_err(|e| e.to_string())?;
         let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
         tracing::info!("reorder_pages n={}: {:?}", order_for_task.len(), t.elapsed());
-        Ok(out)
+        Ok((bytes, out))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -460,20 +524,9 @@ async fn reorder_pages(
     tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
 
-    let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
-        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
-        let mut page_sizes = Vec::with_capacity(page_count as usize);
-        for i in 0..page_count {
-            let sz = engine.page_size(document, PageIndex(i)).map_err(|e| e.to_string())?;
-            page_sizes.push(sz);
-        }
-        let outline = engine.outline(document).unwrap_or_default();
-        Ok(DocSnapshot { page_count, page_sizes, outline })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    snapshot_doc(state, document).await
 }
 
 #[tauri::command]
@@ -488,7 +541,7 @@ async fn rotate_pages(
     }
     let engine = state.engine.clone();
     let pages_for_task = pages.clone();
-    let new_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
         let t = std::time::Instant::now();
         let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
         let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
@@ -501,7 +554,7 @@ async fn rotate_pages(
             degrees,
             t.elapsed()
         );
-        Ok(out)
+        Ok((bytes, out))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -512,26 +565,469 @@ async fn rotate_pages(
     tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+
+    snapshot_doc(state, document).await
+}
+
+#[tauri::command]
+async fn insert_pdf_files(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    paths: Vec<String>,
+    at_index: u32,
+    src_pages: Option<Vec<u32>>,
+) -> Result<DocSnapshot, String> {
+    if paths.is_empty() {
+        return Err("insert_pdf_files: no paths".to_string());
+    }
+    let mut sources: Vec<Vec<u8>> = Vec::with_capacity(paths.len());
+    for p in &paths {
+        let bytes = tokio::fs::read(p)
+            .await
+            .map_err(|e| format!("read {p}: {e}"))?;
+        sources.push(bytes);
+    }
+    let engine = state.engine.clone();
+    let paths_len = paths.len();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let mut at = at_index;
+        for (i, src) in sources.iter().enumerate() {
+            let filter = if i == 0 { src_pages.as_deref() } else { None };
+            let before = mdoc.page_count();
+            let after = mdoc.insert_pdf(src, filter, at).map_err(|e| e.to_string())?;
+            at += after.saturating_sub(before);
+        }
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!(
+            "insert_pdf_files n_files={} at={} total_bytes={} in {:?}",
+            paths_len,
+            at_index,
+            out.len(),
+            t.elapsed()
+        );
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
 
     let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || -> Result<DocSnapshot, String> {
-        let page_count = engine.page_count(document).map_err(|e| e.to_string())?;
-        let mut page_sizes = Vec::with_capacity(page_count as usize);
-        for i in 0..page_count {
-            let sz = engine
-                .page_size(document, PageIndex(i))
-                .map_err(|e| e.to_string())?;
-            page_sizes.push(sz);
+    tokio::task::spawn_blocking(move || {
+        engine
+            .reload_bytes(document, new_bytes)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+
+    snapshot_doc(state, document).await
+}
+
+#[derive(Serialize)]
+struct SplitResult {
+    files: Vec<String>,
+}
+
+fn parse_ranges(spec: &str, page_count: u32) -> Result<Vec<Vec<u32>>, String> {
+    let mut groups: Vec<Vec<u32>> = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
         }
-        let outline = engine.outline(document).unwrap_or_default();
-        Ok(DocSnapshot {
-            page_count,
-            page_sizes,
-            outline,
-        })
+        let group = if let Some((a, b)) = part.split_once('-') {
+            let a: u32 = a.trim().parse().map_err(|_| format!("bad range: {part}"))?;
+            let b: u32 = b.trim().parse().map_err(|_| format!("bad range: {part}"))?;
+            if a == 0 || b == 0 || a > b {
+                return Err(format!("bad range: {part}"));
+            }
+            if b > page_count {
+                return Err(format!("range {part} exceeds page count {page_count}"));
+            }
+            ((a - 1)..b).collect()
+        } else {
+            let v: u32 = part.parse().map_err(|_| format!("bad page: {part}"))?;
+            if v == 0 || v > page_count {
+                return Err(format!("page {part} out of range"));
+            }
+            vec![v - 1]
+        };
+        groups.push(group);
+    }
+    if groups.is_empty() {
+        return Err("no ranges specified".into());
+    }
+    Ok(groups)
+}
+
+#[tauri::command]
+async fn split_pdf(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    ranges: String,
+    out_dir: String,
+    base_name: String,
+) -> Result<SplitResult, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<SplitResult, String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let page_count = mdoc.page_count();
+        let groups = parse_ranges(&ranges, page_count)?;
+        let dir = PathBuf::from(&out_dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {out_dir}: {e}"))?;
+        let mut written: Vec<String> = Vec::with_capacity(groups.len());
+        for (i, group) in groups.iter().enumerate() {
+            let out_bytes = mdoc.extract_to_bytes(group).map_err(|e| e.to_string())?;
+            let suffix = if group.len() == 1 {
+                format!("page_{}", group[0] + 1)
+            } else {
+                format!("pages_{}-{}", group[0] + 1, group[group.len() - 1] + 1)
+            };
+            let name = format!("{base_name}_part{:02}_{suffix}.pdf", i + 1);
+            let p = dir.join(&name);
+            std::fs::write(&p, &out_bytes)
+                .map_err(|e| format!("write {}: {e}", p.display()))?;
+            written.push(p.to_string_lossy().to_string());
+        }
+        tracing::info!(
+            "split_pdf: {} parts in {:?}",
+            written.len(),
+            t.elapsed()
+        );
+        Ok(SplitResult { files: written })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct MergeOpenedDocument {
+    id: DocumentId,
+    page_count: u32,
+    page_sizes: Vec<PageSize>,
+    outline: Vec<OutlineNode>,
+    temp_path: String,
+}
+
+#[tauri::command]
+async fn merge_files_and_open(
+    state: tauri::State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<MergeOpenedDocument, String> {
+    if paths.len() < 2 {
+        return Err("merge_files_and_open: need at least 2 files".to_string());
+    }
+    let mut sources: Vec<Vec<u8>> = Vec::with_capacity(paths.len());
+    for p in &paths {
+        sources.push(
+            tokio::fs::read(p)
+                .await
+                .map_err(|e| format!("read {p}: {e}"))?,
+        );
+    }
+    let merged_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let t = std::time::Instant::now();
+        let mut iter = sources.into_iter();
+        let base = iter.next().ok_or("empty sources")?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&base).map_err(|e| e.to_string())?;
+        for src in iter {
+            let at = mdoc.page_count();
+            mdoc.insert_pdf(&src, None, at)
+                .map_err(|e| e.to_string())?;
+        }
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!(
+            "merge_files_and_open: {} files -> {:.1}KB in {:?}",
+            0, // len moved; printed via paths.len() below
+            out.len() as f64 / 1024.0,
+            t.elapsed()
+        );
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("rustpdf-merged-{ts}.pdf"));
+    tokio::fs::write(&tmp, &merged_bytes)
+        .await
+        .map_err(|e| format!("write temp {}: {e}", tmp.display()))?;
+    let tmp_str = tmp.to_string_lossy().to_string();
+
+    let opened = open_pdf_inner(state, merged_bytes, None)
+        .await
+        .map_err(|e| match e {
+            OpenError::Other(s) => s,
+            OpenError::PasswordRequired => "PasswordRequired".into(),
+            OpenError::PasswordIncorrect => "PasswordIncorrect".into(),
+        })?;
+    Ok(MergeOpenedDocument {
+        id: opened.id,
+        page_count: opened.page_count,
+        page_sizes: opened.page_sizes,
+        outline: opened.outline,
+        temp_path: tmp_str,
+    })
+}
+
+#[derive(Deserialize)]
+struct WatermarkArgs {
+    text: String,
+    #[serde(default = "default_wm_font")]
+    font_size: f32,
+    #[serde(default = "default_wm_rot")]
+    rotation_deg: f32,
+    #[serde(default = "default_wm_opacity")]
+    opacity: f32,
+    #[serde(default = "default_wm_gray")]
+    gray: f32,
+}
+fn default_wm_font() -> f32 { 72.0 }
+fn default_wm_rot() -> f32 { 45.0 }
+fn default_wm_opacity() -> f32 { 0.25 }
+fn default_wm_gray() -> f32 { 0.5 }
+
+#[tauri::command]
+async fn add_watermark(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: WatermarkArgs,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let opts = pdf_mutate::WatermarkOptions {
+            font_size: args.font_size,
+            rotation_deg: args.rotation_deg,
+            opacity: args.opacity,
+            gray: args.gray,
+        };
+        mdoc.add_text_watermark(&args.text, &opts)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_watermark: {:?}", t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct HeaderFooterArgs {
+    #[serde(default)] header_left: String,
+    #[serde(default)] header_center: String,
+    #[serde(default)] header_right: String,
+    #[serde(default)] footer_left: String,
+    #[serde(default)] footer_center: String,
+    #[serde(default)] footer_right: String,
+    #[serde(default = "default_hf_font")]
+    font_size: f32,
+    #[serde(default = "default_hf_margin")]
+    margin_pt: f32,
+    #[serde(default = "default_hf_first")]
+    first_page_number: u32,
+    #[serde(default = "default_hf_gray")]
+    gray: f32,
+}
+fn default_hf_font() -> f32 { 10.0 }
+fn default_hf_margin() -> f32 { 24.0 }
+fn default_hf_first() -> u32 { 1 }
+fn default_hf_gray() -> f32 { 0.0 }
+
+#[tauri::command]
+async fn add_header_footer(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: HeaderFooterArgs,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let opts = pdf_mutate::HeaderFooterOptions {
+            header_left: args.header_left,
+            header_center: args.header_center,
+            header_right: args.header_right,
+            footer_left: args.footer_left,
+            footer_center: args.footer_center,
+            footer_right: args.footer_right,
+            font_size: args.font_size,
+            margin_pt: args.margin_pt,
+            first_page_number: args.first_page_number,
+            gray: args.gray,
+        };
+        mdoc.add_header_footer(&opts).map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_header_footer: {:?}", t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct ImageWatermarkArgs {
+    image_path: String,
+    #[serde(default = "default_iw_scale")]
+    scale_frac: f32,
+    #[serde(default)]
+    rotation_deg: f32,
+    #[serde(default = "default_iw_opacity")]
+    opacity: f32,
+    #[serde(default = "default_iw_anchor")]
+    anchor: String,
+    #[serde(default = "default_iw_margin")]
+    margin_pt: f32,
+}
+fn default_iw_scale() -> f32 { 0.4 }
+fn default_iw_opacity() -> f32 { 0.5 }
+fn default_iw_anchor() -> String { "center".into() }
+fn default_iw_margin() -> f32 { 36.0 }
+
+fn parse_image_anchor(s: &str) -> pdf_mutate::ImageAnchor {
+    match s.to_ascii_lowercase().as_str() {
+        "topleft" | "top_left" | "tl" => pdf_mutate::ImageAnchor::TopLeft,
+        "topright" | "top_right" | "tr" => pdf_mutate::ImageAnchor::TopRight,
+        "bottomleft" | "bottom_left" | "bl" => pdf_mutate::ImageAnchor::BottomLeft,
+        "bottomright" | "bottom_right" | "br" => pdf_mutate::ImageAnchor::BottomRight,
+        _ => pdf_mutate::ImageAnchor::Center,
+    }
+}
+
+#[tauri::command]
+async fn add_image_watermark(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: ImageWatermarkArgs,
+) -> Result<DocSnapshot, String> {
+    let img_bytes = tokio::fs::read(&args.image_path)
+        .await
+        .map_err(|e| format!("read {}: {e}", args.image_path))?;
+    let engine = state.engine.clone();
+    let anchor = parse_image_anchor(&args.anchor);
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let opts = pdf_mutate::ImageWatermarkOptions {
+            scale_frac: args.scale_frac,
+            rotation_deg: args.rotation_deg,
+            opacity: args.opacity,
+            anchor,
+            margin_pt: args.margin_pt,
+        };
+        mdoc.add_image_watermark(&img_bytes, &opts)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_image_watermark: {:?}", t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Serialize)]
+struct UndoStatus {
+    undo: usize,
+    redo: usize,
+}
+
+#[tauri::command]
+fn undo_status(state: tauri::State<'_, AppState>, document: DocumentId) -> UndoStatus {
+    let (u, r) = state.undo.lock().lengths(document);
+    UndoStatus { undo: u, redo: r }
+}
+
+async fn apply_swap(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    direction_redo: bool,
+) -> Result<Option<DocSnapshot>, String> {
+    let engine = state.engine.clone();
+    let current = tokio::task::spawn_blocking(move || {
+        engine.document_bytes(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let target = {
+        let mut g = state.undo.lock();
+        if direction_redo {
+            g.pop_redo(document, current)
+        } else {
+            g.pop_undo(document, current)
+        }
+    };
+    let Some(target) = target else {
+        return Ok(None);
+    };
+
+    state.cache.lock().remove_document(document);
+
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        engine
+            .reload_bytes(document, target)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    snapshot_doc(state, document).await.map(Some)
+}
+
+#[tauri::command]
+async fn undo_doc(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<Option<DocSnapshot>, String> {
+    apply_swap(state, document, false).await
+}
+
+#[tauri::command]
+async fn redo_doc(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<Option<DocSnapshot>, String> {
+    apply_swap(state, document, true).await
 }
 
 #[tauri::command]
@@ -804,6 +1300,7 @@ pub fn run() {
             engine,
             cache: Mutex::new(cache),
             settings_path: Mutex::new(None),
+            undo: Mutex::new(UndoStacks::default()),
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf,
@@ -826,6 +1323,15 @@ pub fn run() {
             rotate_pages,
             reorder_pages,
             extract_pages,
+            insert_pdf_files,
+            merge_files_and_open,
+            split_pdf,
+            add_watermark,
+            add_header_footer,
+            add_image_watermark,
+            undo_doc,
+            redo_doc,
+            undo_status,
             recent_files,
             push_recent
         ])

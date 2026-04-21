@@ -10,4 +10,5 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 lopdf = { workspace = true }
+image = { workspace = true }
 pdf_types = { workspace = true }

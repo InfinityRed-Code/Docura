@@ -63,8 +63,8 @@ app.innerHTML = `
       <button data-ribbon="both" id="recentBtn" title="Recent files">Recent ▾</button>
       <div id="recentMenu" class="menu hidden"></div>
       <span data-ribbon="both" class="sep"></span>
-      <button data-ribbon="both" id="backBtn" title="Back (Alt+Left)" disabled>←</button>
-      <button data-ribbon="both" id="forwardBtn" title="Forward (Alt+Right)" disabled>→</button>
+      <button data-ribbon="both" id="undoBtn" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+      <button data-ribbon="both" id="redoBtn" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
       <span data-ribbon="both" class="sep"></span>
       <button data-ribbon="both" id="prevPage" title="Previous page (PageUp)">◀</button>
       <input data-ribbon="both" id="pageInput" type="number" min="1" value="1" style="width:4rem" />
@@ -123,7 +123,21 @@ app.innerHTML = `
           <button id="rotate180Btn" role="menuitem" title="Rotate 180°">↻ 180°</button>
         </div>
       </div>
+      <span data-ribbon="edit" class="sep"></span>
+      <div data-ribbon="edit" class="menuHost">
+        <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Insert pages from another PDF">＋ Insert ▾</button>
+        <div id="insertMenu" class="popover hidden" role="menu">
+          <button id="insertBeforeBtn" role="menuitem" title="Insert selected PDFs before current page">↥ Before current</button>
+          <button id="insertAfterBtn" role="menuitem" title="Insert selected PDFs after current page">↧ After current</button>
+          <button id="insertEndBtn" role="menuitem" title="Append pages to the end of the document">⤓ At end</button>
+        </div>
+      </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
+      <button data-ribbon="organize" id="mergePdfsBtn" title="Merge PDFs: pick files and append them">⊕ Merge PDFs…</button>
+      <button data-ribbon="organize" id="splitPdfBtn" title="Split into multiple PDFs by page ranges">✂ Split…</button>
+      <button data-ribbon="edit" id="watermarkBtn" title="Stamp a text watermark on every page">💧 Watermark…</button>
+      <button data-ribbon="edit" id="imageWatermarkBtn" title="Stamp an image watermark on every page">🖼 Image watermark…</button>
+      <button data-ribbon="edit" id="headerFooterBtn" title="Add headers / footers / page numbers">🅷 Header/Footer…</button>
       <span data-ribbon="organize" id="organizeHint" class="modeHint">Drag thumbnails to reorder. Click / Ctrl+click / Shift+click to select multiple.</span>
       <span data-ribbon="both" id="status" class="status"></span>
     </div>
@@ -141,6 +155,16 @@ app.innerHTML = `
     </aside>
     <div id="viewer" class="viewer">
       <div id="pageList" class="pageList"></div>
+    </div>
+    <div id="mergePane" class="mergePane hidden">
+      <div class="mergeHeader">
+        <strong>Merge PDFs</strong>
+        <button id="mergeAddBtn" title="Pick PDF files">＋ Add files</button>
+        <button id="mergeCommitBtn" disabled title="Build merged PDF and open it">✔ Merge &amp; organize</button>
+        <button id="mergeCancelBtn" title="Cancel">✕ Cancel</button>
+        <span class="mergeHint">Drop PDFs here or click Add. Drag tiles to reorder. Click ✔ to build.</span>
+      </div>
+      <div id="mergeList" class="mergeList"></div>
     </div>
     <div id="searchPanel" class="searchPanel hidden">
       <input id="searchInput" placeholder="Find in document…" />
@@ -169,6 +193,64 @@ app.innerHTML = `
       </div>
       <div id="propsInfo" class="propsPanel"></div>
       <div id="propsPerms" class="propsPanel hidden"></div>
+    </div>
+  </div>
+  <div id="wmOverlay" class="propsOverlay hidden">
+    <div class="propsModal">
+      <div class="propsHeader"><strong>Watermark</strong><button id="wmClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <label>Text<input id="wmText" type="text" placeholder="DRAFT" /></label>
+        <label>Font size<input id="wmFontSize" type="number" min="8" max="400" step="1" value="72" /></label>
+        <label>Rotation (°)<input id="wmRot" type="number" min="-180" max="180" step="1" value="45" /></label>
+        <label>Opacity<input id="wmOpacity" type="number" min="0.05" max="1" step="0.05" value="0.25" /></label>
+        <label>Gray (0=black,1=white)<input id="wmGray" type="number" min="0" max="1" step="0.05" value="0.5" /></label>
+        <div class="wmActions"><button id="wmCommit">Apply</button><button id="wmCancel">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+  <div id="iwOverlay" class="propsOverlay hidden">
+    <div class="propsModal">
+      <div class="propsHeader"><strong>Image watermark</strong><button id="iwClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <label>Image file<span style="display:flex;gap:0.3rem;align-items:center;"><input id="iwPath" type="text" readonly placeholder="Pick an image…" style="flex:1;" /><button id="iwPick">Browse…</button></span></label>
+        <label>Scale (fraction of page width)<input id="iwScale" type="number" min="0.05" max="1.5" step="0.05" value="0.4" /></label>
+        <label>Rotation (°)<input id="iwRot" type="number" min="-180" max="180" step="1" value="0" /></label>
+        <label>Opacity<input id="iwOpacity" type="number" min="0.05" max="1" step="0.05" value="0.5" /></label>
+        <label>Anchor
+          <select id="iwAnchor">
+            <option value="center" selected>Center</option>
+            <option value="topleft">Top-left</option>
+            <option value="topright">Top-right</option>
+            <option value="bottomleft">Bottom-left</option>
+            <option value="bottomright">Bottom-right</option>
+          </select>
+        </label>
+        <label>Margin (pt)<input id="iwMargin" type="number" min="0" max="400" step="1" value="36" /></label>
+        <div class="wmActions"><button id="iwCommit">Apply</button><button id="iwCancel">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+  <div id="hfOverlay" class="propsOverlay hidden">
+    <div class="propsModal">
+      <div class="propsHeader"><strong>Header / Footer / Page numbers</strong><button id="hfClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <div class="hfHint">Tokens: <code>{page}</code>, <code>{total}</code></div>
+        <div class="hfGrid">
+          <label>Header left<input id="hfHL" type="text" /></label>
+          <label>Header center<input id="hfHC" type="text" /></label>
+          <label>Header right<input id="hfHR" type="text" /></label>
+          <label>Footer left<input id="hfFL" type="text" /></label>
+          <label>Footer center<input id="hfFC" type="text" placeholder="Page {page} of {total}" /></label>
+          <label>Footer right<input id="hfFR" type="text" /></label>
+        </div>
+        <div class="hfRow">
+          <label>Font size<input id="hfFontSize" type="number" min="6" max="48" step="1" value="10" /></label>
+          <label>Margin (pt)<input id="hfMargin" type="number" min="0" max="200" step="1" value="24" /></label>
+          <label>First page #<input id="hfFirst" type="number" min="1" step="1" value="1" /></label>
+          <label>Gray<input id="hfGray" type="number" min="0" max="1" step="0.05" value="0" /></label>
+        </div>
+        <div class="wmActions"><button id="hfCommit">Apply</button><button id="hfCancel">Cancel</button></div>
+      </div>
     </div>
   </div>
 </main>
@@ -318,6 +400,54 @@ style.textContent = `
     background:#4a8cff; color:#fff; padding:4px 10px; border-radius:999px;
     font-size:0.82rem; box-shadow:0 3px 10px rgba(0,0,0,0.5);
   }
+  .mergePane { flex:1; display:none; flex-direction:column; background:#1e1e1e; overflow:hidden; }
+  body.merge .mergePane { display:flex; }
+  body.merge #viewer, body.merge #sidebar { display:none !important; }
+  .mergeHeader {
+    display:flex; align-items:center; gap:0.6rem;
+    padding:0.6rem 1rem; border-bottom:1px solid #333; background:#252526;
+  }
+  .mergeHeader button {
+    background:#3a3a3a; color:#ddd; border:1px solid #4a4a4a; border-radius:4px;
+    padding:0.35rem 0.7rem; cursor:pointer; font:inherit;
+  }
+  .mergeHeader button:hover:not(:disabled) { background:#4a4a4a; }
+  .mergeHeader button:disabled { opacity:0.4; cursor:not-allowed; }
+  #mergeCommitBtn:not(:disabled) { background:#2d5d2d; border-color:#3d7d3d; }
+  #mergeCommitBtn:not(:disabled):hover { background:#3d7d3d; }
+  .mergeHint { color:#888; font-size:0.85rem; margin-left:auto; }
+  .mergeList {
+    flex:1; overflow:auto; padding:1rem;
+    display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap:1rem; align-content:start;
+  }
+  body.merge.mergeDrop .mergeList { box-shadow: inset 0 0 0 3px #4a8cff; }
+  .mergeTile {
+    position:relative; background:#2d2d30; border:2px solid #3a3a3a; border-radius:6px;
+    padding:0.8rem; display:flex; flex-direction:column; gap:0.3rem;
+    cursor:grab; user-select:none;
+  }
+  .mergeTile:active { cursor:grabbing; }
+  .mergeTile .mergeIndex {
+    position:absolute; top:4px; left:6px;
+    background:rgba(74,140,255,0.9); color:#fff; font-size:0.75rem;
+    padding:1px 6px; border-radius:10px; font-variant-numeric:tabular-nums;
+  }
+  .mergeTile .mergeName {
+    font-size:0.9rem; color:#ddd; word-break:break-all;
+    margin-top:1.2rem; overflow:hidden; display:-webkit-box;
+    -webkit-line-clamp:3; -webkit-box-orient:vertical;
+  }
+  .mergeTile .mergePath { font-size:0.72rem; color:#777; word-break:break-all; }
+  .mergeTile .mergeRemove {
+    position:absolute; top:4px; right:6px; background:transparent; color:#888;
+    border:none; cursor:pointer; font-size:1rem; padding:0 4px;
+  }
+  .mergeTile .mergeRemove:hover { color:#e06060; }
+  .mergeTile.dragging { opacity:0.35; }
+  .mergeTile.dropBefore { box-shadow: inset 4px 0 0 #4a8cff; }
+  .mergeTile.dropAfter  { box-shadow: inset -4px 0 0 #4a8cff; }
+  .mergeEmpty { color:#777; padding:2rem; text-align:center; grid-column: 1 / -1; font-size:0.95rem; }
   .dropMark { outline:3px solid #4a8cff; outline-offset:2px; }
   body.presentation .pageList { gap:0; }
   body.dark .pageSlot img.page { filter: invert(0.92) hue-rotate(180deg); }
@@ -345,6 +475,17 @@ style.textContent = `
   .propsRow .v.no { color:#777; }
   .propsRow .v.yes { color:#9fe09f; }
   .propsRow .v.bad { color:#e09f9f; }
+  .wmPanel label { display:flex; flex-direction:column; gap:0.2rem; font-size:0.85rem; color:#aaa; margin:0.35rem 0; }
+  .wmPanel input[type="text"], .wmPanel input[type="number"] { background:#1e1e1e; color:#ddd; border:1px solid #444; border-radius:3px; padding:0.3rem 0.5rem; font:inherit; }
+  .wmActions { display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.6rem; }
+  .wmActions button { background:#3a3a3a; color:#ddd; border:1px solid #4a4a4a; border-radius:3px; padding:0.3rem 0.8rem; cursor:pointer; }
+  .wmActions button:hover { background:#4a4a4a; }
+  #wmCommit, #hfCommit { background:#4a8cff; border-color:#4a8cff; color:#fff; }
+  #wmCommit:hover, #hfCommit:hover { background:#5a9cff; }
+  .hfHint { color:#888; font-size:0.82rem; margin-bottom:0.4rem; }
+  .hfHint code { background:#1e1e1e; padding:0 0.25rem; border-radius:2px; color:#ccc; }
+  .hfGrid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.4rem; }
+  .hfRow { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:0.4rem; margin-top:0.4rem; }
 `;
 document.head.appendChild(style);
 
@@ -374,8 +515,6 @@ const thumbsPanel = document.getElementById("thumbsPanel") as HTMLDivElement;
 const outlinePanel = document.getElementById("outlinePanel") as HTMLDivElement;
 const recentMenu = document.getElementById("recentMenu") as HTMLDivElement;
 const dropOverlay = document.getElementById("dropOverlay") as HTMLDivElement;
-const backBtn = document.getElementById("backBtn") as HTMLButtonElement;
-const forwardBtn = document.getElementById("forwardBtn") as HTMLButtonElement;
 const attachmentsPanel = document.getElementById("attachmentsPanel") as HTMLDivElement;
 const propsOverlay = document.getElementById("propsOverlay") as HTMLDivElement;
 const propsInfoPanel = document.getElementById("propsInfo") as HTMLDivElement;
@@ -421,8 +560,6 @@ let slots: Slot[] = [];
 let observer: IntersectionObserver | null = null;
 const renderQueue: Set<number> = new Set();
 let renderRunning = false;
-const backStack: number[] = [];
-const forwardStack: number[] = [];
 
 function setStatus(s: string) {
   statusEl.textContent = s;
@@ -433,8 +570,6 @@ function updateChrome() {
     pageInput.value = "1";
     pageTotal.textContent = "/ 0";
     syncZoomUi();
-    backBtn.disabled = true;
-    forwardBtn.disabled = true;
     return;
   }
   pageInput.value = String(currentPage + 1);
@@ -442,8 +577,6 @@ function updateChrome() {
   pageTotal.textContent = `/ ${pageCount}`;
   syncZoomUi();
   thumbWraps.forEach((w, i) => w.classList.toggle("active", i === currentPage));
-  backBtn.disabled = backStack.length === 0;
-  forwardBtn.disabled = forwardStack.length === 0;
 }
 
 function computeZoom(): number {
@@ -886,16 +1019,11 @@ function updateCurrentFromScroll() {
   }
 }
 
-function navigateTo(idx: number, opts: { recordHistory?: boolean } = {}) {
+function navigateTo(idx: number, _opts: { recordHistory?: boolean } = {}) {
   const clamped = Math.max(0, Math.min(pageCount - 1, idx));
   if (clamped === currentPage) {
     updateChrome();
     return;
-  }
-  if (opts.recordHistory) {
-    backStack.push(currentPage);
-    if (backStack.length > 200) backStack.shift();
-    forwardStack.length = 0;
   }
   currentPage = clamped;
   if (viewMode === "single") {
@@ -911,21 +1039,7 @@ function navigateTo(idx: number, opts: { recordHistory?: boolean } = {}) {
 }
 
 function goToPage(idx: number) {
-  navigateTo(idx, { recordHistory: true });
-}
-
-function historyBack() {
-  if (backStack.length === 0) return;
-  const target = backStack.pop()!;
-  forwardStack.push(currentPage);
-  navigateTo(target, { recordHistory: false });
-}
-
-function historyForward() {
-  if (forwardStack.length === 0) return;
-  const target = forwardStack.pop()!;
-  backStack.push(currentPage);
-  navigateTo(target, { recordHistory: false });
+  navigateTo(idx);
 }
 
 type OpenErr = { kind: "PasswordRequired" | "PasswordIncorrect" | "Other"; value?: string };
@@ -993,8 +1107,6 @@ function applyOpenedDoc(doc: OpenedDocument, label: string) {
     pageRotation.clear();
     textRunsCache.clear();
     linksCache.clear();
-    backStack.length = 0;
-    forwardStack.length = 0;
     searchCount.textContent = "";
     renderOutline();
     rebuildSlots();
@@ -1004,6 +1116,7 @@ function applyOpenedDoc(doc: OpenedDocument, label: string) {
     loadAttachments();
     setStatus(`${label} — ${pageCount} pages`);
     updateChrome();
+    void refreshUndoUi();
   } catch (e) {
     setStatus(`Error: ${e}`);
   }
@@ -1088,8 +1201,6 @@ function toggleSidebar() {
 }
 document.getElementById("sidebarBtn")!.addEventListener("click", toggleSidebar);
 
-backBtn.addEventListener("click", historyBack);
-forwardBtn.addEventListener("click", historyForward);
 
 document.getElementById("prevPage")!.addEventListener("click", () => goToPage(currentPage - 1));
 document.getElementById("nextPage")!.addEventListener("click", () => goToPage(currentPage + 1));
@@ -1473,7 +1584,65 @@ function applyDocSnapshot(snap: DocSnapshot) {
   else scheduleRender(currentPage);
   renderThumbsShell();
   updateChrome();
+  void refreshUndoUi();
 }
+
+type UndoStatus = { undo: number; redo: number };
+const undoBtn = document.getElementById("undoBtn") as HTMLButtonElement;
+const redoBtn = document.getElementById("redoBtn") as HTMLButtonElement;
+
+async function refreshUndoUi() {
+  if (!currentDoc) {
+    undoBtn.disabled = true;
+    redoBtn.disabled = true;
+    return;
+  }
+  try {
+    const s = await invoke<UndoStatus>("undo_status", { document: currentDoc });
+    undoBtn.disabled = s.undo === 0;
+    redoBtn.disabled = s.redo === 0;
+  } catch {
+    undoBtn.disabled = true;
+    redoBtn.disabled = true;
+  }
+}
+
+async function doUndo() {
+  if (!currentDoc || undoBtn.disabled) return;
+  setStatus("Undo…");
+  try {
+    const snap = await invoke<DocSnapshot | null>("undo_doc", { document: currentDoc });
+    if (!snap) {
+      setStatus("Nothing to undo");
+      return;
+    }
+    clearSelection();
+    applyDocSnapshot(snap);
+    setStatus("Undone");
+  } catch (e) {
+    setStatus(`Undo error: ${e}`);
+  }
+}
+
+async function doRedo() {
+  if (!currentDoc || redoBtn.disabled) return;
+  setStatus("Redo…");
+  try {
+    const snap = await invoke<DocSnapshot | null>("redo_doc", { document: currentDoc });
+    if (!snap) {
+      setStatus("Nothing to redo");
+      return;
+    }
+    clearSelection();
+    applyDocSnapshot(snap);
+    setStatus("Redone");
+  } catch (e) {
+    setStatus(`Redo error: ${e}`);
+  }
+}
+
+undoBtn.addEventListener("click", () => void doUndo());
+redoBtn.addEventListener("click", () => void doRedo());
 
 function clearSelection() {
   selectedPages.clear();
@@ -1497,11 +1666,9 @@ function refreshSelectionUi() {
     ex.textContent = selectedPages.size > 0 ? `⬇ Extract ${selectedPages.size} page${selectedPages.size === 1 ? "" : "s"}` : "⬇ Extract selected";
   }
   if (modeHint) {
-    const base = selectedPages.size === 0
-      ? "Click / Ctrl+click / Shift+click thumbnails to select pages"
-      : `${selectedPages.size} selected`;
+    const base = selectedPages.size === 0 ? "" : `${selectedPages.size} selected`;
     modeHint.textContent = editMode === "delete"
-      ? `⚠ Delete mode — selected pages will be removed. ${base}`
+      ? (base ? `⚠ Delete mode — ${base}` : "⚠ Delete mode")
       : base;
   }
 }
@@ -1678,6 +1845,7 @@ function setRibbonTab(tab: RibbonTab) {
     el.classList.toggle("active", (el as HTMLElement).dataset.ribbonTab === tab);
   });
   const wasOrganize = document.body.classList.contains("organize");
+  if (mergeMode && tab !== "organize") exitMergeMode();
   document.body.classList.toggle("organize", tab === "organize");
   if (tab === "organize") {
     // Show sidebar so the full-width thumbs grid is visible.
@@ -1749,6 +1917,398 @@ function runRotate(deg: number) {
 document.getElementById("rotateLeftBtn")!.addEventListener("click", () => runRotate(-90));
 document.getElementById("rotateRightBtn")!.addEventListener("click", () => runRotate(90));
 document.getElementById("rotate180Btn")!.addEventListener("click", () => runRotate(180));
+
+const insertMenuBtn = document.getElementById("insertMenuBtn") as HTMLButtonElement;
+const insertMenu = document.getElementById("insertMenu") as HTMLDivElement;
+function setInsertMenuOpen(open: boolean) {
+  insertMenu.classList.toggle("hidden", !open);
+  insertMenuBtn.setAttribute("aria-expanded", String(open));
+}
+insertMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setInsertMenuOpen(insertMenu.classList.contains("hidden"));
+});
+document.addEventListener("click", (e) => {
+  if (!insertMenu.classList.contains("hidden")
+      && !insertMenu.contains(e.target as Node)
+      && e.target !== insertMenuBtn) {
+    setInsertMenuOpen(false);
+  }
+});
+type InsertWhere = "before" | "after" | "end";
+async function runInsertPdf(where: InsertWhere) {
+  setInsertMenuOpen(false);
+  if (!currentDoc) { setStatus("Open a PDF first"); return; }
+  const picked = await open({
+    multiple: true,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!picked) return;
+  const paths = Array.isArray(picked) ? picked : [picked];
+  if (paths.length === 0) return;
+  const at = where === "end" ? pageCount
+    : where === "before" ? currentPage
+    : currentPage + 1;
+  setStatus(`Inserting ${paths.length} file${paths.length === 1 ? "" : "s"}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("insert_pdf_files", {
+      document: currentDoc, paths, atIndex: at,
+    });
+    clearSelection();
+    applyDocSnapshot(snap);
+    setStatus(`Inserted ${paths.length} file${paths.length === 1 ? "" : "s"} (${snap.page_count} pages total)`);
+  } catch (err) {
+    setStatus(`Insert error: ${err}`);
+  }
+}
+document.getElementById("insertBeforeBtn")!.addEventListener("click", () => runInsertPdf("before"));
+document.getElementById("insertAfterBtn")!.addEventListener("click", () => runInsertPdf("after"));
+document.getElementById("insertEndBtn")!.addEventListener("click", () => runInsertPdf("end"));
+document.getElementById("mergePdfsBtn")!.addEventListener("click", () => enterMergeMode());
+document.getElementById("splitPdfBtn")!.addEventListener("click", () => void runSplitPdf());
+
+const wmOverlay = document.getElementById("wmOverlay") as HTMLDivElement;
+const hfOverlay = document.getElementById("hfOverlay") as HTMLDivElement;
+document.getElementById("watermarkBtn")!.addEventListener("click", () => {
+  if (!currentDoc) { setStatus("Open a PDF first"); return; }
+  wmOverlay.classList.remove("hidden");
+  (document.getElementById("wmText") as HTMLInputElement).focus();
+});
+document.getElementById("wmClose")!.addEventListener("click", () => wmOverlay.classList.add("hidden"));
+document.getElementById("wmCancel")!.addEventListener("click", () => wmOverlay.classList.add("hidden"));
+document.getElementById("wmCommit")!.addEventListener("click", () => void runWatermark());
+
+async function runWatermark() {
+  if (!currentDoc) return;
+  const text = (document.getElementById("wmText") as HTMLInputElement).value.trim();
+  if (!text) { setStatus("Watermark text is empty"); return; }
+  const args = {
+    text,
+    font_size: parseFloat((document.getElementById("wmFontSize") as HTMLInputElement).value) || 72,
+    rotation_deg: parseFloat((document.getElementById("wmRot") as HTMLInputElement).value) || 0,
+    opacity: parseFloat((document.getElementById("wmOpacity") as HTMLInputElement).value) || 0.25,
+    gray: parseFloat((document.getElementById("wmGray") as HTMLInputElement).value),
+  };
+  if (!Number.isFinite(args.gray)) args.gray = 0.5;
+  wmOverlay.classList.add("hidden");
+  setStatus("Applying watermark…");
+  try {
+    const snap = await invoke<DocSnapshot>("add_watermark", { document: currentDoc, args });
+    applyDocSnapshot(snap);
+    setStatus("Watermark applied");
+  } catch (e) {
+    setStatus(`Watermark error: ${e}`);
+  }
+}
+
+document.getElementById("headerFooterBtn")!.addEventListener("click", () => {
+  if (!currentDoc) { setStatus("Open a PDF first"); return; }
+  hfOverlay.classList.remove("hidden");
+});
+document.getElementById("hfClose")!.addEventListener("click", () => hfOverlay.classList.add("hidden"));
+document.getElementById("hfCancel")!.addEventListener("click", () => hfOverlay.classList.add("hidden"));
+document.getElementById("hfCommit")!.addEventListener("click", () => void runHeaderFooter());
+
+async function runHeaderFooter() {
+  if (!currentDoc) return;
+  const v = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
+  const args = {
+    header_left: v("hfHL"),
+    header_center: v("hfHC"),
+    header_right: v("hfHR"),
+    footer_left: v("hfFL"),
+    footer_center: v("hfFC"),
+    footer_right: v("hfFR"),
+    font_size: parseFloat(v("hfFontSize")) || 10,
+    margin_pt: parseFloat(v("hfMargin")) || 24,
+    first_page_number: parseInt(v("hfFirst"), 10) || 1,
+    gray: parseFloat(v("hfGray")),
+  };
+  if (!Number.isFinite(args.gray)) args.gray = 0;
+  const anyText = [args.header_left, args.header_center, args.header_right, args.footer_left, args.footer_center, args.footer_right].some((s) => s.trim() !== "");
+  if (!anyText) { setStatus("Fill at least one slot"); return; }
+  hfOverlay.classList.add("hidden");
+  setStatus("Applying header/footer…");
+  try {
+    const snap = await invoke<DocSnapshot>("add_header_footer", { document: currentDoc, args });
+    applyDocSnapshot(snap);
+    setStatus("Header/footer applied");
+  } catch (e) {
+    setStatus(`Header/footer error: ${e}`);
+  }
+}
+
+const iwOverlay = document.getElementById("iwOverlay") as HTMLDivElement;
+document.getElementById("imageWatermarkBtn")!.addEventListener("click", () => {
+  if (!currentDoc) { setStatus("Open a PDF first"); return; }
+  iwOverlay.classList.remove("hidden");
+});
+document.getElementById("iwClose")!.addEventListener("click", () => iwOverlay.classList.add("hidden"));
+document.getElementById("iwCancel")!.addEventListener("click", () => iwOverlay.classList.add("hidden"));
+document.getElementById("iwPick")!.addEventListener("click", () => void pickImageWatermark());
+document.getElementById("iwCommit")!.addEventListener("click", () => void runImageWatermark());
+
+async function pickImageWatermark() {
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    title: "Pick image for watermark",
+  });
+  if (picked && typeof picked === "string") {
+    (document.getElementById("iwPath") as HTMLInputElement).value = picked;
+  }
+}
+
+async function runImageWatermark() {
+  if (!currentDoc) return;
+  const image_path = (document.getElementById("iwPath") as HTMLInputElement).value.trim();
+  if (!image_path) { setStatus("Pick an image first"); return; }
+  const args = {
+    image_path,
+    scale_frac: parseFloat((document.getElementById("iwScale") as HTMLInputElement).value) || 0.4,
+    rotation_deg: parseFloat((document.getElementById("iwRot") as HTMLInputElement).value) || 0,
+    opacity: parseFloat((document.getElementById("iwOpacity") as HTMLInputElement).value) || 0.5,
+    anchor: (document.getElementById("iwAnchor") as HTMLSelectElement).value || "center",
+    margin_pt: parseFloat((document.getElementById("iwMargin") as HTMLInputElement).value) || 36,
+  };
+  iwOverlay.classList.add("hidden");
+  setStatus("Applying image watermark…");
+  try {
+    const snap = await invoke<DocSnapshot>("add_image_watermark", { document: currentDoc, args });
+    applyDocSnapshot(snap);
+    setStatus("Image watermark applied");
+  } catch (e) {
+    setStatus(`Image watermark error: ${e}`);
+  }
+}
+
+async function runSplitPdf() {
+  if (!currentDoc) { setStatus("Open a PDF first"); return; }
+  const suggestion = `1-${Math.min(pageCount, Math.max(1, Math.ceil(pageCount / 2)))},${Math.min(pageCount, Math.max(1, Math.ceil(pageCount / 2)) + 1)}-${pageCount}`;
+  const spec = window.prompt(
+    `Split into parts by page ranges (1-based, comma-separated).\nExamples:  1-3,4-6,7-${pageCount}    or    1,2-5,6`,
+    suggestion,
+  );
+  if (!spec) return;
+  const outDir = await open({ directory: true, title: "Output folder for split parts" });
+  if (!outDir || typeof outDir !== "string") return;
+  const baseName = currentDocPath
+    ? currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
+    : "document";
+  setStatus("Splitting…");
+  try {
+    const res = await invoke<{ files: string[] }>("split_pdf", {
+      document: currentDoc,
+      ranges: spec,
+      outDir,
+      baseName,
+    });
+    setStatus(`Split → ${res.files.length} file${res.files.length === 1 ? "" : "s"} in ${outDir}`);
+  } catch (e) {
+    setStatus(`Split error: ${e}`);
+  }
+}
+
+// ---------- Merge workspace ----------
+type MergeFile = { path: string; name: string };
+let mergeMode = false;
+let mergeFiles: MergeFile[] = [];
+const mergePane = document.getElementById("mergePane") as HTMLDivElement;
+const mergeList = document.getElementById("mergeList") as HTMLDivElement;
+const mergeCommitBtn = document.getElementById("mergeCommitBtn") as HTMLButtonElement;
+
+function enterMergeMode() {
+  mergeMode = true;
+  mergeFiles = [];
+  document.body.classList.add("merge");
+  setRibbonTab("organize");
+  renderMergeList();
+}
+function exitMergeMode() {
+  mergeMode = false;
+  mergeFiles = [];
+  document.body.classList.remove("merge", "mergeDrop");
+  renderMergeList();
+}
+function fileNameFromPath(p: string): string {
+  const m = p.replace(/\\/g, "/").split("/").pop() ?? p;
+  return m || p;
+}
+function renderMergeList() {
+  mergeList.innerHTML = "";
+  if (mergeFiles.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "mergeEmpty";
+    empty.textContent = "No files yet. Drop PDFs here or click ＋ Add files.";
+    mergeList.appendChild(empty);
+  } else {
+    mergeFiles.forEach((f, i) => {
+      const tile = document.createElement("div");
+      tile.className = "mergeTile";
+      tile.dataset.idx = String(i);
+      tile.innerHTML = `
+        <span class="mergeIndex">${i + 1}</span>
+        <button class="mergeRemove" title="Remove" data-idx="${i}">✕</button>
+        <div class="mergeName">${f.name}</div>
+        <div class="mergePath">${f.path}</div>`;
+      mergeList.appendChild(tile);
+    });
+  }
+  mergeCommitBtn.disabled = mergeFiles.length < 2;
+}
+function addMergePaths(paths: string[]) {
+  const pdfs = paths.filter((p) => /\.pdf$/i.test(p));
+  for (const p of pdfs) {
+    if (mergeFiles.some((f) => f.path === p)) continue;
+    mergeFiles.push({ path: p, name: fileNameFromPath(p) });
+  }
+  renderMergeList();
+}
+
+document.getElementById("mergeAddBtn")!.addEventListener("click", async () => {
+  const picked = await open({
+    multiple: true,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!picked) return;
+  const paths = Array.isArray(picked) ? picked : [picked];
+  addMergePaths(paths);
+});
+document.getElementById("mergeCancelBtn")!.addEventListener("click", exitMergeMode);
+mergeCommitBtn.addEventListener("click", async () => {
+  if (mergeFiles.length < 2) return;
+  const paths = mergeFiles.map((f) => f.path);
+  setStatus(`Merging ${paths.length} files…`);
+  try {
+    type MergeResult = OpenedDocument & { temp_path: string };
+    const res = await invoke<MergeResult>("merge_files_and_open", { paths });
+    const tmp = res.temp_path;
+    exitMergeMode();
+    applyOpenedDoc(res, tmp);
+    setRibbonTab("organize");
+    setStatus(`Merged ${paths.length} files into ${res.page_count} pages (temp: ${tmp})`);
+  } catch (err) {
+    setStatus(`Merge error: ${err}`);
+  }
+});
+
+// remove-button delegation
+mergeList.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest(".mergeRemove") as HTMLElement | null;
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.idx || "-1", 10);
+  if (idx < 0) return;
+  mergeFiles.splice(idx, 1);
+  renderMergeList();
+});
+
+// pointer-drag reorder of merge tiles
+type MDrag = {
+  tracking: boolean; active: boolean; startX: number; startY: number;
+  startIdx: number; preview: HTMLElement | null;
+  target: HTMLElement | null; after: boolean;
+};
+let mdrag: MDrag = {
+  tracking: false, active: false, startX: 0, startY: 0,
+  startIdx: -1, preview: null, target: null, after: false,
+};
+function resetMdrag() {
+  if (mdrag.preview) mdrag.preview.remove();
+  document.querySelectorAll(".mergeTile.dragging, .mergeTile.dropBefore, .mergeTile.dropAfter")
+    .forEach((el) => el.classList.remove("dragging", "dropBefore", "dropAfter"));
+  mdrag = {
+    tracking: false, active: false, startX: 0, startY: 0,
+    startIdx: -1, preview: null, target: null, after: false,
+  };
+}
+function findMergeDropTarget(x: number, y: number): { el: HTMLElement; after: boolean } | null {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  const hit = el?.closest(".mergeTile") as HTMLElement | null;
+  const all = Array.from(mergeList.querySelectorAll<HTMLElement>(".mergeTile"));
+  if (hit) {
+    const r = hit.getBoundingClientRect();
+    return { el: hit, after: x > r.left + r.width / 2 };
+  }
+  let best: HTMLElement | null = null;
+  let bestRect: DOMRect | null = null;
+  let bestDist = Infinity;
+  for (const t of all) {
+    if (t.classList.contains("dragging")) continue;
+    const r = t.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const dx = cx - x;
+    const dy = cy - y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) { bestDist = d; best = t; bestRect = r; }
+  }
+  if (!best || !bestRect) return null;
+  return { el: best, after: x > bestRect.left + bestRect.width / 2 };
+}
+mergeList.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  const t = (e.target as HTMLElement | null)?.closest(".mergeTile") as HTMLElement | null;
+  if (!t) return;
+  if ((e.target as HTMLElement).closest(".mergeRemove")) return;
+  const idx = parseInt(t.dataset.idx || "-1", 10);
+  if (idx < 0) return;
+  mdrag = {
+    tracking: true, active: false, startX: e.clientX, startY: e.clientY,
+    startIdx: idx, preview: null, target: null, after: false,
+  };
+});
+window.addEventListener("pointermove", (e) => {
+  if (!mdrag.tracking) return;
+  if (!mdrag.active) {
+    const dx = e.clientX - mdrag.startX;
+    const dy = e.clientY - mdrag.startY;
+    if (dx * dx + dy * dy < 25) return;
+    mdrag.active = true;
+    const tile = mergeList.querySelector<HTMLElement>(`.mergeTile[data-idx="${mdrag.startIdx}"]`);
+    tile?.classList.add("dragging");
+    const prev = document.createElement("div");
+    prev.className = "dragPreview";
+    prev.textContent = mergeFiles[mdrag.startIdx]?.name ?? "file";
+    document.body.appendChild(prev);
+    mdrag.preview = prev;
+  }
+  if (mdrag.preview) {
+    mdrag.preview.style.left = `${e.clientX + 14}px`;
+    mdrag.preview.style.top = `${e.clientY + 14}px`;
+  }
+  const hit = findMergeDropTarget(e.clientX, e.clientY);
+  const target = hit?.el ?? null;
+  if (mdrag.target && mdrag.target !== target) {
+    mdrag.target.classList.remove("dropBefore", "dropAfter");
+  }
+  mdrag.target = target;
+  if (hit && target) {
+    mdrag.after = hit.after;
+    target.classList.toggle("dropBefore", !mdrag.after);
+    target.classList.toggle("dropAfter", mdrag.after);
+  }
+});
+window.addEventListener("pointerup", () => {
+  if (!mdrag.tracking) return;
+  const wasActive = mdrag.active;
+  const from = mdrag.startIdx;
+  const target = mdrag.target;
+  const after = mdrag.after;
+  resetMdrag();
+  if (!wasActive || from < 0 || !target) return;
+  const toIdxRaw = parseInt(target.dataset.idx || "-1", 10);
+  if (toIdxRaw < 0 || toIdxRaw === from) return;
+  const moved = mergeFiles[from];
+  mergeFiles.splice(from, 1);
+  let insertAt = toIdxRaw;
+  if (toIdxRaw > from) insertAt -= 1;
+  if (after) insertAt += 1;
+  insertAt = Math.max(0, Math.min(mergeFiles.length, insertAt));
+  mergeFiles.splice(insertAt, 0, moved);
+  renderMergeList();
+});
+window.addEventListener("pointercancel", resetMdrag);
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // Delegated thumb click handler: runs in capture phase before WebView2 can
@@ -2110,16 +2670,6 @@ window.addEventListener("keydown", (e) => {
     toggleSidebar();
     return;
   }
-  if (e.altKey && e.key === "ArrowLeft") {
-    e.preventDefault();
-    historyBack();
-    return;
-  }
-  if (e.altKey && e.key === "ArrowRight") {
-    e.preventDefault();
-    historyForward();
-    return;
-  }
   if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
     e.preventDefault();
     (document.getElementById("open") as HTMLButtonElement).click();
@@ -2143,6 +2693,16 @@ window.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.shiftKey && (e.key === "s" || e.key === "S")) {
     e.preventDefault();
     triggerSaveAs();
+    return;
+  }
+  if (!inField && e.ctrlKey && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+    e.preventDefault();
+    void doUndo();
+    return;
+  }
+  if (!inField && e.ctrlKey && ((e.key === "y" || e.key === "Y") || (e.shiftKey && (e.key === "z" || e.key === "Z")))) {
+    e.preventDefault();
+    void doRedo();
     return;
   }
   if (!inField && ribbonTab === "edit" && (e.key === "Delete" || e.key === "Del")) {
@@ -2216,12 +2776,19 @@ getCurrentWebview()
   .onDragDropEvent(async (event) => {
     const p = event.payload;
     if (p.type === "over" || p.type === "enter") {
-      dropOverlay.classList.remove("hidden");
+      if (mergeMode) document.body.classList.add("mergeDrop");
+      else dropOverlay.classList.remove("hidden");
     } else if (p.type === "leave") {
+      document.body.classList.remove("mergeDrop");
       dropOverlay.classList.add("hidden");
     } else if (p.type === "drop") {
+      document.body.classList.remove("mergeDrop");
       dropOverlay.classList.add("hidden");
       const paths = (p as { paths: string[] }).paths;
+      if (mergeMode) {
+        addMergePaths(paths);
+        return;
+      }
       const pdf = paths.find((f) => /\.pdf$/i.test(f));
       if (pdf) await openByPath(pdf);
     }

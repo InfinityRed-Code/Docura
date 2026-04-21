@@ -57,7 +57,8 @@
       "Bash(netstat -ano)",
       "Bash(awk '{print $5}')",
       "Bash(taskkill //PID 13924 //F)",
-      "Bash(taskkill //PID 29828 //F)"
+      "Bash(taskkill //PID 29828 //F)",
+      "Bash(npx -y tsc --noEmit)"
     ]
   }
 }
