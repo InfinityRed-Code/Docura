@@ -62,7 +62,29 @@ async fn close_pdf(
 }
 
 #[tauri::command]
+async fn open_pdf_path(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    password: Option<String>,
+) -> Result<OpenedDocument, OpenError> {
+    let t_read = std::time::Instant::now();
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| OpenError::Other(format!("read {path}: {e}")))?;
+    tracing::info!("open_pdf_path: read {:.1}MB in {:?}", bytes.len() as f64 / 1024.0 / 1024.0, t_read.elapsed());
+    open_pdf_inner(state, bytes, password).await
+}
+
+#[tauri::command]
 async fn open_pdf(
+    state: tauri::State<'_, AppState>,
+    bytes: Vec<u8>,
+    password: Option<String>,
+) -> Result<OpenedDocument, OpenError> {
+    open_pdf_inner(state, bytes, password).await
+}
+
+async fn open_pdf_inner(
     state: tauri::State<'_, AppState>,
     bytes: Vec<u8>,
     password: Option<String>,
@@ -73,9 +95,12 @@ async fn open_pdf(
         let t0 = std::time::Instant::now();
         let id = engine.open_bytes_with_password(bytes, password)?;
         let t_parse = t0.elapsed();
+        let t_pc0 = std::time::Instant::now();
         let page_count = engine
             .page_count(id)
             .map_err(|e| OpenError::Other(e.to_string()))?;
+        let t_page_count = t_pc0.elapsed();
+        let t_sz0 = std::time::Instant::now();
         let mut page_sizes = Vec::with_capacity(page_count as usize);
         for i in 0..page_count {
             let sz = engine
@@ -83,12 +108,18 @@ async fn open_pdf(
                 .map_err(|e| OpenError::Other(e.to_string()))?;
             page_sizes.push(sz);
         }
+        let t_sizes = t_sz0.elapsed();
+        let t_out0 = std::time::Instant::now();
         let outline = engine.outline(id).unwrap_or_default();
+        let t_outline = t_out0.elapsed();
         tracing::info!(
-            "open_pdf: size={:.1}MB pages={} parse={:?} total={:?}",
+            "open_pdf: size={:.1}MB pages={} parse={:?} page_count_call={:?} sizes_loop={:?} outline={:?} total={:?}",
             size_mb,
             page_count,
             t_parse,
+            t_page_count,
+            t_sizes,
+            t_outline,
             t0.elapsed()
         );
         Ok(OpenedDocument {
@@ -126,11 +157,31 @@ async fn render_page(
     zoom: f32,
     rotation: Option<u8>,
 ) -> Result<RenderedPayload, String> {
+    render_internal(state, document, page, zoom, rotation, 82).await
+}
+
+async fn render_internal(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+    zoom: f32,
+    rotation: Option<u8>,
+    quality: u8,
+) -> Result<RenderedPayload, String> {
     let rot_q = rotation.unwrap_or(0) % 4;
     let rotation = Rotation::from_quarter_turns(rot_q);
     let key = make_cache_key(document, page, zoom, rot_q);
+    let t_total = std::time::Instant::now();
     if let Some(cached) = state.cache.lock().get(&key).cloned() {
-        return Ok(encode_payload(cached.width, cached.height, &cached.rgba)?);
+        tracing::info!(
+            "render_page HIT page={} zoom={} {}x{} total={:?}",
+            page, zoom, cached.width, cached.height, t_total.elapsed()
+        );
+        return Ok(RenderedPayload {
+            width: cached.width,
+            height: cached.height,
+            data_url: cached.data_url,
+        });
     }
     let engine = state.engine.clone();
     let rendered = tokio::task::spawn_blocking(move || {
@@ -143,30 +194,40 @@ async fn render_page(
                 rotation,
             })
             .map_err(|e| e.to_string());
-        tracing::debug!("render page={} zoom={} t={:?}", page, zoom, t0.elapsed());
+        tracing::info!("pdfium_render page={} zoom={} t={:?}", page, zoom, t0.elapsed());
         r
     })
     .await
     .map_err(|e| e.to_string())??;
+    let w = rendered.width_px;
+    let h = rendered.height_px;
+    let rgba = rendered.rgba;
+    let t_enc0 = std::time::Instant::now();
+    let data_url = tokio::task::spawn_blocking(move || encode_data_url(w, h, &rgba, quality))
+        .await
+        .map_err(|e| e.to_string())??;
+    let enc_t = t_enc0.elapsed();
+    let t_cache0 = std::time::Instant::now();
     state.cache.lock().insert(
         key,
         CachedImage {
-            width: rendered.width_px,
-            height: rendered.height_px,
-            rgba: rendered.rgba.clone(),
+            width: w,
+            height: h,
+            data_url: data_url.clone(),
         },
     );
-    encode_payload(rendered.width_px, rendered.height_px, &rendered.rgba)
+    let t_cache = t_cache0.elapsed();
+    tracing::info!(
+        "render_page MISS page={} zoom={} q={} {}x{} encode={:?} cache_insert={:?} total={:?}",
+        page, zoom, quality, w, h, enc_t, t_cache, t_total.elapsed()
+    );
+    Ok(RenderedPayload { width: w, height: h, data_url })
 }
 
-fn encode_payload(width: u32, height: u32, rgba: &[u8]) -> Result<RenderedPayload, String> {
-    let png = encode_png(width, height, rgba)?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-    Ok(RenderedPayload {
-        width,
-        height,
-        data_url: format!("data:image/png;base64,{b64}"),
-    })
+fn encode_data_url(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<String, String> {
+    let jpg = encode_jpeg(width, height, rgba, quality)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&jpg);
+    Ok(format!("data:image/jpeg;base64,{b64}"))
 }
 
 #[tauri::command]
@@ -180,7 +241,7 @@ async fn render_thumbnail(
 ) -> Result<RenderedPayload, String> {
     let pt = page_width_pt.max(1.0);
     let zoom = (max_width as f32 / pt).clamp(0.05, 1.0);
-    render_page(state, document, page, zoom, rotation).await
+    render_internal(state, document, page, zoom, rotation, 60).await
 }
 
 #[tauri::command]
@@ -402,15 +463,26 @@ async fn search_document(
     .map_err(|e| e.to_string())?
 }
 
-fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(rgba.len() / 4);
-    {
-        let mut encoder = png::Encoder::new(&mut out, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-        writer.write_image_data(rgba).map_err(|e| e.to_string())?;
-    }
+fn encode_jpeg(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<u8>, String> {
+    // mozjpeg (libjpeg-turbo SIMD). PDFium writes opaque RGBA — feed JCS_EXT_RGBA
+    // directly so the encoder drops alpha without an explicit compositing pass.
+    let t_jpg = std::time::Instant::now();
+    let mut comp = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_EXT_RGBA);
+    // JCP_FASTEST profile: baseline (no progressive), no trellis, no scan
+    // optimization, no Huffman 2nd pass. ~2-3× faster than default at a
+    // small filesize cost.
+    comp.set_fastest_defaults();
+    comp.set_optimize_coding(false);
+    comp.set_size(width as usize, height as usize);
+    comp.set_quality(quality as f32);
+    let mut started = comp.start_compress(Vec::with_capacity(rgba.len() / 10))
+        .map_err(|e| e.to_string())?;
+    started.write_scanlines(rgba).map_err(|e| e.to_string())?;
+    let out = started.finish().map_err(|e| e.to_string())?;
+    tracing::info!(
+        "encode_jpeg {}x{} q={} jpeg={:?} out={}KB",
+        width, height, quality, t_jpg.elapsed(), out.len() / 1024
+    );
     Ok(out)
 }
 
@@ -467,7 +539,15 @@ fn push_recent(state: tauri::State<'_, AppState>, path: String) -> Result<(), St
 }
 
 pub fn run() {
-    tracing_subscriber::fmt::try_init().ok();
+    // Default to INFO so open_pdf / render timings show. Override via RUST_LOG.
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,desktop_tauri_lib=info,pdf_pdfium=info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .try_init()
+        .ok();
 
     let engine: Arc<dyn PdfEngine> = match PdfiumEngine::new() {
         Ok(e) => Arc::new(e),
@@ -477,7 +557,7 @@ pub fn run() {
         }
     };
 
-    let cache = RenderCache::new(NonZeroUsize::new(256).unwrap());
+    let cache = RenderCache::new(NonZeroUsize::new(64).unwrap());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -500,6 +580,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf,
+            open_pdf_path,
             close_pdf,
             render_page,
             render_thumbnail,

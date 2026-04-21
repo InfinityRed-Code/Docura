@@ -32,6 +32,6 @@ pdf_pdfium = { workspace = true }
 pdf_services = { workspace = true }
 pdf_cache = { workspace = true }
 pdf_types = { workspace = true }
-png = "0.17"
+mozjpeg = "0.10"
 base64 = "0.22"
 parking_lot = "0.12"

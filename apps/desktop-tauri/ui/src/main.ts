@@ -285,8 +285,8 @@ let pageSizes: PageSize[] = [];
 let outline: OutlineNode[] = [];
 let currentPage = 0;
 let zoom = 1.0;
-let fitMode: FitMode = "width";
-let viewMode: ViewMode = "single";
+let fitMode: FitMode = "page";
+let viewMode: ViewMode = "continuous";
 let hits: SearchHit[] = [];
 let currentHit = -1;
 let docRotation = 0;
@@ -432,6 +432,30 @@ function sizeSlots() {
   }
 }
 
+const EVICT_DIST = 10;
+
+function evictSlot(idx: number) {
+  const slot = slots[idx];
+  if (!slot || !slot.loaded) return;
+  // Drop decoded bitmap so browser frees memory. The placeholder keeps the
+  // slot sized; re-render happens when the slot intersects again.
+  slot.img.removeAttribute("src");
+  slot.img.width = 0;
+  slot.img.height = 0;
+  slot.selectLayer.innerHTML = "";
+  slot.highlightLayer.innerHTML = "";
+  slot.linkLayer.innerHTML = "";
+  slot.loaded = false;
+  slot.lastZoom = null;
+  renderQueue.delete(idx);
+}
+
+function evictFarSlots() {
+  for (let i = 0; i < slots.length; i++) {
+    if (Math.abs(i - currentPage) > EVICT_DIST) evictSlot(i);
+  }
+}
+
 function setupObserver() {
   if (observer) observer.disconnect();
   observer = new IntersectionObserver(
@@ -444,10 +468,12 @@ function setupObserver() {
           if (viewMode === "continuous" || viewMode === "double") {
             updateCurrentFromScroll();
           }
+        } else if (Math.abs(idx - currentPage) > EVICT_DIST) {
+          evictSlot(idx);
         }
       }
     },
-    { root: viewer, rootMargin: "400px 0px", threshold: 0.01 },
+    { root: viewer, rootMargin: "200px 0px", threshold: 0.01 },
   );
   for (const s of slots) observer.observe(s.wrap);
 }
@@ -461,11 +487,24 @@ function scheduleRender(idx: number) {
   pumpRenderQueue();
 }
 
+const MAX_RENDER_DIST = 6;
+
+function pruneRenderQueue() {
+  // Drop entries far from viewport — they were likely queued by a scroll
+  // burst and the user has already moved past them.
+  for (const idx of renderQueue) {
+    if (Math.abs(idx - currentPage) > MAX_RENDER_DIST) {
+      renderQueue.delete(idx);
+    }
+  }
+}
+
 async function pumpRenderQueue() {
   if (renderRunning) return;
   renderRunning = true;
   try {
     while (renderQueue.size > 0) {
+      pruneRenderQueue();
       const nearest = pickNearest();
       if (nearest === null) break;
       renderQueue.delete(nearest);
@@ -744,6 +783,7 @@ function navigateTo(idx: number, opts: { recordHistory?: boolean } = {}) {
     if (slot) slot.wrap.scrollIntoView({ block: "start", behavior: "auto" });
     scheduleRender(clamped);
   }
+  evictFarSlots();
   updateChrome();
 }
 
@@ -808,6 +848,10 @@ async function openFromBytes(bytes: Uint8Array, label: string) {
       return;
     }
   }
+  applyOpenedDoc(doc, label);
+}
+
+function applyOpenedDoc(doc: OpenedDocument, label: string) {
   try {
     const prior = currentDoc;
     currentDoc = doc.id;
@@ -831,8 +875,6 @@ async function openFromBytes(bytes: Uint8Array, label: string) {
     rebuildSlots();
     if (viewMode === "single") navigateTo(0, { recordHistory: false });
     else scheduleRender(0);
-    const prefetch = Math.min(5, pageCount - 1);
-    for (let i = 1; i <= prefetch; i++) scheduleRender(i);
     renderThumbsShell();
     loadAttachments();
     setStatus(`${label} — ${pageCount} pages`);
@@ -843,11 +885,31 @@ async function openFromBytes(bytes: Uint8Array, label: string) {
 }
 
 async function openByPath(path: string) {
-  const bytes = await readFile(path);
-  await openFromBytes(bytes, path);
-  try {
-    await invoke("push_recent", { path });
-  } catch {}
+  const t0 = performance.now();
+  setStatus(`Opening ${path}…`);
+  let doc: OpenedDocument | null = null;
+  let password: string | null = null;
+  let attempts = 0;
+  while (doc === null) {
+    try {
+      doc = await invoke<OpenedDocument>("open_pdf_path", { path, password });
+    } catch (e) {
+      const err = e as OpenErr | string;
+      const kind = typeof err === "object" ? err.kind : "Other";
+      if (kind === "PasswordRequired" || kind === "PasswordIncorrect") {
+        if (attempts >= 3) { setStatus("Too many password attempts"); return; }
+        const prompt = kind === "PasswordIncorrect" ? "Password incorrect. Try again:" : "Password required:";
+        const input = window.prompt(prompt);
+        if (input === null) { setStatus("Open cancelled"); return; }
+        password = input; attempts += 1; continue;
+      }
+      const msg = typeof err === "string" ? err : err.value ?? "unknown error";
+      setStatus(`Error: ${msg}`); return;
+    }
+  }
+  console.info(`open_pdf_path round-trip: ${(performance.now() - t0).toFixed(1)}ms`);
+  applyOpenedDoc(doc, path);
+  try { await invoke("push_recent", { path }); } catch {}
 }
 
 document.getElementById("open")!.addEventListener("click", async () => {
@@ -1069,7 +1131,7 @@ function armThumbObserver() {
         loadThumb(i);
       }
     },
-    { root: thumbsPanel, rootMargin: "300px 0px", threshold: 0.01 },
+    { root: thumbsPanel, rootMargin: "150px 0px", threshold: 0.01 },
   );
   for (const img of thumbEls) thumbObserver.observe(img);
 }

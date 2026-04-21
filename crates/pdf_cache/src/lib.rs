@@ -1,8 +1,8 @@
 //! Thumbnail and page-render cache. LRU with zoom/page keyed entries.
 
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
+use lru::LruCache;
 use pdf_types::{DocumentId, PageIndex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -17,33 +17,29 @@ pub struct CacheKey {
 pub struct CachedImage {
     pub width: u32,
     pub height: u32,
-    pub rgba: Vec<u8>,
+    /// Pre-encoded payload ready to ship to the UI (e.g. a JPEG data URL).
+    /// Storing encoded bytes — not raw RGBA — means cache hits skip the
+    /// ~100ms JPEG re-encode and keep ~10x less memory resident.
+    pub data_url: String,
 }
 
 pub struct RenderCache {
-    capacity: NonZeroUsize,
-    entries: HashMap<CacheKey, CachedImage>,
+    entries: LruCache<CacheKey, CachedImage>,
 }
 
 impl RenderCache {
     pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            capacity,
-            entries: HashMap::new(),
+            entries: LruCache::new(capacity),
         }
     }
 
-    pub fn get(&self, key: &CacheKey) -> Option<&CachedImage> {
+    pub fn get(&mut self, key: &CacheKey) -> Option<&CachedImage> {
         self.entries.get(key)
     }
 
     pub fn insert(&mut self, key: CacheKey, image: CachedImage) {
-        if self.entries.len() >= self.capacity.get() {
-            if let Some(victim) = self.entries.keys().next().copied() {
-                self.entries.remove(&victim);
-            }
-        }
-        self.entries.insert(key, image);
+        self.entries.put(key, image);
     }
 
     pub fn clear(&mut self) {
@@ -51,6 +47,13 @@ impl RenderCache {
     }
 
     pub fn remove_document(&mut self, doc: DocumentId) {
-        self.entries.retain(|k, _| k.document != doc);
+        let keys: Vec<CacheKey> = self
+            .entries
+            .iter()
+            .filter_map(|(k, _)| if k.document == doc { Some(*k) } else { None })
+            .collect();
+        for k in keys {
+            self.entries.pop(&k);
+        }
     }
 }

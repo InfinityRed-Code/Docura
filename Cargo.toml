@@ -37,3 +37,9 @@ pdf_cache = { path = "crates/pdf_cache" }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Optimize third-party crates even in dev builds so JPEG encode / image work
+# isn't crippled by unoptimized deps. Workspace code stays at opt-level 0
+# for fast incremental builds.
+[profile.dev.package."*"]
+opt-level = 3

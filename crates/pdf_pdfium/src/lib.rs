@@ -86,8 +86,12 @@ struct DocEntry {
     doc: Option<PdfDocument<'static>>,
     bytes_raw: *mut [u8],
     page_count: u32,
-    sizes: Vec<PageSize>,
-    outline: Vec<OutlineNode>,
+    // Per-page sizes resolved lazily on first access. `None` = not yet
+    // fetched. Opening a 500-page PDF no longer blocks on N sequential
+    // page-size queries.
+    sizes: Vec<Option<PageSize>>,
+    // Outline built lazily on first request. `None` = not yet walked.
+    outline: Option<Vec<OutlineNode>>,
 }
 
 impl Drop for DocEntry {
@@ -161,6 +165,7 @@ impl PdfEngine for PdfiumEngine {
         password: Option<String>,
     ) -> CoreResult<DocumentId> {
         let pdfium = shared_pdfium()?;
+        let bytes_len = bytes.len();
         // Leak bytes so the PdfDocument can borrow them for 'static.
         let bytes_box: Box<[u8]> = bytes.into_boxed_slice();
         let bytes_raw: *mut [u8] = Box::into_raw(bytes_box);
@@ -168,6 +173,7 @@ impl PdfEngine for PdfiumEngine {
         // DocEntry is dropped.
         let bytes_static: &'static [u8] = unsafe { &*bytes_raw };
 
+        let t_load = std::time::Instant::now();
         let document = match pdfium.load_pdf_from_byte_slice(bytes_static, password.as_deref()) {
             Ok(d) => d,
             Err(e) => {
@@ -178,33 +184,25 @@ impl PdfEngine for PdfiumEngine {
                 return Err(password_error(e, password.is_some()));
             }
         };
+        let load_t = t_load.elapsed();
 
-        let pages = document.pages();
-        let page_count = pages.len() as u32;
-        let mut sizes = Vec::with_capacity(page_count as usize);
-        for i in 0..pages.len() {
-            let p = pages
-                .get(i)
-                .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
-            sizes.push(PageSize {
-                width_pt: p.width().value,
-                height_pt: p.height().value,
-            });
-        }
-        let _ = pages;
-
-        let mut outline = Vec::new();
-        for bm in document.bookmarks().iter() {
-            outline.push(collect_bookmark(&bm, &document));
-        }
+        let t_pc = std::time::Instant::now();
+        let page_count = document.pages().len() as u32;
+        tracing::info!(
+            "pdfium::open bytes={:.1}MB load={:?} page_count_enum={:?} pages={}",
+            bytes_len as f64 / 1024.0 / 1024.0,
+            load_t,
+            t_pc.elapsed(),
+            page_count
+        );
 
         let id = DocumentId::new();
         let entry = DocEntry {
             doc: Some(document),
             bytes_raw,
             page_count,
-            sizes,
-            outline,
+            sizes: vec![None; page_count as usize],
+            outline: None,
         };
         self.inner.lock().docs.insert(id, entry);
         Ok(id)
@@ -222,25 +220,43 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn page_size(&self, doc: DocumentId, page: PageIndex) -> CoreResult<PageSize> {
-        let inner = self.inner.lock();
-        let e = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
-        e.sizes
-            .get(page.0 as usize)
-            .copied()
-            .ok_or_else(|| CoreError::PageOutOfRange(page.0, e.page_count))
+        let mut inner = self.inner.lock();
+        let e = inner.docs.get_mut(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let idx = page.0 as usize;
+        if idx >= e.sizes.len() {
+            return Err(CoreError::PageOutOfRange(page.0, e.page_count));
+        }
+        if let Some(sz) = e.sizes[idx] {
+            return Ok(sz);
+        }
+        let document = e.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let p = document
+            .pages()
+            .get(page.0 as u16)
+            .map_err(|err| CoreError::Engine(format!("page: {err}")))?;
+        let sz = PageSize {
+            width_pt: p.width().value,
+            height_pt: p.height().value,
+        };
+        e.sizes[idx] = Some(sz);
+        Ok(sz)
     }
 
     fn render(&self, req: RenderRequest) -> CoreResult<RenderedPage> {
+        let t_lock = std::time::Instant::now();
         let inner = self.inner.lock();
+        let lock_t = t_lock.elapsed();
         let entry = inner
             .docs
             .get(&req.document)
             .ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let t_page = std::time::Instant::now();
         let page = document
             .pages()
             .get(req.page.0 as u16)
             .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+        let page_t = t_page.elapsed();
         let rot = match req.rotation {
             Rotation::R0 => PdfPageRenderRotation::None,
             Rotation::R90 => PdfPageRenderRotation::Degrees90,
@@ -250,12 +266,20 @@ impl PdfEngine for PdfiumEngine {
         let config = PdfRenderConfig::new()
             .scale_page_by_factor(req.zoom.0)
             .rotate(rot, true);
+        let t_render = std::time::Instant::now();
         let bitmap = page
             .render_with_config(&config)
             .map_err(|e| CoreError::Engine(format!("render: {e}")))?;
+        let render_t = t_render.elapsed();
         let width = bitmap.width() as u32;
         let height = bitmap.height() as u32;
+        let t_bytes = std::time::Instant::now();
         let rgba = bitmap.as_rgba_bytes();
+        tracing::info!(
+            "pdfium::render page={} zoom={:.2} {}x{} lock_wait={:?} page_open={:?} render={:?} rgba_copy={:?}",
+            req.page.0, req.zoom.0, width, height,
+            lock_t, page_t, render_t, t_bytes.elapsed()
+        );
         Ok(RenderedPage {
             width_px: width,
             height_px: height,
@@ -321,9 +345,18 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn outline(&self, doc: DocumentId) -> CoreResult<Vec<OutlineNode>> {
-        let inner = self.inner.lock();
-        let e = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
-        Ok(e.outline.clone())
+        let mut inner = self.inner.lock();
+        let e = inner.docs.get_mut(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        if let Some(ref out) = e.outline {
+            return Ok(out.clone());
+        }
+        let document = e.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let mut out = Vec::new();
+        for bm in document.bookmarks().iter() {
+            out.push(collect_bookmark(&bm, document));
+        }
+        e.outline = Some(out.clone());
+        Ok(out)
     }
 
     fn list_attachments(&self, doc: DocumentId) -> CoreResult<Vec<AttachmentInfo>> {

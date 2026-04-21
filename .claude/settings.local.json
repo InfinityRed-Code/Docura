@@ -43,7 +43,16 @@
       "Bash(git -C C:/Users/localadmin/Documents/Repos/rustpdf status --short)",
       "Bash(git -C C:/Users/localadmin/Documents/Repos/rustpdf log --oneline -5)",
       "Bash(cargo tauri *)",
-      "Bash(cargo clippy *)"
+      "Bash(cargo clippy *)",
+      "Bash(git *)",
+      "Bash(pnpm --dir apps/desktop-tauri/ui exec tauri dev)",
+      "Bash(../ui/node_modules/.bin/tauri dev *)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(nasm -v)",
+      "Bash(lsof -ti:1420)",
+      "Bash(xargs -r kill -9)",
+      "Bash(pnpm --dir ../ui tauri dev)",
+      "Bash(../ui/node_modules/.bin/tauri.CMD dev *)"
     ]
   }
 }
