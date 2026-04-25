@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
@@ -106,6 +107,7 @@ app.innerHTML = `
       <button data-ribbon="both" id="saveAsBtn" title="Save As (Ctrl+Shift+S)">💾 Save As</button>
       <button data-ribbon="reader" id="printBtn" title="Print (Ctrl+P)">🖨</button>
       <button data-ribbon="reader" id="propsBtn" title="Document properties">ⓘ</button>
+      <button data-ribbon="both" id="settingsBtn" title="Settings">⚙</button>
       <span data-ribbon="edit" class="sep"></span>
       <span data-ribbon="edit" class="ribbonLabel">Mode:</span>
       <div data-ribbon="edit" class="modeGroup" role="radiogroup">
@@ -192,6 +194,41 @@ app.innerHTML = `
       </div>
       <div id="propsInfo" class="propsPanel"></div>
       <div id="propsPerms" class="propsPanel hidden"></div>
+    </div>
+  </div>
+  <div id="settingsOverlay" class="propsOverlay hidden">
+    <div class="propsModal">
+      <div class="propsHeader"><strong>Settings</strong><button id="settingsClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">PDF/A export</h3>
+        <div id="gsStatus" style="font-size:0.85rem;color:#bbb;">Checking Ghostscript…</div>
+        <div id="gsInstall" class="hidden" style="font-size:0.85rem;">
+          Not found. Install from
+          <a id="gsLink" href="https://ghostscript.com/releases/gsdnld.html" style="color:#4a8cff;">ghostscript.com</a>.
+        </div>
+        <label>Default PDF/A level
+          <select id="pdfaLevel">
+            <option value="1b">PDF/A-1b (ISO 19005-1)</option>
+            <option value="2b" selected>PDF/A-2b (ISO 19005-2)</option>
+            <option value="3b">PDF/A-3b (ISO 19005-3)</option>
+            <option value="4">PDF/A-4 (ISO 19005-4)</option>
+          </select>
+        </label>
+        <div class="wmActions"><button id="pdfaSaveBtn">Save current PDF as PDF/A…</button><button id="gsRecheckBtn">Re-check Ghostscript</button></div>
+      </div>
+      <div class="propsPanel wmPanel">
+        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">Virtual printer (Print to PDF)</h3>
+        <div id="vpStatus" style="font-size:0.85rem;color:#bbb;">Checking virtual printer…</div>
+        <div id="vpPathRow" class="hidden" style="font-size:0.8rem;color:#999;"></div>
+        <div id="vpOutRow" style="font-size:0.8rem;color:#999;"></div>
+        <div id="vpWarn" class="hidden" style="font-size:0.8rem;color:#d98a8a;">Ghostscript is required to convert print jobs.</div>
+        <div class="wmActions">
+          <button id="vpInstallBtn">Install printer</button>
+          <button id="vpUninstallBtn">Uninstall printer</button>
+          <button id="vpOpenFolderBtn">Open output folder</button>
+        </div>
+        <div style="font-size:0.75rem;color:#888;">Printing from any app to <strong>rustpdf</strong> saves a PDF to the output folder. Needs admin once to install.</div>
+      </div>
     </div>
   </div>
   <div id="wmOverlay" class="propsOverlay hidden">
@@ -2511,6 +2548,185 @@ thumbsPanel.addEventListener("click", (e) => {
 
 
 document.getElementById("printBtn")!.addEventListener("click", triggerPrint);
+
+// Settings panel
+type GhostscriptInfo = { available: boolean; path: string | null; version: string | null };
+const settingsOverlay = document.getElementById("settingsOverlay") as HTMLDivElement;
+const gsStatusEl = document.getElementById("gsStatus") as HTMLDivElement;
+const gsInstallEl = document.getElementById("gsInstall") as HTMLDivElement;
+const pdfaLevelEl = document.getElementById("pdfaLevel") as HTMLSelectElement;
+let gsInfo: GhostscriptInfo = { available: false, path: null, version: null };
+
+try {
+  const saved = localStorage.getItem("pdfaLevel");
+  if (saved && ["1b", "2b", "3b", "4"].includes(saved)) pdfaLevelEl.value = saved;
+} catch {}
+pdfaLevelEl.addEventListener("change", () => {
+  try { localStorage.setItem("pdfaLevel", pdfaLevelEl.value); } catch {}
+});
+
+async function refreshGhostscript() {
+  gsStatusEl.textContent = "Checking Ghostscript…";
+  gsInstallEl.classList.add("hidden");
+  try {
+    gsInfo = await invoke<GhostscriptInfo>("check_ghostscript");
+    if (gsInfo.available) {
+      gsStatusEl.textContent = `Ghostscript ${gsInfo.version ?? ""} — ${gsInfo.path ?? ""}`;
+      gsStatusEl.style.color = "#8fcf8f";
+    } else {
+      gsStatusEl.textContent = "Ghostscript not detected.";
+      gsStatusEl.style.color = "#d98a8a";
+      gsInstallEl.classList.remove("hidden");
+    }
+  } catch (e) {
+    gsStatusEl.textContent = `Detection error: ${e}`;
+    gsStatusEl.style.color = "#d98a8a";
+  }
+}
+void refreshGhostscript();
+
+document.getElementById("settingsBtn")!.addEventListener("click", () => {
+  settingsOverlay.classList.remove("hidden");
+  void refreshGhostscript();
+  void refreshVirtualPrinter();
+});
+document.getElementById("settingsClose")!.addEventListener("click", () => settingsOverlay.classList.add("hidden"));
+settingsOverlay.addEventListener("click", (e) => {
+  if (e.target === settingsOverlay) settingsOverlay.classList.add("hidden");
+});
+document.getElementById("gsRecheckBtn")!.addEventListener("click", () => void refreshGhostscript());
+document.getElementById("gsLink")!.addEventListener("click", (e) => {
+  e.preventDefault();
+  void invoke("open_external", { url: "https://ghostscript.com/releases/gsdnld.html" });
+});
+document.getElementById("pdfaSaveBtn")!.addEventListener("click", () => void runSaveAsPdfa());
+
+async function runSaveAsPdfa() {
+  if (!currentDoc) { setStatus("Open a PDF first"); return; }
+  if (!gsInfo.available) {
+    setStatus("Ghostscript required — install it first");
+    return;
+  }
+  const level = pdfaLevelEl.value;
+  const base = currentDocPath
+    ? currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
+    : "document";
+  const dest = await save({
+    defaultPath: `${base}_pdfa-${level}.pdf`,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+    title: `Save as PDF/A-${level}`,
+  });
+  if (!dest || typeof dest !== "string") return;
+  settingsOverlay.classList.add("hidden");
+  setStatus(`Converting to PDF/A-${level}…`);
+  try {
+    const label = await invoke<string>("save_as_pdfa", {
+      document: currentDoc,
+      args: { path: dest, level },
+    });
+    setStatus(`Saved as ${label}`);
+  } catch (e) {
+    setStatus(`PDF/A export error: ${e}`);
+  }
+}
+
+// Virtual printer (Print-to-PDF)
+type VirtualPrinterInfo = {
+  installed: boolean;
+  printer_name: string;
+  port_path: string;
+  output_dir: string;
+  ghostscript_available: boolean;
+  ghostscript_version: string | null;
+  supported: boolean;
+};
+const vpStatusEl = document.getElementById("vpStatus") as HTMLDivElement;
+const vpPathRowEl = document.getElementById("vpPathRow") as HTMLDivElement;
+const vpOutRowEl = document.getElementById("vpOutRow") as HTMLDivElement;
+const vpWarnEl = document.getElementById("vpWarn") as HTMLDivElement;
+const vpInstallBtn = document.getElementById("vpInstallBtn") as HTMLButtonElement;
+const vpUninstallBtn = document.getElementById("vpUninstallBtn") as HTMLButtonElement;
+const vpOpenFolderBtn = document.getElementById("vpOpenFolderBtn") as HTMLButtonElement;
+
+async function refreshVirtualPrinter() {
+  vpStatusEl.textContent = "Checking virtual printer…";
+  vpStatusEl.style.color = "#bbb";
+  vpPathRowEl.classList.add("hidden");
+  vpWarnEl.classList.add("hidden");
+  try {
+    const info = await invoke<VirtualPrinterInfo>("virtual_printer_status");
+    if (!info.supported) {
+      vpStatusEl.textContent = "Virtual printer is only available on Windows.";
+      vpStatusEl.style.color = "#d98a8a";
+      vpInstallBtn.disabled = true;
+      vpUninstallBtn.disabled = true;
+      return;
+    }
+    if (info.installed) {
+      vpStatusEl.textContent = `Installed as "${info.printer_name}".`;
+      vpStatusEl.style.color = "#8fcf8f";
+      vpInstallBtn.disabled = true;
+      vpUninstallBtn.disabled = false;
+    } else {
+      vpStatusEl.textContent = "Not installed.";
+      vpStatusEl.style.color = "#d98a8a";
+      vpInstallBtn.disabled = false;
+      vpUninstallBtn.disabled = true;
+    }
+    vpPathRowEl.textContent = `Port file: ${info.port_path}`;
+    vpPathRowEl.classList.remove("hidden");
+    vpOutRowEl.textContent = `Output folder: ${info.output_dir}`;
+    if (!info.ghostscript_available) {
+      vpWarnEl.classList.remove("hidden");
+    }
+  } catch (e) {
+    vpStatusEl.textContent = `Detection error: ${e}`;
+    vpStatusEl.style.color = "#d98a8a";
+  }
+}
+
+vpInstallBtn.addEventListener("click", async () => {
+  vpInstallBtn.disabled = true;
+  setStatus("Installing virtual printer (admin prompt will appear)…");
+  try {
+    await invoke("install_virtual_printer");
+    setStatus("Virtual printer installed");
+  } catch (e) {
+    setStatus(`Install failed: ${e}`);
+  }
+  await refreshVirtualPrinter();
+});
+
+vpUninstallBtn.addEventListener("click", async () => {
+  vpUninstallBtn.disabled = true;
+  setStatus("Removing virtual printer (admin prompt will appear)…");
+  try {
+    await invoke("uninstall_virtual_printer");
+    setStatus("Virtual printer removed");
+  } catch (e) {
+    setStatus(`Uninstall failed: ${e}`);
+  }
+  await refreshVirtualPrinter();
+});
+
+vpOpenFolderBtn.addEventListener("click", async () => {
+  try {
+    await invoke("open_print_output_folder");
+  } catch (e) {
+    setStatus(`Open folder failed: ${e}`);
+  }
+});
+
+// Auto-open newly printed PDFs
+void listen<{ path: string }>("print-job-ready", async (ev) => {
+  const path = ev.payload.path;
+  setStatus(`Print job ready — opening ${path}`);
+  await openByPath(path);
+});
+void listen<{ message: string }>("print-job-failed", (ev) => {
+  setStatus(`Print job failed: ${ev.payload.message}`);
+});
+
 document.getElementById("propsBtn")!.addEventListener("click", openProperties);
 document.getElementById("propsClose")!.addEventListener("click", closeProperties);
 propsOverlay.addEventListener("click", (e) => {

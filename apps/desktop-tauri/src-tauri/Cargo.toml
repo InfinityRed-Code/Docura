@@ -36,3 +36,5 @@ pdf_types = { workspace = true }
 mozjpeg = "0.10"
 base64 = "0.22"
 parking_lot = "0.12"
+notify = "6"
+dirs = "5"

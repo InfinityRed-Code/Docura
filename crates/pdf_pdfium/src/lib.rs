@@ -63,6 +63,8 @@ fn bind_to_bundled() -> CoreResult<Box<dyn PdfiumLibraryBindings>> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.insert(0, exe_dir.to_path_buf());
+            candidates.push(exe_dir.join("resources"));
+            candidates.push(exe_dir.join("resources/vendor/pdfium"));
             candidates.push(exe_dir.join("../../../vendor/pdfium"));
             candidates.push(exe_dir.join("../../../../vendor/pdfium"));
         }

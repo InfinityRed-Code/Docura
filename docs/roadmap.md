@@ -47,7 +47,7 @@ Nutzererwartung an einen ernsthaften Reader.
 
 ---
 
-## Meilenstein v0.3 — "Organisation" *(aktuelles Ziel)*
+## Meilenstein v0.3 — "Organisation" ✅
 
 Seiten manipulieren — klassischer PDF24-Einstieg.
 
@@ -66,7 +66,24 @@ Seiten manipulieren — klassischer PDF24-Einstieg.
 
 ---
 
-## Meilenstein v0.4 — "Annotation"
+## Meilenstein v0.4 — "Export & Virtueller Drucker" ✅
+
+Archivierung (PDF/A) und systemweiter Print-to-PDF — das PDF24/Adobe-Kernstück für Workflows.
+
+- [x] Ghostscript-Erkennung (Registry + Path-Suche) + Download-Prompt [S][U]
+- [x] Speichern als PDF/A-1b/2b/3b/4 via Ghostscript `pdfwrite` [X: Ghostscript]
+- [x] Einstellungen-Modal (Zahnrad in der Ribbon) [U]
+- [x] Windows virtueller Drucker "rustpdf" (Microsoft PS Class Driver + lokaler Dateiport) [S]
+- [x] Auto-Registrierung des PS Class Drivers aus DriverStore (pnputil Fallback) [S]
+- [x] Spool-Watcher (notify-crate) mit Stabilitäts-Check → PS→PDF-Konvertierung via Ghostscript [C][S][X: notify]
+- [x] Automatisches Öffnen der gedruckten PDF in rustpdf (Tauri-Event) [U]
+- [x] NSIS-Installer mit Ghostscript-Hinweis und optionalem Druckertreiber-Setup [S]
+- [x] `pdfium.dll` als Bundle-Resource (Offline-Install) [S]
+- [x] ACL-Einrichtung auf `%ProgramData%\rustpdf\spool` (SYSTEM Full + Authenticated Users Modify) [S]
+
+---
+
+## Meilenstein v0.5 — "Annotation" *(aktuelles Ziel)*
 
 Herzstück der Reviewer-Workflows.
 
@@ -83,7 +100,7 @@ Herzstück der Reviewer-Workflows.
 
 ---
 
-## Meilenstein v0.5 — "Formulare ausfüllen"
+## Meilenstein v0.6 — "Formulare ausfüllen"
 
 Abdeckung aller AcroForm-basierten Behörden-/Unternehmensformulare.
 
@@ -97,7 +114,7 @@ Abdeckung aller AcroForm-basierten Behörden-/Unternehmensformulare.
 
 ---
 
-## Meilenstein v0.6 — "Fill & Sign"
+## Meilenstein v0.7 — "Fill & Sign"
 
 Unterschreiben — Adobe-Kernfeature.
 
@@ -112,7 +129,7 @@ Unterschreiben — Adobe-Kernfeature.
 
 ---
 
-## Meilenstein v0.7 — "Sicherheit & Redaktion"
+## Meilenstein v0.8 — "Sicherheit & Redaktion"
 
 Anforderung aus Legal/Compliance. Foxit/Adobe-Parität.
 
@@ -126,7 +143,7 @@ Anforderung aus Legal/Compliance. Foxit/Adobe-Parität.
 
 ---
 
-## Meilenstein v0.8 — "Export & Konvertierung"
+## Meilenstein v0.9 — "Export & Konvertierung"
 
 Ohne Konvertierung kein PDF24-Ersatz.
 
@@ -137,12 +154,11 @@ Ohne Konvertierung kein PDF24-Ersatz.
 - [ ] PDF → Excel (.xlsx) — Tabellen-Heuristik [X: rust_xlsxwriter + table-detection]
 - [ ] PDF → PowerPoint — optional, niedrige Prio
 - [ ] Bilder → PDF (Multi-Page aus PNG/JPG) [X: lopdf + image]
-- [ ] Office-Dateien → PDF (via System-Drucker-API oder LibreOffice-Headless) [S]
-- [ ] Druck als PDF-Drucker (Windows virtueller Drucker) [X: Windows-Crates]
+- [ ] Office-Dateien → PDF (über System-Drucker-API oder LibreOffice-Headless) [S]
 
 ---
 
-## Meilenstein v0.9 — "OCR & Scans"
+## Meilenstein v1.0 — "OCR & Scans"
 
 Gescannte Dokumente. Ohne OCR bleibt die App für ca. 20 % der echten PDFs blind.
 
@@ -155,7 +171,7 @@ Gescannte Dokumente. Ohne OCR bleibt die App für ca. 20 % der echten PDFs blind
 
 ---
 
-## Meilenstein v1.0 — "Performance & Polish"
+## Meilenstein v1.1 — "Performance & Polish"
 
 Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 
@@ -170,11 +186,12 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 - [ ] Crash-Reporting opt-in (Sentry oder eigenes) [X]
 - [ ] Lokalisierung: de / en mindestens [U]
 - [ ] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U]
-- [ ] Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
+- [ ] Erweitertes Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
+- [ ] Tray-App / Autostart für Hintergrund-Spool-Watcher (Print-to-PDF ohne geöffnete Haupt-App)
 
 ---
 
-## v1.1+ — Nischen & Pro-Features
+## v1.2+ — Nischen & Pro-Features
 
 Reihenfolge nach Nutzerbedarf sortieren, nicht streng umsetzen.
 
@@ -191,7 +208,7 @@ Reihenfolge nach Nutzerbedarf sortieren, nicht streng umsetzen.
 - [ ] Optional Content Groups (Layer ein/aus) [E][U]
 - [ ] JavaScript-Actions in Formularen sicher ausführen [X: sandboxed JS]
 - [ ] 3D-Annotationen (U3D/PRC) — nur Anzeige [X: optional]
-- [ ] PDF/A-Konvertierung + Validierung [X: veraPDF-CLI Bindung]
+- [ ] PDF/A-Validierung (veraPDF-CLI Bindung) [X]
 - [ ] PDF/X für Print-Workflows
 - [ ] Linearisierung (Fast Web View) beim Speichern [X: lopdf/qpdf-Bindung]
 - [ ] Bates-Nummerierung (Legal) [X: lopdf]
@@ -218,6 +235,7 @@ Wenn v0.3 erreicht ist, Linux als zweites Ziel:
 - [ ] Dateidialoge/Opener auf XDG-Portal prüfen (Tauri-Plugin macht das automatisch)
 - [ ] AppImage + .deb Packaging
 - [ ] Signatur-Backend: Windows-Cert-Store → unter Linux auf PKCS#11 / Datei-Zertifikat umschalten (Trait `CertStore` in `pdf_services` erweitern)
+- [ ] Virtueller Drucker: CUPS-Backend statt Windows Print Spooler (v0.4 Äquivalent)
 
 ---
 
@@ -244,5 +262,6 @@ Bevor v0.3+ anfängt, lohnt sich ein Proof-of-Concept:
 | Digitale Signatur | `ring` + `pkcs7` vs. `openssl` vs. Windows CNG | Windows CNG für nativen Cert-Store, `pkcs7`-Crate für CMS-Encoding |
 | OCR-Laufzeit | Tesseract nativ vs. WASM-Port | Nativ via `leptess`, System-Tesseract optional bundeln |
 | JS-Engine für Formularskripte | `boa` (pure Rust) vs. `quickjs` vs. `v8` | `boa` — klein, sicher, reicht für AcroForm-Formeln |
-| Installer | WiX MSI vs. NSIS vs. MSIX | MSI via Tauri-Bundler + WiX — Enterprise-freundlich |
+| Installer | WiX MSI vs. NSIS vs. MSIX | NSIS für v0.4 (schneller, flexible Hooks für Druckertreiber-Setup); MSI via WiX später für Enterprise |
 | Rendering-Fallback | PDFium only vs. zusätzlich `mupdf` | PDFium bleibt primär; mupdf nur wenn Lizenz erlaubt und Features fehlen |
+| Print-to-PDF Backend | Eigener v4-Treiber vs. PS Class Driver + GS vs. XPS + GXPS | PS Class Driver + Ghostscript `pdfwrite` — keine Treiber-Signatur nötig, GS ohnehin für PDF/A |

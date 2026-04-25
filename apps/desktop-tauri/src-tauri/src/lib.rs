@@ -7,6 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use parking_lot::Mutex;
+
+mod vprinter;
+
 use pdf_cache::{CacheKey, CachedImage, RenderCache};
 use pdf_core::{CoreError, PdfEngine, RenderRequest};
 use pdf_pdfium::PdfiumEngine;
@@ -965,6 +968,156 @@ async fn add_image_watermark(
 }
 
 #[derive(Serialize)]
+struct GhostscriptInfo {
+    available: bool,
+    path: Option<String>,
+    version: Option<String>,
+}
+
+fn ghostscript_candidates() -> Vec<std::path::PathBuf> {
+    let mut v: Vec<PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("GHOSTSCRIPT") {
+        v.push(PathBuf::from(p));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        v.push(PathBuf::from("gswin64c.exe"));
+        v.push(PathBuf::from("gswin32c.exe"));
+        v.push(PathBuf::from("gswin64c"));
+        for base in [r"C:\Program Files\gs", r"C:\Program Files (x86)\gs"] {
+            if let Ok(dir) = std::fs::read_dir(base) {
+                for entry in dir.flatten() {
+                    let p = entry.path().join("bin");
+                    let exe64 = p.join("gswin64c.exe");
+                    if exe64.exists() { v.push(exe64); }
+                    let exe32 = p.join("gswin32c.exe");
+                    if exe32.exists() { v.push(exe32); }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        v.push(PathBuf::from("gs"));
+    }
+    v
+}
+
+fn probe_ghostscript(path: &Path) -> Option<(String, String)> {
+    use std::process::Command;
+    let out = Command::new(path).arg("--version").output().ok()?;
+    if !out.status.success() { return None; }
+    let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if ver.is_empty() { return None; }
+    Some((path.to_string_lossy().to_string(), ver))
+}
+
+pub(crate) fn find_ghostscript() -> Option<String> {
+    for c in ghostscript_candidates() {
+        if let Some((p, _)) = probe_ghostscript(&c) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+pub(crate) fn probe_ghostscript_version(path: &Path) -> Option<String> {
+    probe_ghostscript(path).map(|(_, v)| v)
+}
+
+#[tauri::command]
+async fn check_ghostscript() -> GhostscriptInfo {
+    tokio::task::spawn_blocking(|| {
+        for c in ghostscript_candidates() {
+            if let Some((p, v)) = probe_ghostscript(&c) {
+                return GhostscriptInfo { available: true, path: Some(p), version: Some(v) };
+            }
+        }
+        GhostscriptInfo { available: false, path: None, version: None }
+    })
+    .await
+    .unwrap_or(GhostscriptInfo { available: false, path: None, version: None })
+}
+
+#[derive(Deserialize)]
+struct PdfaArgs {
+    path: String,
+    level: String, // "1b" | "2b" | "3b" | "4"
+}
+
+fn pdfa_flags(level: &str) -> Result<(&'static str, &'static str), String> {
+    // (PDFA value, compat label)
+    match level {
+        "1b" | "1B" | "1" => Ok(("1", "PDF/A-1b")),
+        "2b" | "2B" | "2" => Ok(("2", "PDF/A-2b")),
+        "3b" | "3B" | "3" => Ok(("3", "PDF/A-3b")),
+        "4"              => Ok(("4", "PDF/A-4")),
+        other => Err(format!("unsupported PDF/A level: {other}")),
+    }
+}
+
+#[tauri::command]
+async fn save_as_pdfa(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: PdfaArgs,
+) -> Result<String, String> {
+    let (pdfa_val, compat_label) = pdfa_flags(&args.level)?;
+    let info = check_ghostscript().await;
+    let gs_path = info.path.ok_or_else(|| {
+        "Ghostscript not found. Install it from https://ghostscript.com/releases/gsdnld.html".to_string()
+    })?;
+
+    let engine = state.engine.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        engine.document_bytes(document).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let out_path = args.path.clone();
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        use std::io::Write;
+        let t = std::time::Instant::now();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let src = std::env::temp_dir().join(format!("rustpdf-gs-src-{ts}.pdf"));
+        {
+            let mut f = std::fs::File::create(&src)
+                .map_err(|e| format!("temp create {}: {e}", src.display()))?;
+            f.write_all(&bytes).map_err(|e| format!("temp write: {e}"))?;
+        }
+
+        let mut cmd = std::process::Command::new(&gs_path);
+        cmd.args([
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-sDEVICE=pdfwrite",
+        ]);
+        cmd.arg(format!("-dPDFA={pdfa_val}"));
+        cmd.arg("-dPDFACompatibilityPolicy=1");
+        cmd.arg("-sColorConversionStrategy=RGB");
+        cmd.arg("-sProcessColorModel=DeviceRGB");
+        cmd.arg(format!("-sOutputFile={out_path}"));
+        cmd.arg(&src);
+
+        let output = cmd.output().map_err(|e| format!("gs spawn: {e}"))?;
+        let _ = std::fs::remove_file(&src);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("gs failed: {}", stderr.trim()));
+        }
+        tracing::info!("save_as_pdfa level={compat_label} in {:?}", t.elapsed());
+        Ok(compat_label.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
 struct UndoStatus {
     undo: usize,
     redo: usize,
@@ -1294,6 +1447,7 @@ pub fn run() {
                 .map(|d| d.join("settings.json"));
             let state: tauri::State<'_, AppState> = app.state();
             *state.settings_path.lock() = settings_path;
+            vprinter::start_spool_watcher(app.handle().clone());
             Ok(())
         })
         .manage(AppState {
@@ -1329,6 +1483,12 @@ pub fn run() {
             add_watermark,
             add_header_footer,
             add_image_watermark,
+            check_ghostscript,
+            save_as_pdfa,
+            vprinter::virtual_printer_status,
+            vprinter::install_virtual_printer,
+            vprinter::uninstall_virtual_printer,
+            vprinter::open_print_output_folder,
             undo_doc,
             redo_doc,
             undo_status,
