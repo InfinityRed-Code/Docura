@@ -11,8 +11,13 @@ use std::io::Cursor;
 
 use lopdf::Document;
 
+mod annotations;
 mod overlay;
 
+pub use annotations::{
+    FreeTextAnnotation, InkAnnotation, LineEnding, MarkupAnnotation, MarkupKind,
+    ShapeAnnotation, ShapeKind, StampAnnotation,
+};
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
 pub type MutateResult<T> = Result<T, MutateError>;
@@ -371,6 +376,92 @@ impl MutableDoc {
         let t = std::time::Instant::now();
         overlay::add_header_footer(&mut self.inner, opts)?;
         tracing::info!("pdf_mutate::add_header_footer in {:?}", t.elapsed());
+        Ok(())
+    }
+
+    /// Add a text-markup annotation (highlight / underline / strikeout) to a
+    /// single 0-indexed page. Rects are in our top-origin RectPt convention.
+    pub fn add_markup_annotation(
+        &mut self,
+        page_index: u32,
+        annot: &MarkupAnnotation,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        annotations::add_markup_annotation(&mut self.inner, page_index, annot)?;
+        tracing::info!(
+            "pdf_mutate::add_markup_annotation kind={:?} rects={} page={} in {:?}",
+            annot.kind,
+            annot.rects.len(),
+            page_index,
+            t.elapsed()
+        );
+        Ok(())
+    }
+
+    /// Add a shape annotation (rectangle / circle / line / arrow) to a single
+    /// 0-indexed page. Geometry is in our top-origin RectPt convention.
+    pub fn add_shape_annotation(
+        &mut self,
+        page_index: u32,
+        annot: &ShapeAnnotation,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        annotations::add_shape_annotation(&mut self.inner, page_index, annot)?;
+        tracing::info!(
+            "pdf_mutate::add_shape_annotation kind={:?} page={} in {:?}",
+            annot.kind,
+            page_index,
+            t.elapsed()
+        );
+        Ok(())
+    }
+
+    /// Add a /FreeText annotation (free-floating text on a page).
+    pub fn add_freetext_annotation(
+        &mut self,
+        page_index: u32,
+        annot: &FreeTextAnnotation,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        annotations::add_freetext_annotation(&mut self.inner, page_index, annot)?;
+        tracing::info!(
+            "pdf_mutate::add_freetext_annotation page={} in {:?}",
+            page_index,
+            t.elapsed()
+        );
+        Ok(())
+    }
+
+    /// Add an /Ink annotation (free-hand strokes).
+    pub fn add_ink_annotation(
+        &mut self,
+        page_index: u32,
+        annot: &InkAnnotation,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        annotations::add_ink_annotation(&mut self.inner, page_index, annot)?;
+        tracing::info!(
+            "pdf_mutate::add_ink_annotation strokes={} page={} in {:?}",
+            annot.strokes.len(),
+            page_index,
+            t.elapsed()
+        );
+        Ok(())
+    }
+
+    /// Add a /Stamp annotation built from an image.
+    pub fn add_stamp_annotation(
+        &mut self,
+        page_index: u32,
+        annot: &StampAnnotation,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        annotations::add_stamp_annotation(&mut self.inner, page_index, annot)?;
+        tracing::info!(
+            "pdf_mutate::add_stamp_annotation page={} in {:?}",
+            page_index,
+            t.elapsed()
+        );
         Ok(())
     }
 

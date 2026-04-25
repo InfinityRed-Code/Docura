@@ -15,7 +15,7 @@ use pdf_core::{CoreError, PdfEngine, RenderRequest};
 use pdf_pdfium::PdfiumEngine;
 use pdf_types::{
     AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode, PageIndex, PageLink,
-    PageSize, RecentFile, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
+    PageSize, RecentFile, RectPt, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -967,6 +967,336 @@ async fn add_image_watermark(
     snapshot_doc(state, document).await
 }
 
+#[derive(Deserialize)]
+struct AnnotationArgs {
+    page: u32,
+    rects: Vec<RectPt>,
+    /// `"highlight"` | `"underline"` | `"strikeout"`. Default highlight.
+    #[serde(default = "default_markup_kind")]
+    kind: String,
+    /// RGB 0..1; default yellow.
+    #[serde(default = "default_markup_color")]
+    color: [f32; 3],
+    #[serde(default = "default_markup_opacity")]
+    opacity: f32,
+    #[serde(default)]
+    contents: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+}
+fn default_markup_kind() -> String { "highlight".into() }
+fn default_markup_color() -> [f32; 3] { [1.0, 0.95, 0.0] }
+fn default_markup_opacity() -> f32 { 0.4 }
+
+fn parse_markup_kind(s: &str) -> pdf_mutate::MarkupKind {
+    match s.to_ascii_lowercase().as_str() {
+        "underline" => pdf_mutate::MarkupKind::Underline,
+        "strikeout" | "strike" | "strikethrough" => pdf_mutate::MarkupKind::StrikeOut,
+        _ => pdf_mutate::MarkupKind::Highlight,
+    }
+}
+
+#[tauri::command]
+async fn add_annotation(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: AnnotationArgs,
+) -> Result<DocSnapshot, String> {
+    if args.rects.is_empty() {
+        return Err("add_annotation: no rects".into());
+    }
+    let engine = state.engine.clone();
+    let kind = parse_markup_kind(&args.kind);
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let annot = pdf_mutate::MarkupAnnotation {
+            kind,
+            rects: args.rects,
+            color: args.color,
+            opacity: args.opacity,
+            contents: args.contents,
+            author: args.author,
+        };
+        mdoc.add_markup_annotation(args.page, &annot)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_annotation page={} kind={:?}: {:?}", args.page, kind, t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct ShapeArgs {
+    page: u32,
+    /// `"rect"` | `"circle"` | `"line"` | `"arrow"`.
+    kind: String,
+    /// (x0, y0, x1, y1) in PDF points, top-origin.
+    rect: RectPt,
+    /// RGB stroke color 0..1.
+    #[serde(default = "default_shape_stroke")]
+    stroke: [f32; 3],
+    /// Optional fill color (rect/circle only).
+    #[serde(default)]
+    fill: Option<[f32; 3]>,
+    #[serde(default = "default_shape_border_width")]
+    border_width: f32,
+    #[serde(default = "default_shape_opacity")]
+    opacity: f32,
+    #[serde(default)]
+    contents: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+}
+fn default_shape_stroke() -> [f32; 3] { [0.85, 0.1, 0.1] }
+fn default_shape_border_width() -> f32 { 1.5 }
+fn default_shape_opacity() -> f32 { 1.0 }
+
+#[tauri::command]
+async fn add_shape(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: ShapeArgs,
+) -> Result<DocSnapshot, String> {
+    let kind = match args.kind.to_ascii_lowercase().as_str() {
+        "rect" | "rectangle" | "square" => pdf_mutate::ShapeKind::Square,
+        "circle" | "ellipse" | "oval" => pdf_mutate::ShapeKind::Circle,
+        "line" => pdf_mutate::ShapeKind::Line {
+            arrow_start: pdf_mutate::LineEnding::None,
+            arrow_end: pdf_mutate::LineEnding::None,
+        },
+        "arrow" => pdf_mutate::ShapeKind::Line {
+            arrow_start: pdf_mutate::LineEnding::None,
+            arrow_end: pdf_mutate::LineEnding::OpenArrow,
+        },
+        other => return Err(format!("unknown shape kind: {other}")),
+    };
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let annot = pdf_mutate::ShapeAnnotation {
+            kind,
+            rect: args.rect,
+            stroke_color: args.stroke,
+            fill_color: args.fill,
+            border_width: args.border_width,
+            opacity: args.opacity,
+            contents: args.contents,
+            author: args.author,
+        };
+        mdoc.add_shape_annotation(args.page, &annot)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_shape page={} kind={:?}: {:?}", args.page, kind, t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct FreeTextArgs {
+    page: u32,
+    rect: RectPt,
+    text: String,
+    #[serde(default = "default_freetext_color")]
+    color: [f32; 3],
+    #[serde(default = "default_freetext_size")]
+    font_size: f32,
+    #[serde(default = "default_shape_opacity")]
+    opacity: f32,
+    #[serde(default)]
+    author: Option<String>,
+}
+fn default_freetext_color() -> [f32; 3] { [0.0, 0.0, 0.0] }
+fn default_freetext_size() -> f32 { 14.0 }
+
+#[tauri::command]
+async fn add_freetext(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: FreeTextArgs,
+) -> Result<DocSnapshot, String> {
+    if args.text.trim().is_empty() {
+        return Err("freetext: empty text".into());
+    }
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let annot = pdf_mutate::FreeTextAnnotation {
+            rect: args.rect,
+            text: args.text,
+            color: args.color,
+            font_size: args.font_size,
+            opacity: args.opacity,
+            author: args.author,
+        };
+        mdoc.add_freetext_annotation(args.page, &annot)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_freetext page={}: {:?}", args.page, t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct InkArgs {
+    page: u32,
+    /// Each stroke is a flat list of x,y pairs in PDF points (top-origin).
+    strokes: Vec<Vec<f32>>,
+    #[serde(default = "default_ink_color")]
+    color: [f32; 3],
+    #[serde(default = "default_ink_width")]
+    width: f32,
+    #[serde(default = "default_shape_opacity")]
+    opacity: f32,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    contents: Option<String>,
+}
+fn default_ink_color() -> [f32; 3] { [0.95, 0.1, 0.1] }
+fn default_ink_width() -> f32 { 1.6 }
+
+#[tauri::command]
+async fn add_ink(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: InkArgs,
+) -> Result<DocSnapshot, String> {
+    let strokes: Vec<Vec<(f32, f32)>> = args
+        .strokes
+        .into_iter()
+        .map(|flat| {
+            let mut s: Vec<(f32, f32)> = Vec::with_capacity(flat.len() / 2);
+            for chunk in flat.chunks(2) {
+                if chunk.len() == 2 {
+                    s.push((chunk[0], chunk[1]));
+                }
+            }
+            s
+        })
+        .filter(|s| s.len() >= 2)
+        .collect();
+    if strokes.is_empty() {
+        return Err("ink: no usable strokes".into());
+    }
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let annot = pdf_mutate::InkAnnotation {
+            strokes,
+            color: args.color,
+            width: args.width,
+            opacity: args.opacity,
+            contents: args.contents,
+            author: args.author,
+        };
+        mdoc.add_ink_annotation(args.page, &annot)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_ink page={}: {:?}", args.page, t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct StampArgs {
+    page: u32,
+    rect: RectPt,
+    image_path: String,
+    #[serde(default = "default_shape_opacity")]
+    opacity: f32,
+    #[serde(default)]
+    contents: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+}
+
+#[tauri::command]
+async fn add_stamp(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: StampArgs,
+) -> Result<DocSnapshot, String> {
+    let img_bytes = tokio::fs::read(&args.image_path)
+        .await
+        .map_err(|e| format!("read {}: {e}", args.image_path))?;
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let annot = pdf_mutate::StampAnnotation {
+            rect: args.rect,
+            image: img_bytes,
+            opacity: args.opacity,
+            contents: args.contents,
+            author: args.author,
+        };
+        mdoc.add_stamp_annotation(args.page, &annot)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_stamp page={}: {:?}", args.page, t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
 #[derive(Serialize)]
 struct GhostscriptInfo {
     available: bool,
@@ -1483,6 +1813,11 @@ pub fn run() {
             add_watermark,
             add_header_footer,
             add_image_watermark,
+            add_annotation,
+            add_shape,
+            add_freetext,
+            add_ink,
+            add_stamp,
             check_ghostscript,
             save_as_pdfa,
             vprinter::virtual_printer_status,

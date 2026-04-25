@@ -108,37 +108,78 @@ app.innerHTML = `
       <button data-ribbon="reader" id="printBtn" title="Print (Ctrl+P)">🖨</button>
       <button data-ribbon="reader" id="propsBtn" title="Document properties">ⓘ</button>
       <button data-ribbon="both" id="settingsBtn" title="Settings">⚙</button>
-      <span data-ribbon="edit" class="sep"></span>
-      <span data-ribbon="edit" class="ribbonLabel">Mode:</span>
-      <div data-ribbon="edit" class="modeGroup" role="radiogroup">
-        <button class="modeBtn active" data-mode="select" title="Select (no page edits)">👆 Select</button>
-        <button class="modeBtn" data-mode="delete" title="Select pages with click / Ctrl+click / Shift+click, then press the trash button">🗑 Delete mode</button>
-      </div>
-      <button data-ribbon="edit" id="deleteSelectionBtn" class="deleteAction" disabled title="Delete selected pages">🗑 Delete selected</button>
-      <button data-ribbon="edit" id="extractSelectionBtn" disabled title="Save selected pages as a new PDF">⬇ Extract selected</button>
-      <span data-ribbon="edit" class="sep"></span>
-      <div data-ribbon="edit" class="menuHost">
-        <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Rotate pages">⟳ Rotate ▾</button>
-        <div id="rotateMenu" class="popover hidden" role="menu">
-          <button id="rotateLeftBtn" role="menuitem" title="Rotate 90° counter-clockwise">↺ 90°</button>
-          <button id="rotateRightBtn" role="menuitem" title="Rotate 90° clockwise">↻ 90°</button>
-          <button id="rotate180Btn" role="menuitem" title="Rotate 180°">↻ 180°</button>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="modeGroup" role="radiogroup">
+            <button class="modeBtn active" data-mode="select" title="Select (no page edits)">👆 Select</button>
+            <button class="modeBtn" data-mode="delete" title="Select pages with click / Ctrl+click / Shift+click, then press the trash button">🗑 Delete mode</button>
+          </div>
+          <button id="deleteSelectionBtn" class="deleteAction" disabled title="Delete selected pages">🗑 Delete selected</button>
+          <button id="extractSelectionBtn" disabled title="Save selected pages as a new PDF">⬇ Extract selected</button>
         </div>
+        <div class="groupLabel">Modi</div>
       </div>
-      <span data-ribbon="edit" class="sep"></span>
-      <div data-ribbon="edit" class="menuHost">
-        <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Insert pages from another PDF">＋ Insert ▾</button>
-        <div id="insertMenu" class="popover hidden" role="menu">
-          <button id="insertBeforeBtn" role="menuitem" title="Insert selected PDFs before current page">↥ Before current</button>
-          <button id="insertAfterBtn" role="menuitem" title="Insert selected PDFs after current page">↧ After current</button>
-          <button id="insertEndBtn" role="menuitem" title="Append pages to the end of the document">⤓ At end</button>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="menuHost">
+            <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Rotate pages">⟳ Rotate ▾</button>
+            <div id="rotateMenu" class="popover hidden" role="menu">
+              <button id="rotateLeftBtn" role="menuitem" title="Rotate 90° counter-clockwise">↺ 90°</button>
+              <button id="rotateRightBtn" role="menuitem" title="Rotate 90° clockwise">↻ 90°</button>
+              <button id="rotate180Btn" role="menuitem" title="Rotate 180°">↻ 180°</button>
+            </div>
+          </div>
         </div>
+        <div class="groupLabel">Rotate</div>
+      </div>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="menuHost">
+            <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Insert pages from another PDF">＋ Insert ▾</button>
+            <div id="insertMenu" class="popover hidden" role="menu">
+              <button id="insertBeforeBtn" role="menuitem" title="Insert selected PDFs before current page">↥ Before current</button>
+              <button id="insertAfterBtn" role="menuitem" title="Insert selected PDFs after current page">↧ After current</button>
+              <button id="insertEndBtn" role="menuitem" title="Append pages to the end of the document">⤓ At end</button>
+            </div>
+          </div>
+        </div>
+        <div class="groupLabel">Insert</div>
       </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
       <button data-ribbon="organize" id="mergePdfsBtn" title="Merge PDFs: pick files and append them">⊕ Merge PDFs…</button>
       <button data-ribbon="organize" id="splitPdfBtn" title="Split into multiple PDFs by page ranges">✂ Split…</button>
-      <button data-ribbon="edit" id="watermarkBtn" title="Stamp a text or image watermark on every page">💧 Watermark…</button>
-      <button data-ribbon="edit" id="headerFooterBtn" title="Add headers / footers / page numbers">🅷 Header/Footer…</button>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="modeGroup" role="radiogroup" id="annotToolGroup" title="Mark text — drag to select, release to apply">
+            <button class="modeBtn annotTool" data-annot="highlight" title="Highlight selected text">🖍 Highlight</button>
+            <button class="modeBtn annotTool" data-annot="underline" title="Underline selected text">U Underline</button>
+            <button class="modeBtn annotTool" data-annot="strikeout" title="Strike through selected text">S̶ Strike</button>
+          </div>
+          <input type="color" id="annotColor" value="#ffe600" title="Annotation color" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
+        </div>
+        <div class="groupLabel">Text Decoration</div>
+      </div>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="modeGroup" role="radiogroup" id="shapeToolGroup" title="Drag on a page to draw">
+            <button class="modeBtn shapeTool" data-shape="rect" title="Rectangle">▭ Rect</button>
+            <button class="modeBtn shapeTool" data-shape="circle" title="Ellipse">◯ Circle</button>
+            <button class="modeBtn shapeTool" data-shape="line" title="Line">／ Line</button>
+            <button class="modeBtn shapeTool" data-shape="arrow" title="Arrow">↗ Arrow</button>
+            <button class="modeBtn shapeTool" data-shape="freetext" title="Text box: drag a rectangle, then type">T Text</button>
+            <button class="modeBtn shapeTool" data-shape="ink" title="Free-hand pen">✎ Pen</button>
+            <button class="modeBtn shapeTool" data-shape="stamp" title="Stamp an image: pick a file, then drag a rectangle on the page">🔖 Stamp</button>
+          </div>
+        </div>
+        <div class="groupLabel">Draw</div>
+      </div>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="watermarkBtn" title="Stamp a text or image watermark on every page">💧 Watermark…</button>
+          <button id="headerFooterBtn" title="Add headers / footers / page numbers">🅷 Header/Footer…</button>
+        </div>
+        <div class="groupLabel">Layout</div>
+      </div>
       <span data-ribbon="organize" id="organizeHint" class="modeHint">Drag thumbnails to reorder. Click / Ctrl+click / Shift+click to select multiple.</span>
       <span data-ribbon="both" id="status" class="status"></span>
     </div>
@@ -316,6 +357,12 @@ style.textContent = `
   .ribbonBody[data-active="organize"] > [data-ribbon="reader"],
   .ribbonBody[data-active="organize"] > [data-ribbon="edit"] { display:none; }
   .ribbonLabel { color:#888; font-size:0.85rem; margin-left:0.2rem; }
+  .ribbonGroup { display:inline-flex; flex-direction:column; align-items:stretch; align-self:stretch;
+                 padding: 0 0.5rem; border-right:1px solid #3a3a3a; gap: 0.15rem; }
+  .ribbonGroup:last-child { border-right:none; }
+  .ribbonGroup .groupBody { display:flex; align-items:center; gap:0.25rem; flex:1; }
+  .ribbonGroup .groupLabel { text-align:center; font-size:0.65rem; color:#888;
+                             text-transform:uppercase; letter-spacing:0.05em; padding-top:0.1rem; }
   .modeGroup { display:inline-flex; gap: 0; border:1px solid #4a4a4a; border-radius:4px;
                overflow:hidden; }
   .modeGroup .modeBtn { background:#3a3a3a; color:#ddd; border:none; border-right:1px solid #4a4a4a;
@@ -380,6 +427,9 @@ style.textContent = `
                       -webkit-user-select:text; transform-origin: 0 0; }
   .selectLayer span::selection { background: rgba(74,140,255,0.4); color:transparent; }
   .highlightLayer { position:absolute; inset:0; pointer-events:none; }
+  .drawLayer { position:absolute; inset:0; pointer-events:none; overflow:visible; }
+  body.shapeMode .drawLayer { pointer-events:auto; cursor:crosshair; }
+  body.shapeMode .selectLayer { pointer-events:none; }
   .highlightLayer .hit { position:absolute; background: rgba(255,220,0,0.45); }
   .highlightLayer .hit.current { background: rgba(255,140,0,0.6); outline:1px solid orange; }
   .linkLayer { position:absolute; inset:0; pointer-events:none; }
@@ -560,6 +610,7 @@ type Slot = {
   selectLayer: HTMLDivElement;
   highlightLayer: HTMLDivElement;
   linkLayer: HTMLDivElement;
+  drawLayer: SVGSVGElement;
   placeholder: HTMLDivElement;
   loaded: boolean;
   renderingZoom: number | null;
@@ -664,6 +715,9 @@ function makeSlot(pageIdx: number): Slot {
   highlightLayer.className = "highlightLayer";
   const linkLayer = document.createElement("div");
   linkLayer.className = "linkLayer";
+  const drawLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  drawLayer.setAttribute("class", "drawLayer");
+  drawLayer.dataset.page = String(pageIdx);
   const placeholder = document.createElement("div");
   placeholder.className = "placeholder";
   placeholder.textContent = `${pageIdx + 1}`;
@@ -672,12 +726,14 @@ function makeSlot(pageIdx: number): Slot {
   wrap.appendChild(selectLayer);
   wrap.appendChild(highlightLayer);
   wrap.appendChild(linkLayer);
+  wrap.appendChild(drawLayer);
   return {
     wrap,
     img,
     selectLayer,
     highlightLayer,
     linkLayer,
+    drawLayer,
     placeholder,
     loaded: false,
     renderingZoom: null,
@@ -3012,5 +3068,555 @@ getCurrentWebview()
     }
   })
   .catch(() => {});
+
+// ----------------- Annotation tools (markup + shapes) -----------------
+
+type MarkupKind = "highlight" | "underline" | "strikeout";
+type ShapeKindUi = "rect" | "circle" | "line" | "arrow" | "freetext" | "ink" | "stamp";
+let annotTool: MarkupKind | null = null;
+let shapeTool: ShapeKindUi | null = null;
+let stampImagePath: string | null = null;
+const annotColorInput = document.getElementById("annotColor") as HTMLInputElement;
+
+function setAnnotTool(k: MarkupKind | null) {
+  annotTool = k;
+  if (k !== null) shapeTool = null;
+  document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
+    b.classList.toggle("active", b.dataset.annot === k);
+  });
+  document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
+    b.classList.toggle("active", false);
+  });
+  document.body.classList.toggle("annotMode", k !== null);
+  document.body.classList.toggle("shapeMode", false);
+}
+
+function setShapeTool(k: ShapeKindUi | null) {
+  shapeTool = k;
+  if (k !== null) annotTool = null;
+  document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
+    b.classList.toggle("active", b.dataset.shape === k);
+  });
+  document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
+    b.classList.toggle("active", false);
+  });
+  document.body.classList.toggle("shapeMode", k !== null);
+  document.body.classList.toggle("annotMode", false);
+}
+
+document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
+  b.addEventListener("click", () => {
+    const k = b.dataset.annot as MarkupKind;
+    setAnnotTool(annotTool === k ? null : k);
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
+  b.addEventListener("click", async () => {
+    const k = b.dataset.shape as ShapeKindUi;
+    if (shapeTool === k) {
+      setShapeTool(null);
+      return;
+    }
+    if (k === "stamp") {
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+        title: "Pick stamp image",
+      });
+      if (!picked || typeof picked !== "string") return;
+      stampImagePath = picked;
+    }
+    setShapeTool(k);
+  });
+});
+
+function hexToRgb01(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return [1, 0.95, 0];
+  const v = parseInt(m[1], 16);
+  return [((v >> 16) & 0xff) / 255, ((v >> 8) & 0xff) / 255, (v & 0xff) / 255];
+}
+
+function pageOfRect(rect: DOMRect): { idx: number; slot: Slot } | null {
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    if (!s || !s.loaded) continue;
+    const bb = s.wrap.getBoundingClientRect();
+    if (cx >= bb.left && cx <= bb.right && cy >= bb.top && cy <= bb.bottom) {
+      return { idx: i, slot: s };
+    }
+  }
+  return null;
+}
+
+function screenRectToPagePt(domRect: DOMRect, slot: Slot, pageIdx: number): RectPt | null {
+  const sz = pageSizes[pageIdx];
+  if (!sz) return null;
+  const bb = slot.wrap.getBoundingClientRect();
+  const imgW = bb.width;
+  const imgH = bb.height;
+  if (imgW <= 0 || imgH <= 0) return null;
+  const left = domRect.left - bb.left;
+  const top = domRect.top - bb.top;
+  const right = left + domRect.width;
+  const bottom = top + domRect.height;
+  const rot = effectiveRotation(pageIdx);
+  const dw = rot === 1 || rot === 3 ? sz.height_pt : sz.width_pt;
+  const dh = rot === 1 || rot === 3 ? sz.width_pt : sz.height_pt;
+  const sx = imgW / dw;
+  const sy = imgH / dh;
+  const nx0 = left / sx;
+  const ny0 = top / sy;
+  const nx1 = right / sx;
+  const ny1 = bottom / sy;
+  const w0 = sz.width_pt;
+  const h0 = sz.height_pt;
+  switch (rot) {
+    case 0: return { x0: nx0, y0: ny0, x1: nx1, y1: ny1 };
+    case 1: return { x0: ny0, y0: h0 - nx1, x1: ny1, y1: h0 - nx0 };
+    case 2: return { x0: w0 - nx1, y0: h0 - ny1, x1: w0 - nx0, y1: h0 - ny0 };
+    case 3: return { x0: w0 - ny1, y0: nx0, x1: w0 - ny0, y1: nx1 };
+    default: return { x0: nx0, y0: ny0, x1: nx1, y1: ny1 };
+  }
+}
+
+async function applyAnnotationFromSelection() {
+  if (!annotTool || !currentDoc) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+  const byPage = new Map<number, RectPt[]>();
+  for (let i = 0; i < sel.rangeCount; i++) {
+    const range = sel.getRangeAt(i);
+    const rects = Array.from(range.getClientRects());
+    for (const r of rects) {
+      if (r.width < 1 || r.height < 1) continue;
+      const hit = pageOfRect(r);
+      if (!hit) continue;
+      const pt = screenRectToPagePt(r, hit.slot, hit.idx);
+      if (!pt) continue;
+      let arr = byPage.get(hit.idx);
+      if (!arr) { arr = []; byPage.set(hit.idx, arr); }
+      arr.push(pt);
+    }
+  }
+  if (byPage.size === 0) return;
+  const color = hexToRgb01(annotColorInput.value);
+  const opacity = annotTool === "highlight" ? 0.4 : 1.0;
+  const kind = annotTool;
+  const pages = Array.from(byPage.keys()).sort((a, b) => a - b);
+  setStatus(`Applying ${kind}…`);
+  try {
+    let snap: DocSnapshot | null = null;
+    for (const page of pages) {
+      const rects = byPage.get(page)!;
+      snap = await invoke<DocSnapshot>("add_annotation", {
+        document: currentDoc,
+        args: { page, rects, kind, color, opacity },
+      });
+    }
+    sel.removeAllRanges();
+    if (snap) applyDocSnapshot(snap);
+    setStatus(`${kind} applied`);
+  } catch (e) {
+    setStatus(`${kind} error: ${e}`);
+  }
+}
+
+document.addEventListener("mouseup", (ev) => {
+  if (!annotTool) return;
+  const t = ev.target as Node | null;
+  if (!t || !pageList.contains(t)) return;
+  setTimeout(() => { void applyAnnotationFromSelection(); }, 0);
+});
+
+// ----------------- Shape drawing pipeline -----------------
+
+type DrawState = {
+  pageIdx: number;
+  slot: Slot;
+  startPx: { x: number; y: number };
+  currentPx: { x: number; y: number };
+  preview: SVGElement;
+  pointerId: number;
+  /// Ink-only: live stroke points in image px.
+  inkPoints?: { x: number; y: number }[];
+};
+let drawState: DrawState | null = null;
+
+function imagePxFromEvent(slot: Slot, ev: PointerEvent): { x: number; y: number } {
+  const bb = slot.wrap.getBoundingClientRect();
+  return { x: ev.clientX - bb.left, y: ev.clientY - bb.top };
+}
+
+function ensureDrawLayerViewBox(slot: Slot) {
+  const bb = slot.wrap.getBoundingClientRect();
+  slot.drawLayer.setAttribute("viewBox", `0 0 ${bb.width} ${bb.height}`);
+  slot.drawLayer.setAttribute("width", `${bb.width}`);
+  slot.drawLayer.setAttribute("height", `${bb.height}`);
+}
+
+function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  if (kind === "rect" || kind === "freetext" || kind === "stamp") {
+    const el = document.createElementNS(ns, "rect");
+    el.setAttribute("fill", "none");
+    el.setAttribute("stroke", color);
+    el.setAttribute("stroke-width", "2");
+    if (kind !== "rect") el.setAttribute("stroke-dasharray", "5 4");
+    return el;
+  }
+  if (kind === "circle") {
+    const el = document.createElementNS(ns, "ellipse");
+    el.setAttribute("fill", "none");
+    el.setAttribute("stroke", color);
+    el.setAttribute("stroke-width", "2");
+    return el;
+  }
+  if (kind === "line") {
+    const el = document.createElementNS(ns, "line");
+    el.setAttribute("stroke", color);
+    el.setAttribute("stroke-width", "2");
+    return el;
+  }
+  if (kind === "arrow") {
+    const g = document.createElementNS(ns, "g");
+    const ln = document.createElementNS(ns, "line");
+    ln.setAttribute("stroke", color);
+    ln.setAttribute("stroke-width", "2");
+    g.appendChild(ln);
+    const head = document.createElementNS(ns, "polygon");
+    head.setAttribute("fill", color);
+    head.setAttribute("stroke", color);
+    g.appendChild(head);
+    return g;
+  }
+  // ink: polyline grows during pointermove
+  const el = document.createElementNS(ns, "polyline");
+  el.setAttribute("fill", "none");
+  el.setAttribute("stroke", color);
+  el.setAttribute("stroke-width", "2");
+  el.setAttribute("stroke-linecap", "round");
+  el.setAttribute("stroke-linejoin", "round");
+  return el;
+}
+
+function updatePreview(kind: ShapeKindUi, el: SVGElement, s: { x: number; y: number }, c: { x: number; y: number }) {
+  if (kind === "rect" || kind === "freetext" || kind === "stamp") {
+    const r = el as SVGRectElement;
+    const x = Math.min(s.x, c.x), y = Math.min(s.y, c.y);
+    const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+    r.setAttribute("x", `${x}`); r.setAttribute("y", `${y}`);
+    r.setAttribute("width", `${w}`); r.setAttribute("height", `${h}`);
+  } else if (kind === "circle") {
+    const e = el as SVGEllipseElement;
+    const cx = (s.x + c.x) / 2, cy = (s.y + c.y) / 2;
+    const rx = Math.abs(c.x - s.x) / 2, ry = Math.abs(c.y - s.y) / 2;
+    e.setAttribute("cx", `${cx}`); e.setAttribute("cy", `${cy}`);
+    e.setAttribute("rx", `${rx}`); e.setAttribute("ry", `${ry}`);
+  } else if (kind === "line") {
+    const ln = el as SVGLineElement;
+    ln.setAttribute("x1", `${s.x}`); ln.setAttribute("y1", `${s.y}`);
+    ln.setAttribute("x2", `${c.x}`); ln.setAttribute("y2", `${c.y}`);
+  } else if (kind === "arrow") {
+    const g = el as SVGGElement;
+    const ln = g.firstElementChild as SVGLineElement;
+    ln.setAttribute("x1", `${s.x}`); ln.setAttribute("y1", `${s.y}`);
+    ln.setAttribute("x2", `${c.x}`); ln.setAttribute("y2", `${c.y}`);
+    const head = g.lastElementChild as SVGPolygonElement;
+    const dx = c.x - s.x, dy = c.y - s.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const size = 10;
+    const tipX = c.x, tipY = c.y;
+    const baseX = c.x - ux * size, baseY = c.y - uy * size;
+    const px = -uy * size * 0.5, py = ux * size * 0.5;
+    head.setAttribute(
+      "points",
+      `${tipX},${tipY} ${baseX + px},${baseY + py} ${baseX - px},${baseY - py}`,
+    );
+  }
+  // ink updates the polyline elsewhere via inkPoints
+  void s; void c;
+}
+
+function updateInkPreview(el: SVGElement, points: { x: number; y: number }[]) {
+  const poly = el as SVGPolylineElement;
+  poly.setAttribute("points", points.map((p) => `${p.x},${p.y}`).join(" "));
+}
+
+function imagePxToPagePt(slot: Slot, pageIdx: number, x: number, y: number): { x: number; y: number } | null {
+  const sz = pageSizes[pageIdx];
+  if (!sz) return null;
+  const bb = slot.wrap.getBoundingClientRect();
+  const imgW = bb.width, imgH = bb.height;
+  if (imgW <= 0 || imgH <= 0) return null;
+  const rot = effectiveRotation(pageIdx);
+  const dw = rot === 1 || rot === 3 ? sz.height_pt : sz.width_pt;
+  const dh = rot === 1 || rot === 3 ? sz.width_pt : sz.height_pt;
+  const sx = imgW / dw, sy = imgH / dh;
+  const nx = x / sx, ny = y / sy;
+  const w0 = sz.width_pt, h0 = sz.height_pt;
+  switch (rot) {
+    case 0: return { x: nx, y: ny };
+    case 1: return { x: ny, y: h0 - nx };
+    case 2: return { x: w0 - nx, y: h0 - ny };
+    case 3: return { x: w0 - ny, y: nx };
+    default: return { x: nx, y: ny };
+  }
+}
+
+function findSlotFromTarget(target: EventTarget | null): { slot: Slot; idx: number } | null {
+  let node: HTMLElement | null = target as HTMLElement | null;
+  while (node && node !== document.body) {
+    if (node.classList && node.classList.contains("pageSlot")) {
+      const idx = parseInt(node.dataset.page || "-1", 10);
+      const s = slots[idx];
+      if (s) return { slot: s, idx };
+      return null;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+document.addEventListener("pointerdown", (ev) => {
+  if (!shapeTool || !currentDoc) return;
+  if (ev.button !== 0) return;
+  const hit = findSlotFromTarget(ev.target);
+  if (!hit) return;
+  ev.preventDefault();
+  ensureDrawLayerViewBox(hit.slot);
+  const start = imagePxFromEvent(hit.slot, ev);
+  const preview = makePreviewElement(shapeTool, annotColorInput.value);
+  hit.slot.drawLayer.appendChild(preview);
+  drawState = {
+    pageIdx: hit.idx,
+    slot: hit.slot,
+    startPx: start,
+    currentPx: start,
+    preview,
+    pointerId: ev.pointerId,
+  };
+  if (shapeTool === "ink") {
+    drawState.inkPoints = [start];
+    updateInkPreview(preview, drawState.inkPoints);
+  } else {
+    updatePreview(shapeTool, preview, start, start);
+  }
+  hit.slot.drawLayer.setPointerCapture(ev.pointerId);
+});
+
+document.addEventListener("pointermove", (ev) => {
+  if (!drawState || !shapeTool) return;
+  if (ev.pointerId !== drawState.pointerId) return;
+  const cur = imagePxFromEvent(drawState.slot, ev);
+  drawState.currentPx = cur;
+  if (shapeTool === "ink" && drawState.inkPoints) {
+    const last = drawState.inkPoints[drawState.inkPoints.length - 1];
+    if (Math.hypot(cur.x - last.x, cur.y - last.y) >= 1.0) {
+      drawState.inkPoints.push(cur);
+      updateInkPreview(drawState.preview, drawState.inkPoints);
+    }
+  } else {
+    updatePreview(shapeTool, drawState.preview, drawState.startPx, cur);
+  }
+});
+
+document.addEventListener("pointerup", async (ev) => {
+  if (!drawState || !shapeTool || !currentDoc) return;
+  if (ev.pointerId !== drawState.pointerId) return;
+  const ds = drawState;
+  drawState = null;
+  const tool = shapeTool;
+  try {
+    ds.slot.drawLayer.releasePointerCapture(ds.pointerId);
+  } catch { /* ignore */ }
+  ds.preview.remove();
+
+  const sx = ds.startPx, cx = ds.currentPx;
+  const dxPx = Math.abs(cx.x - sx.x), dyPx = Math.abs(cx.y - sx.y);
+
+  if (tool === "ink") {
+    const pts = ds.inkPoints || [];
+    if (pts.length < 2) return;
+    const stroke: number[] = [];
+    for (const p of pts) {
+      const pt = imagePxToPagePt(ds.slot, ds.pageIdx, p.x, p.y);
+      if (!pt) continue;
+      stroke.push(pt.x, pt.y);
+    }
+    if (stroke.length < 4) return;
+    setStatus("Adding ink…");
+    try {
+      const snap = await invoke<DocSnapshot>("add_ink", {
+        document: currentDoc,
+        args: {
+          page: ds.pageIdx,
+          strokes: [stroke],
+          color: hexToRgb01(annotColorInput.value),
+          width: 1.6,
+          opacity: 1.0,
+        },
+      });
+      applyDocSnapshot(snap);
+      setStatus("Ink added");
+    } catch (e) {
+      setStatus(`ink error: ${e}`);
+    }
+    return;
+  }
+
+  if (dxPx < 3 && dyPx < 3 && tool !== "freetext") return;
+
+  const start = imagePxToPagePt(ds.slot, ds.pageIdx, sx.x, sx.y);
+  const end = imagePxToPagePt(ds.slot, ds.pageIdx, cx.x, cx.y);
+  if (!start || !end) return;
+
+  if (tool === "freetext") {
+    let rectPx = {
+      x: Math.min(sx.x, cx.x),
+      y: Math.min(sx.y, cx.y),
+      w: Math.abs(cx.x - sx.x),
+      h: Math.abs(cx.y - sx.y),
+    };
+    if (rectPx.w < 60 || rectPx.h < 24) {
+      rectPx = { x: sx.x, y: sx.y, w: 220, h: 40 };
+    }
+    spawnFreeTextEditor(ds.slot, ds.pageIdx, rectPx);
+    return;
+  }
+
+  if (tool === "stamp") {
+    if (!stampImagePath) {
+      setStatus("Pick a stamp image first");
+      return;
+    }
+    const rect: RectPt = {
+      x0: Math.min(start.x, end.x),
+      y0: Math.min(start.y, end.y),
+      x1: Math.max(start.x, end.x),
+      y1: Math.max(start.y, end.y),
+    };
+    setStatus("Stamping…");
+    try {
+      const snap = await invoke<DocSnapshot>("add_stamp", {
+        document: currentDoc,
+        args: { page: ds.pageIdx, rect, image_path: stampImagePath, opacity: 1.0 },
+      });
+      applyDocSnapshot(snap);
+      setStatus("Stamp added");
+    } catch (e) {
+      setStatus(`stamp error: ${e}`);
+    }
+    return;
+  }
+
+  // rect / circle / line / arrow
+  let rect: RectPt;
+  if (tool === "line" || tool === "arrow") {
+    rect = { x0: start.x, y0: start.y, x1: end.x, y1: end.y };
+  } else {
+    rect = {
+      x0: Math.min(start.x, end.x),
+      y0: Math.min(start.y, end.y),
+      x1: Math.max(start.x, end.x),
+      y1: Math.max(start.y, end.y),
+    };
+  }
+  const stroke = hexToRgb01(annotColorInput.value);
+  setStatus(`Adding ${tool}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("add_shape", {
+      document: currentDoc,
+      args: {
+        page: ds.pageIdx,
+        kind: tool,
+        rect,
+        stroke,
+        border_width: 1.5,
+        opacity: 1.0,
+      },
+    });
+    applyDocSnapshot(snap);
+    setStatus(`${tool} added`);
+  } catch (e) {
+    setStatus(`shape error: ${e}`);
+  }
+});
+
+function spawnFreeTextEditor(
+  slot: Slot,
+  pageIdx: number,
+  rectPx: { x: number; y: number; w: number; h: number },
+) {
+  const ed = document.createElement("textarea");
+  ed.style.position = "absolute";
+  ed.style.left = `${rectPx.x}px`;
+  ed.style.top = `${rectPx.y}px`;
+  ed.style.width = `${rectPx.w}px`;
+  ed.style.height = `${rectPx.h}px`;
+  ed.style.border = "1px dashed #4a8cff";
+  ed.style.background = "rgba(255,255,255,0.95)";
+  ed.style.color = "#000";
+  ed.style.font = "14px Helvetica, Arial, sans-serif";
+  ed.style.padding = "2px 4px";
+  ed.style.boxSizing = "border-box";
+  ed.style.resize = "both";
+  ed.style.zIndex = "20";
+  slot.wrap.appendChild(ed);
+  ed.focus();
+
+  let committed = false;
+  const cleanup = () => { ed.remove(); };
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const text = ed.value.trim();
+    cleanup();
+    if (!text || !currentDoc) return;
+    const r = ed.getBoundingClientRect();
+    const wrapBb = slot.wrap.getBoundingClientRect();
+    const left = r.left - wrapBb.left;
+    const top = r.top - wrapBb.top;
+    const right = left + r.width;
+    const bottom = top + r.height;
+    const tl = imagePxToPagePt(slot, pageIdx, left, top);
+    const br = imagePxToPagePt(slot, pageIdx, right, bottom);
+    if (!tl || !br) return;
+    const rect: RectPt = {
+      x0: Math.min(tl.x, br.x),
+      y0: Math.min(tl.y, br.y),
+      x1: Math.max(tl.x, br.x),
+      y1: Math.max(tl.y, br.y),
+    };
+    setStatus("Adding text…");
+    try {
+      const snap = await invoke<DocSnapshot>("add_freetext", {
+        document: currentDoc,
+        args: {
+          page: pageIdx,
+          rect,
+          text,
+          color: hexToRgb01(annotColorInput.value === "#ffe600" ? "#000000" : annotColorInput.value),
+          font_size: 14,
+          opacity: 1.0,
+        },
+      });
+      applyDocSnapshot(snap);
+      setStatus("Text added");
+    } catch (e) {
+      setStatus(`text error: ${e}`);
+    }
+  };
+  ed.addEventListener("blur", () => { void commit(); });
+  ed.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { committed = true; cleanup(); }
+    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ed.blur(); }
+  });
+}
 
 updateChrome();
