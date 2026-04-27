@@ -499,6 +499,37 @@ async fn extract_pages(
 }
 
 #[tauri::command]
+async fn save_region(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+    rect: RectPt,
+    path: String,
+) -> Result<(), String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let out = mdoc
+            .extract_region_to_bytes(page, rect)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&path, &out).map_err(|e| format!("write {path}: {e}"))?;
+        tracing::info!(
+            "save_region page={} rect={:?} → {} ({:.1}KB) in {:?}",
+            page,
+            rect,
+            path,
+            out.len() as f64 / 1024.0,
+            t.elapsed()
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn reorder_pages(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
@@ -1375,6 +1406,10 @@ struct PdfaArgs {
     level: String, // "1b" | "2b" | "3b" | "4"
 }
 
+pub(crate) fn pdfa_flags_for(level: &str) -> Result<(&'static str, &'static str), String> {
+    pdfa_flags(level)
+}
+
 fn pdfa_flags(level: &str) -> Result<(&'static str, &'static str), String> {
     // (PDFA value, compat label)
     match level {
@@ -1442,6 +1477,86 @@ async fn save_as_pdfa(
         }
         tracing::info!("save_as_pdfa level={compat_label} in {:?}", t.elapsed());
         Ok(compat_label.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct ConvertResult {
+    files: Vec<String>,
+    failed: Vec<String>,
+}
+
+#[tauri::command]
+async fn convert_files_to_pdfa(
+    paths: Vec<String>,
+    out_dir: String,
+    level: String,
+) -> Result<ConvertResult, String> {
+    if paths.is_empty() {
+        return Err("convert_files_to_pdfa: no input files".into());
+    }
+    let (pdfa_val, compat_label) = pdfa_flags(&level)?;
+    let info = check_ghostscript().await;
+    let gs_path = info.path.ok_or_else(|| {
+        "Ghostscript not found. Install it from https://ghostscript.com/releases/gsdnld.html"
+            .to_string()
+    })?;
+    let dir_str = out_dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<ConvertResult, String> {
+        let t = std::time::Instant::now();
+        let dir = PathBuf::from(&dir_str);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {dir_str}: {e}"))?;
+        let mut written: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
+        for p in paths {
+            let src = PathBuf::from(&p);
+            let stem = src
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("converted");
+            let out = dir.join(format!("{stem}_pdfa-{level}.pdf"));
+            let mut cmd = std::process::Command::new(&gs_path);
+            cmd.args([
+                "-dBATCH",
+                "-dNOPAUSE",
+                "-dQUIET",
+                "-sDEVICE=pdfwrite",
+            ]);
+            cmd.arg(format!("-dPDFA={pdfa_val}"));
+            cmd.arg("-dPDFACompatibilityPolicy=1");
+            cmd.arg("-sColorConversionStrategy=RGB");
+            cmd.arg("-sProcessColorModel=DeviceRGB");
+            cmd.arg(format!("-sOutputFile={}", out.display()));
+            cmd.arg(&src);
+            match cmd.output() {
+                Ok(o) if o.status.success() => {
+                    written.push(out.to_string_lossy().to_string());
+                }
+                Ok(o) => {
+                    tracing::warn!(
+                        "convert_files_to_pdfa: {} failed: {}",
+                        p,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    );
+                    failed.push(p);
+                }
+                Err(e) => {
+                    tracing::warn!("convert_files_to_pdfa: spawn {p}: {e}");
+                    failed.push(p);
+                }
+            }
+        }
+        tracing::info!(
+            "convert_files_to_pdfa: {} ok / {} failed → {} ({}) in {:?}",
+            written.len(),
+            failed.len(),
+            dir_str,
+            compat_label,
+            t.elapsed()
+        );
+        Ok(ConvertResult { files: written, failed })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1695,6 +1810,9 @@ fn encode_jpeg(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedSettings {
     recent_files: VecDeque<RecentFile>,
+    /// `"off" | "1b" | "2b" | "3b" | "4"`. Defaults to `"off"` (plain PDF).
+    #[serde(default)]
+    default_pdfa_level: Option<String>,
 }
 
 fn load_settings(path: &Path) -> PersistedSettings {
@@ -1710,6 +1828,40 @@ fn save_settings(path: &Path, s: &PersistedSettings) -> std::io::Result<()> {
     }
     let data = serde_json::to_vec_pretty(s)?;
     std::fs::write(path, data)
+}
+
+fn pdfa_pref_from_settings(s: &PersistedSettings) -> Option<String> {
+    match s.default_pdfa_level.as_deref() {
+        Some(v) if v != "off" && !v.is_empty() => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+fn get_default_pdfa(state: tauri::State<'_, AppState>) -> String {
+    let guard = state.settings_path.lock();
+    if let Some(path) = guard.as_ref() {
+        let s = load_settings(path);
+        return s.default_pdfa_level.unwrap_or_else(|| "off".to_string());
+    }
+    "off".to_string()
+}
+
+#[tauri::command]
+fn set_default_pdfa(state: tauri::State<'_, AppState>, level: String) -> Result<(), String> {
+    let allowed = ["off", "1b", "2b", "3b", "4"];
+    if !allowed.contains(&level.as_str()) {
+        return Err(format!("invalid pdfa level: {level}"));
+    }
+    let guard = state.settings_path.lock();
+    let Some(cfg) = guard.as_ref() else {
+        return Err("settings path unavailable".into());
+    };
+    let mut s = load_settings(cfg);
+    s.default_pdfa_level = Some(level.clone());
+    save_settings(cfg, &s).map_err(|e| e.to_string())?;
+    vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
+    Ok(())
 }
 
 #[tauri::command]
@@ -1775,6 +1927,10 @@ pub fn run() {
                 .app_config_dir()
                 .ok()
                 .map(|d| d.join("settings.json"));
+            if let Some(path) = settings_path.as_ref() {
+                let s = load_settings(path);
+                vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
+            }
             let state: tauri::State<'_, AppState> = app.state();
             *state.settings_path.lock() = settings_path;
             vprinter::start_spool_watcher(app.handle().clone());
@@ -1807,6 +1963,7 @@ pub fn run() {
             rotate_pages,
             reorder_pages,
             extract_pages,
+            save_region,
             insert_pdf_files,
             merge_files_and_open,
             split_pdf,
@@ -1820,6 +1977,7 @@ pub fn run() {
             add_stamp,
             check_ghostscript,
             save_as_pdfa,
+            convert_files_to_pdfa,
             vprinter::virtual_printer_status,
             vprinter::install_virtual_printer,
             vprinter::uninstall_virtual_printer,
@@ -1828,7 +1986,9 @@ pub fn run() {
             redo_doc,
             undo_status,
             recent_files,
-            push_recent
+            push_recent,
+            get_default_pdfa,
+            set_default_pdfa
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

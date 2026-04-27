@@ -9,7 +9,8 @@
 
 use std::io::Cursor;
 
-use lopdf::Document;
+use lopdf::{Document, Object, ObjectId};
+use pdf_types::RectPt;
 
 mod annotations;
 mod overlay;
@@ -36,6 +37,37 @@ pub enum MutateError {
 
 pub struct MutableDoc {
     inner: Document,
+}
+
+fn resolve_media_box(doc: &Document, page_id: ObjectId) -> Option<[f32; 4]> {
+    let mut cur = page_id;
+    loop {
+        if let Ok(d) = doc.get_dictionary(cur) {
+            if let Ok(mb) = d.get(b"MediaBox") {
+                if let Ok(arr) = mb.as_array() {
+                    if arr.len() == 4 {
+                        let to_f = |o: &Object| {
+                            o.as_float()
+                                .ok()
+                                .or_else(|| o.as_i64().ok().map(|i| i as f32))
+                        };
+                        return Some([
+                            to_f(&arr[0]).unwrap_or(0.0),
+                            to_f(&arr[1]).unwrap_or(0.0),
+                            to_f(&arr[2]).unwrap_or(612.0),
+                            to_f(&arr[3]).unwrap_or(792.0),
+                        ]);
+                    }
+                }
+            }
+            if let Ok(parent) = d.get(b"Parent").and_then(|o| o.as_reference()) {
+                cur = parent;
+                continue;
+            }
+        }
+        break;
+    }
+    None
 }
 
 impl MutableDoc {
@@ -222,6 +254,84 @@ impl MutableDoc {
         tracing::info!(
             "pdf_mutate::extract_to_bytes n={} → {:.1}KB in {:?}",
             keep.len(),
+            buf.len() as f64 / 1024.0,
+            t.elapsed()
+        );
+        Ok(buf)
+    }
+
+    /// Serialize a single-page PDF cropped to `rect` on `page_index`.
+    /// `rect` is in our top-origin RectPt convention (PDF points relative to
+    /// the page's *unrotated* coordinate space — same convention used for
+    /// annotation rects). MediaBox + CropBox are rewritten to the region;
+    /// any persistent /Rotate on the source page is preserved so the cropped
+    /// page renders with the same orientation.
+    pub fn extract_region_to_bytes(
+        &self,
+        page_index: u32,
+        rect: RectPt,
+    ) -> MutateResult<Vec<u8>> {
+        let t = std::time::Instant::now();
+        let total = self.page_count();
+        if page_index >= total {
+            return Err(MutateError::PageOutOfRange(page_index, total));
+        }
+        if !(rect.x1 > rect.x0) || !(rect.y1 > rect.y0) {
+            return Err(MutateError::Parse(format!(
+                "region: invalid rect {:?}",
+                rect
+            )));
+        }
+        let mut copy = self.inner.clone();
+        let delete_one_indexed: Vec<u32> = (0..total)
+            .filter(|&i| i != page_index)
+            .map(|i| i + 1)
+            .collect();
+        if !delete_one_indexed.is_empty() {
+            copy.delete_pages(&delete_one_indexed);
+        }
+        let page_id = copy
+            .page_iter()
+            .next()
+            .ok_or_else(|| MutateError::Parse("region: no page after extract".into()))?;
+        let mb = resolve_media_box(&copy, page_id)
+            .unwrap_or([0.0, 0.0, 612.0, 792.0]);
+        let mb_left = mb[0];
+        let mb_bottom = mb[1];
+        let mb_right = mb[2];
+        let mb_top = mb[3];
+        let new_llx = (mb_left + rect.x0).max(mb_left).min(mb_right);
+        let new_urx = (mb_left + rect.x1).max(mb_left).min(mb_right);
+        let new_lly = (mb_top - rect.y1).max(mb_bottom).min(mb_top);
+        let new_ury = (mb_top - rect.y0).max(mb_bottom).min(mb_top);
+        if new_urx - new_llx < 1.0 || new_ury - new_lly < 1.0 {
+            return Err(MutateError::Parse(
+                "region: rect outside page bounds".into(),
+            ));
+        }
+        let new_box = Object::Array(vec![
+            Object::Real(new_llx),
+            Object::Real(new_lly),
+            Object::Real(new_urx),
+            Object::Real(new_ury),
+        ]);
+        if let Ok(d) = copy.get_dictionary_mut(page_id) {
+            d.set("MediaBox", new_box.clone());
+            d.set("CropBox", new_box);
+            d.remove(b"BleedBox");
+            d.remove(b"TrimBox");
+            d.remove(b"ArtBox");
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut cur = Cursor::new(&mut buf);
+            copy.save_to(&mut cur)
+                .map_err(|e| MutateError::Serialize(e.to_string()))?;
+        }
+        tracing::info!(
+            "pdf_mutate::extract_region_to_bytes page={} rect={:?} → {:.1}KB in {:?}",
+            page_index,
+            rect,
             buf.len() as f64 / 1024.0,
             t.elapsed()
         );

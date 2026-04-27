@@ -56,16 +56,18 @@ app.innerHTML = `
     <div class="ribbonTabs">
       <button class="ribbonTab active" data-ribbon-tab="reader">Reader</button>
       <button class="ribbonTab" data-ribbon-tab="edit">Edit</button>
+      <button class="ribbonTab" data-ribbon-tab="convert">Convert</button>
       <button class="ribbonTab" data-ribbon-tab="organize">Organize</button>
+      <button id="settingsBtnTop" class="ribbonTab settingsTab" title="Settings">⚙</button>
     </div>
     <div class="ribbonBody" data-active="reader">
       <button data-ribbon="both" id="sidebarBtn" title="Toggle sidebar (F4)">☰</button>
-      <button data-ribbon="both" id="open" title="Open (Ctrl+O)">Open</button>
-      <button data-ribbon="both" id="recentBtn" title="Recent files">Recent ▾</button>
+      <button data-ribbon="both" id="open" title="Open (Ctrl+O)">📂</button>
+      <button data-ribbon="both" id="recentBtn" title="Recent files">🕘</button>
       <div id="recentMenu" class="menu hidden"></div>
       <span data-ribbon="both" class="sep"></span>
-      <button data-ribbon="both" id="undoBtn" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
-      <button data-ribbon="both" id="redoBtn" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
+      <button data-ribbon="both" id="undoBtn" title="Undo (Ctrl+Z)" disabled>↶</button>
+      <button data-ribbon="both" id="redoBtn" title="Redo (Ctrl+Y)" disabled>↷</button>
       <span data-ribbon="both" class="sep"></span>
       <button data-ribbon="both" id="prevPage" title="Previous page (PageUp)">◀</button>
       <input data-ribbon="both" id="pageInput" type="number" min="1" value="1" style="width:4rem" />
@@ -91,6 +93,7 @@ app.innerHTML = `
         <option value="2">200%</option>
       </select>
       <button data-ribbon="reader" id="zoomIn" title="Zoom in (Ctrl++)">+</button>
+      <button data-ribbon="reader" id="wheelZoomBtn" title="Zoom mode — scroll the mouse wheel to zoom around the cursor; left-drag to pan">🔎</button>
       <span data-ribbon="reader" class="sep"></span>
       <select data-ribbon="reader" id="viewModeSelect" title="View mode">
         <option value="single">Single Page</option>
@@ -103,30 +106,29 @@ app.innerHTML = `
       <button data-ribbon="reader" id="fullscreenBtn" title="Fullscreen (F11)">⛶</button>
       <button data-ribbon="reader" id="presentBtn" title="Presentation (F5)">▶▶</button>
       <span data-ribbon="reader" class="sep"></span>
-      <button data-ribbon="reader" id="searchBtn" title="Search (Ctrl+F)">Search</button>
-      <button data-ribbon="both" id="saveAsBtn" title="Save As (Ctrl+Shift+S)">💾 Save As</button>
+      <button data-ribbon="reader" id="searchBtn" title="Search (Ctrl+F)">🔍</button>
+      <button data-ribbon="both" id="saveAsBtn" title="Save As (Ctrl+Shift+S)">💾</button>
       <button data-ribbon="reader" id="printBtn" title="Print (Ctrl+P)">🖨</button>
       <button data-ribbon="reader" id="propsBtn" title="Document properties">ⓘ</button>
-      <button data-ribbon="both" id="settingsBtn" title="Settings">⚙</button>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn active" data-mode="select" title="Select (no page edits)">👆 Select</button>
-            <button class="modeBtn" data-mode="delete" title="Select pages with click / Ctrl+click / Shift+click, then press the trash button">🗑 Delete mode</button>
+            <button class="modeBtn active" data-mode="select" title="Select (no page edits)">👆</button>
+            <button class="modeBtn" data-mode="delete" title="Delete mode — select pages with click / Ctrl+click / Shift+click, then press the trash button">🗑</button>
           </div>
-          <button id="deleteSelectionBtn" class="deleteAction" disabled title="Delete selected pages">🗑 Delete selected</button>
-          <button id="extractSelectionBtn" disabled title="Save selected pages as a new PDF">⬇ Extract selected</button>
+          <button id="deleteSelectionBtn" class="deleteAction" disabled title="Delete selected pages">🗑</button>
+          <button id="extractSelectionBtn" disabled title="Save selected pages as a new PDF">⬇</button>
         </div>
         <div class="groupLabel">Modi</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="menuHost">
-            <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Rotate pages">⟳ Rotate ▾</button>
+            <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Rotate pages">⟳</button>
             <div id="rotateMenu" class="popover hidden" role="menu">
-              <button id="rotateLeftBtn" role="menuitem" title="Rotate 90° counter-clockwise">↺ 90°</button>
-              <button id="rotateRightBtn" role="menuitem" title="Rotate 90° clockwise">↻ 90°</button>
-              <button id="rotate180Btn" role="menuitem" title="Rotate 180°">↻ 180°</button>
+              <button id="rotateLeftBtn" role="menuitem" title="Rotate 90° counter-clockwise">↺</button>
+              <button id="rotateRightBtn" role="menuitem" title="Rotate 90° clockwise">↻</button>
+              <button id="rotate180Btn" role="menuitem" title="Rotate 180°">⇅</button>
             </div>
           </div>
         </div>
@@ -135,25 +137,25 @@ app.innerHTML = `
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="menuHost">
-            <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Insert pages from another PDF">＋ Insert ▾</button>
+            <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="Insert pages from another PDF">＋</button>
             <div id="insertMenu" class="popover hidden" role="menu">
-              <button id="insertBeforeBtn" role="menuitem" title="Insert selected PDFs before current page">↥ Before current</button>
-              <button id="insertAfterBtn" role="menuitem" title="Insert selected PDFs after current page">↧ After current</button>
-              <button id="insertEndBtn" role="menuitem" title="Append pages to the end of the document">⤓ At end</button>
+              <button id="insertBeforeBtn" role="menuitem" title="Insert selected PDFs before current page">↥</button>
+              <button id="insertAfterBtn" role="menuitem" title="Insert selected PDFs after current page">↧</button>
+              <button id="insertEndBtn" role="menuitem" title="Append pages to the end of the document">⤓</button>
             </div>
           </div>
         </div>
         <div class="groupLabel">Insert</div>
       </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
-      <button data-ribbon="organize" id="mergePdfsBtn" title="Merge PDFs: pick files and append them">⊕ Merge PDFs…</button>
-      <button data-ribbon="organize" id="splitPdfBtn" title="Split into multiple PDFs by page ranges">✂ Split…</button>
+      <button data-ribbon="organize" id="mergePdfsBtn" title="Merge PDFs: pick files and append them">⊕</button>
+      <button data-ribbon="organize" id="splitPdfBtn" title="Split into multiple PDFs by page ranges">✂</button>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup" id="annotToolGroup" title="Mark text — drag to select, release to apply">
-            <button class="modeBtn annotTool" data-annot="highlight" title="Highlight selected text">🖍 Highlight</button>
-            <button class="modeBtn annotTool" data-annot="underline" title="Underline selected text">U Underline</button>
-            <button class="modeBtn annotTool" data-annot="strikeout" title="Strike through selected text">S̶ Strike</button>
+            <button class="modeBtn annotTool" data-annot="highlight" title="Highlight selected text">🖍</button>
+            <button class="modeBtn annotTool" data-annot="underline" title="Underline selected text"><u>U</u></button>
+            <button class="modeBtn annotTool" data-annot="strikeout" title="Strike through selected text">S̶</button>
           </div>
           <input type="color" id="annotColor" value="#ffe600" title="Annotation color" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
         </div>
@@ -162,25 +164,42 @@ app.innerHTML = `
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup" id="shapeToolGroup" title="Drag on a page to draw">
-            <button class="modeBtn shapeTool" data-shape="rect" title="Rectangle">▭ Rect</button>
-            <button class="modeBtn shapeTool" data-shape="circle" title="Ellipse">◯ Circle</button>
-            <button class="modeBtn shapeTool" data-shape="line" title="Line">／ Line</button>
-            <button class="modeBtn shapeTool" data-shape="arrow" title="Arrow">↗ Arrow</button>
-            <button class="modeBtn shapeTool" data-shape="freetext" title="Text box: drag a rectangle, then type">T Text</button>
-            <button class="modeBtn shapeTool" data-shape="ink" title="Free-hand pen">✎ Pen</button>
-            <button class="modeBtn shapeTool" data-shape="stamp" title="Stamp an image: pick a file, then drag a rectangle on the page">🔖 Stamp</button>
+            <button class="modeBtn shapeTool" data-shape="rect" title="Rectangle">▭</button>
+            <button class="modeBtn shapeTool" data-shape="circle" title="Ellipse">◯</button>
+            <button class="modeBtn shapeTool" data-shape="line" title="Line">／</button>
+            <button class="modeBtn shapeTool" data-shape="arrow" title="Arrow">↗</button>
+            <button class="modeBtn shapeTool" data-shape="freetext" title="Text box: drag a rectangle, then type">T</button>
+            <button class="modeBtn shapeTool" data-shape="ink" title="Free-hand pen">✎</button>
+            <button class="modeBtn shapeTool" data-shape="stamp" title="Stamp an image: pick a file, then drag a rectangle on the page">🔖</button>
           </div>
         </div>
         <div class="groupLabel">Draw</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
-          <button id="watermarkBtn" title="Stamp a text or image watermark on every page">💧 Watermark…</button>
-          <button id="headerFooterBtn" title="Add headers / footers / page numbers">🅷 Header/Footer…</button>
+          <div class="modeGroup" role="radiogroup">
+            <button class="modeBtn shapeTool" data-shape="region" title="Save region as new PDF: drag a rectangle on the page, choose where to save">✂</button>
+          </div>
+        </div>
+        <div class="groupLabel">Region</div>
+      </div>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="watermarkBtn" title="Watermark — stamp text or image on every page">💧</button>
+          <button id="headerFooterBtn" title="Header / Footer / page numbers">🅷</button>
         </div>
         <div class="groupLabel">Layout</div>
       </div>
       <span data-ribbon="organize" id="organizeHint" class="modeHint">Drag thumbnails to reorder. Click / Ctrl+click / Shift+click to select multiple.</span>
+      <div data-ribbon="convert" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="modeGroup" role="radiogroup">
+            <button class="modeBtn active" data-conv="pdfa" title="Convert PDF files to PDF/A" type="button">📄→Ⓐ</button>
+          </div>
+        </div>
+        <div class="groupLabel">Conversion</div>
+      </div>
+      <span data-ribbon="convert" class="modeHint">Pick PDF files in the panel below, choose a level + output folder, then ✔ to convert.</span>
       <span data-ribbon="both" id="status" class="status"></span>
     </div>
   </header>
@@ -201,12 +220,29 @@ app.innerHTML = `
     <div id="mergePane" class="mergePane hidden">
       <div class="mergeHeader">
         <strong>Merge PDFs</strong>
-        <button id="mergeAddBtn" title="Pick PDF files">＋ Add files</button>
-        <button id="mergeCommitBtn" disabled title="Build merged PDF and open it">✔ Merge &amp; organize</button>
-        <button id="mergeCancelBtn" title="Cancel">✕ Cancel</button>
+        <button id="mergeAddBtn" title="Pick PDF files">＋</button>
+        <button id="mergeCommitBtn" disabled title="Build merged PDF and open it">✔</button>
+        <button id="mergeCancelBtn" title="Cancel">✕</button>
         <span class="mergeHint">Drop PDFs here or click Add. Drag tiles to reorder. Click ✔ to build.</span>
       </div>
       <div id="mergeList" class="mergeList"></div>
+    </div>
+    <div id="convertPane" class="mergePane convertPane hidden">
+      <div class="mergeHeader">
+        <strong>Convert PDF → PDF/A</strong>
+        <button id="convertAddBtn" title="Pick PDF files">＋</button>
+        <select id="convertLevel" title="PDF/A level">
+          <option value="1b">PDF/A-1b</option>
+          <option value="2b" selected>PDF/A-2b</option>
+          <option value="3b">PDF/A-3b</option>
+          <option value="4">PDF/A-4</option>
+        </select>
+        <button id="convertOutBtn" title="Pick output folder">📂</button>
+        <button id="convertCommitBtn" disabled title="Convert all files">✔</button>
+        <button id="convertCancelBtn" title="Cancel">✕</button>
+        <span id="convertOutLabel" class="mergeHint">Output: (none chosen)</span>
+      </div>
+      <div id="convertList" class="mergeList"></div>
     </div>
     <div id="searchPanel" class="searchPanel hidden">
       <input id="searchInput" placeholder="Find in document…" />
@@ -249,13 +285,15 @@ app.innerHTML = `
         </div>
         <label>Default PDF/A level
           <select id="pdfaLevel">
+            <option value="off" selected>Off (plain PDF)</option>
             <option value="1b">PDF/A-1b (ISO 19005-1)</option>
-            <option value="2b" selected>PDF/A-2b (ISO 19005-2)</option>
+            <option value="2b">PDF/A-2b (ISO 19005-2)</option>
             <option value="3b">PDF/A-3b (ISO 19005-3)</option>
             <option value="4">PDF/A-4 (ISO 19005-4)</option>
           </select>
         </label>
-        <div class="wmActions"><button id="pdfaSaveBtn">Save current PDF as PDF/A…</button><button id="gsRecheckBtn">Re-check Ghostscript</button></div>
+        <div style="font-size:0.78rem;color:#999;">When set to a level, all Save As exports and virtual-printer output are converted to that PDF/A level via Ghostscript.</div>
+        <div class="wmActions"><button id="pdfaSaveBtn">Save current PDF as PDF/A now…</button><button id="gsRecheckBtn">Re-check Ghostscript</button></div>
       </div>
       <div class="propsPanel wmPanel">
         <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">Virtual printer (Print to PDF)</h3>
@@ -337,7 +375,11 @@ style.textContent = `
   #app, .root { height: 100%; }
   .root { display:flex; flex-direction:column; }
   .ribbon { border-bottom: 1px solid #333; background:#252526; position:relative; }
-  .ribbonTabs { display:flex; gap:0; border-bottom:1px solid #2f2f2f; padding: 0 0.4rem; }
+  .ribbonTabs { display:flex; gap:0; border-bottom:1px solid #2f2f2f; padding: 0 0.4rem; align-items:center; }
+  .ribbonTab.settingsTab { margin-left:auto; padding:0.2rem 0.6rem; font-size:1rem;
+                           color:#bbb; cursor:pointer; }
+  .ribbonTab.settingsTab:hover { color:#fff; background:#333; }
+  .ribbonTab.settingsTab.active { border-bottom:none; color:#fff; }
   .ribbonTab { background:transparent; color:#bbb; border:none; padding:0.35rem 0.9rem;
                cursor:pointer; font:inherit; font-size:0.88rem; border-radius:3px 3px 0 0; }
   .ribbonTab:hover { background:#2f2f31; color:#ddd; }
@@ -350,12 +392,25 @@ style.textContent = `
   }
   .ribbonBody button:hover:not(:disabled) { background:#4a4a4a; }
   .ribbonBody button:disabled { opacity:0.4; cursor:default; }
+  .ribbonBody button.active { background:#4a8cff; color:#fff; border-color:#4a8cff; }
+  body.wheelZoomMode .viewer { cursor: grab; }
+  body.wheelZoomMode.panning .viewer { cursor: grabbing; }
+  body.wheelZoomMode .selectLayer, body.wheelZoomMode .drawLayer { pointer-events: none; }
+  body.wheelZoomMode .pageSlot, body.wheelZoomMode .pageSlot * { user-select: none; -webkit-user-select: none; }
   .ribbonBody[data-active="reader"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="reader"] > [data-ribbon="organize"] { display:none; }
+  .ribbonBody[data-active="reader"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="reader"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="edit"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="edit"] > [data-ribbon="organize"] { display:none; }
+  .ribbonBody[data-active="edit"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="edit"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="organize"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="organize"] > [data-ribbon="edit"] { display:none; }
+  .ribbonBody[data-active="organize"] > [data-ribbon="edit"],
+  .ribbonBody[data-active="organize"] > [data-ribbon="convert"] { display:none; }
+  /* Convert tab is its own page — hide everything except convert-specific groups. */
+  .ribbonBody[data-active="convert"] > [data-ribbon="reader"],
+  .ribbonBody[data-active="convert"] > [data-ribbon="edit"],
+  .ribbonBody[data-active="convert"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="convert"] > [data-ribbon="both"] { display:none; }
   .ribbonLabel { color:#888; font-size:0.85rem; margin-left:0.2rem; }
   .ribbonGroup { display:inline-flex; flex-direction:column; align-items:stretch; align-self:stretch;
                  padding: 0 0.5rem; border-right:1px solid #3a3a3a; gap: 0.15rem; }
@@ -414,7 +469,8 @@ style.textContent = `
   .outlineItem:hover { background:#333; }
   .outlineChildren { margin-left: 0.8rem; border-left:1px solid #333; padding-left:0.3rem; }
   .viewer { flex:1; overflow:auto; background:#2b2b2b; padding:1rem; }
-  .pageList { display:flex; flex-direction:column; align-items:center; gap: 1rem; }
+  body.wheelZoomMode .viewer { padding:0; }
+  .pageList { display:flex; flex-direction:column; align-items:center; gap: 1rem; box-sizing:border-box; }
   .pageList.double { flex-flow: row wrap; justify-content:center; align-content:flex-start; gap: 0.6rem 0.6rem; }
   .pageList.single > .pageSlot:not(.current) { display:none; }
   .pageSlot { position:relative; background:white; box-shadow: 0 2px 8px rgba(0,0,0,0.4); flex: 0 0 auto; }
@@ -485,7 +541,9 @@ style.textContent = `
     font-size:0.82rem; box-shadow:0 3px 10px rgba(0,0,0,0.5);
   }
   .mergePane { flex:1; display:none; flex-direction:column; background:#1e1e1e; overflow:hidden; }
-  body.merge .mergePane { display:flex; }
+  body.merge #mergePane { display:flex; }
+  body.convert #convertPane { display:flex; }
+  body.convert .viewer { display:none; }
   body.merge #viewer, body.merge #sidebar { display:none !important; }
   .mergeHeader {
     display:flex; align-items:center; gap:0.6rem;
@@ -619,7 +677,7 @@ type Slot = {
 
 let currentDoc: string | null = null;
 let currentDocPath: string | null = null;
-type RibbonTab = "reader" | "edit" | "organize";
+type RibbonTab = "reader" | "edit" | "convert" | "organize";
 type EditMode = "select" | "delete";
 let ribbonTab: RibbonTab = "reader";
 let editMode: EditMode = "select";
@@ -751,6 +809,7 @@ function rebuildSlots() {
   }
   applyViewMode();
   sizeSlots();
+  recenterScrollX();
   setupObserver();
 }
 
@@ -776,6 +835,21 @@ function sizeSlots() {
     slot.img.width = w;
     slot.img.height = h;
   }
+  // Buffer the pageList only in zoom mode so the cursor-anchored zoom always
+  // has scroll room — including when the page is smaller than the viewer.
+  // Classic mode keeps the page top-aligned in the viewer.
+  if (wheelZoomMode) {
+    const bx = Math.max(16, viewer.clientWidth);
+    const by = Math.max(16, viewer.clientHeight);
+    pageList.style.padding = `${by}px ${bx}px`;
+  } else {
+    pageList.style.padding = "";
+  }
+}
+
+function recenterScrollX() {
+  const extra = viewer.scrollWidth - viewer.clientWidth;
+  if (extra > 0) viewer.scrollLeft = extra / 2;
 }
 
 const EVICT_DIST = 10;
@@ -1072,11 +1146,12 @@ function reflow() {
   if (!currentDoc) return;
   invalidateRenders();
   sizeSlots();
+  recenterScrollX();
   if (viewMode === "single") {
     applyViewMode();
     scheduleRender(currentPage);
     const slot = slots[currentPage];
-    if (slot) slot.wrap.scrollIntoView({ block: "start" });
+    if (slot) slot.wrap.scrollIntoView({ block: "start", inline: "center" });
   } else {
     for (const [i, slot] of slots.entries()) {
       const rect = slot.wrap.getBoundingClientRect();
@@ -1121,7 +1196,7 @@ function navigateTo(idx: number, _opts: { recordHistory?: boolean } = {}) {
     scheduleRender(clamped);
   } else {
     const slot = slots[clamped];
-    if (slot) slot.wrap.scrollIntoView({ block: "start", behavior: "auto" });
+    if (slot) slot.wrap.scrollIntoView({ block: "start", inline: "center", behavior: "auto" });
     scheduleRender(clamped);
   }
   evictFarSlots();
@@ -1355,22 +1430,141 @@ function setDarkMode(on: boolean) {
 }
 document.getElementById("darkToggle")!.addEventListener("click", () => setDarkMode(!darkMode));
 
+function findSlotAtClient(clientX: number, clientY: number): { slot: Slot; idx: number } | null {
+  let best: { slot: Slot; idx: number; dist: number } | null = null;
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    if (!s) continue;
+    const r = s.wrap.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) continue;
+    if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+      return { slot: s, idx: i };
+    }
+    const cx = (r.left + r.right) / 2;
+    const cy = (r.top + r.bottom) / 2;
+    const d = Math.hypot(clientX - cx, clientY - cy);
+    if (!best || d < best.dist) best = { slot: s, idx: i, dist: d };
+  }
+  return best ? { slot: best.slot, idx: best.idx } : null;
+}
+
+function applyZoomAround(newZoom: number, clientX: number, clientY: number) {
+  if (!currentDoc) return;
+  const clamped = clampZoom(newZoom);
+  if (clamped === zoom) return;
+  const anchor = findSlotAtClient(clientX, clientY);
+  let fx = 0.5, fy = 0.5;
+  let anchorSlot: Slot | null = null;
+  if (anchor) {
+    const r = anchor.slot.wrap.getBoundingClientRect();
+    fx = (clientX - r.left) / r.width;
+    fy = (clientY - r.top) / r.height;
+    anchorSlot = anchor.slot;
+  }
+  fitMode = "custom";
+  fitSelect.value = "custom";
+  zoom = clamped;
+  invalidateRenders();
+  sizeSlots();
+  if (viewMode === "single") {
+    applyViewMode();
+    scheduleRender(currentPage);
+  } else {
+    for (const [i, slot] of slots.entries()) {
+      const rect = slot.wrap.getBoundingClientRect();
+      const vRect = viewer.getBoundingClientRect();
+      const visible = rect.bottom > vRect.top - 400 && rect.top < vRect.bottom + 400;
+      if (visible) scheduleRender(i);
+    }
+  }
+  if (anchorSlot) {
+    const nr = anchorSlot.wrap.getBoundingClientRect();
+    const wantedLeft = clientX - nr.width * fx;
+    const wantedTop = clientY - nr.height * fy;
+    viewer.scrollLeft += nr.left - wantedLeft;
+    viewer.scrollTop += nr.top - wantedTop;
+  }
+  updateChrome();
+}
+
+let wheelZoomMode = false;
+function setWheelZoomMode(on: boolean) {
+  wheelZoomMode = on;
+  document.body.classList.toggle("wheelZoomMode", on);
+  if (!on) document.body.classList.remove("panning");
+  const btn = document.getElementById("wheelZoomBtn");
+  if (btn) btn.classList.toggle("active", on);
+  if (currentDoc) {
+    sizeSlots();
+    const slot = slots[currentPage];
+    if (slot) {
+      slot.wrap.scrollIntoView({ block: "start", inline: "center" });
+    } else if (on) {
+      recenterScrollX();
+    }
+  }
+}
+document.getElementById("wheelZoomBtn")!.addEventListener("click", () => {
+  setWheelZoomMode(!wheelZoomMode);
+});
+
+type PanState = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startScrollLeft: number;
+  startScrollTop: number;
+};
+let panState: PanState | null = null;
+
+viewer.addEventListener("pointerdown", (e: PointerEvent) => {
+  if (!wheelZoomMode) return;
+  if (e.button !== 0) return;
+  e.preventDefault();
+  panState = {
+    pointerId: e.pointerId,
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+    startScrollLeft: viewer.scrollLeft,
+    startScrollTop: viewer.scrollTop,
+  };
+  viewer.setPointerCapture(e.pointerId);
+  document.body.classList.add("panning");
+});
+
+viewer.addEventListener("pointermove", (e: PointerEvent) => {
+  if (!panState || e.pointerId !== panState.pointerId) return;
+  viewer.scrollLeft = panState.startScrollLeft - (e.clientX - panState.startClientX);
+  viewer.scrollTop = panState.startScrollTop - (e.clientY - panState.startClientY);
+});
+
+function endPan(e: PointerEvent) {
+  if (!panState || e.pointerId !== panState.pointerId) return;
+  try { viewer.releasePointerCapture(panState.pointerId); } catch { /* ignore */ }
+  panState = null;
+  document.body.classList.remove("panning");
+}
+viewer.addEventListener("pointerup", endPan);
+viewer.addEventListener("pointercancel", endPan);
+
 viewer.addEventListener(
   "wheel",
   (e: WheelEvent) => {
     if (!currentDoc) return;
-    if (e.ctrlKey) {
+    if (e.ctrlKey || wheelZoomMode) {
       e.preventDefault();
-      fitMode = "custom";
-      fitSelect.value = "custom";
-      const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      zoom = clampZoom(zoom + delta);
-      reflow();
+      const step = e.ctrlKey ? 0.1 : 0.15;
+      const delta = e.deltaY > 0 ? -step : step;
+      applyZoomAround(zoom + delta, e.clientX, e.clientY);
       return;
     }
     if (viewMode !== "single") return;
-    const atTop = viewer.scrollTop <= 0;
-    const atBottom = viewer.scrollTop + viewer.clientHeight >= viewer.scrollHeight - 1;
+    const cs = getComputedStyle(pageList);
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const padBottom = parseFloat(cs.paddingBottom) || 0;
+    const atTop = viewer.scrollTop <= padTop + 1;
+    const atBottom =
+      viewer.scrollTop + viewer.clientHeight >= viewer.scrollHeight - padBottom - 1;
     if (e.deltaY < 0 && atTop && currentPage > 0) {
       e.preventDefault();
       goToPage(currentPage - 1);
@@ -1903,6 +2097,20 @@ async function triggerSaveAs() {
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (!dest || typeof dest !== "string") return;
+  const level = pdfaLevelEl?.value ?? "off";
+  if (level !== "off") {
+    setStatus(`Saving as PDF/A-${level}…`);
+    try {
+      const label = await invoke<string>("save_as_pdfa", {
+        document: currentDoc,
+        args: { path: dest, level },
+      });
+      setStatus(`Saved as ${label}: ${dest}`);
+    } catch (e) {
+      setStatus(`PDF/A save error: ${e}`);
+    }
+    return;
+  }
   setStatus(`Saving to ${dest}…`);
   try {
     await invoke("save_pdf_as", { document: currentDoc, path: dest });
@@ -1935,7 +2143,10 @@ function setRibbonTab(tab: RibbonTab) {
     el.classList.toggle("active", (el as HTMLElement).dataset.ribbonTab === tab);
   });
   const wasOrganize = document.body.classList.contains("organize");
+  const wasConvert = document.body.classList.contains("convert");
   if (mergeMode && tab !== "organize") exitMergeMode();
+  if (tab !== "convert" && wasConvert) exitConvertMode();
+  if (tab === "convert" && !wasConvert) enterConvertMode();
   document.body.classList.toggle("organize", tab === "organize");
   if (tab === "organize") {
     // Show sidebar so the full-width thumbs grid is visible.
@@ -1945,8 +2156,8 @@ function setRibbonTab(tab: RibbonTab) {
     setEditMode("select");
     clearSelection();
   }
-  // Viewer was hidden during organize so fit-mode zoom is stale — recompute.
-  if (wasOrganize && tab !== "organize" && currentDoc) {
+  // Viewer was hidden during organize/convert so fit-mode zoom is stale — recompute.
+  if ((wasOrganize || wasConvert) && tab !== "organize" && tab !== "convert" && currentDoc) {
     requestAnimationFrame(() => reflow());
   }
 }
@@ -2207,6 +2418,115 @@ async function runSplitPdf() {
 
 // ---------- Merge workspace ----------
 type MergeFile = { path: string; name: string };
+
+// ----------------- Convert pane (PDF → PDF/A) -----------------
+
+let convertFiles: MergeFile[] = [];
+let convertOutDir: string | null = null;
+const convertPane = document.getElementById("convertPane") as HTMLDivElement;
+const convertList = document.getElementById("convertList") as HTMLDivElement;
+const convertCommitBtn = document.getElementById("convertCommitBtn") as HTMLButtonElement;
+const convertLevelEl = document.getElementById("convertLevel") as HTMLSelectElement;
+const convertOutLabel = document.getElementById("convertOutLabel") as HTMLSpanElement;
+
+function enterConvertMode() {
+  document.body.classList.add("convert");
+  // Seed the level dropdown with the current default if it isn't "off".
+  if (pdfaLevelEl && pdfaLevelEl.value !== "off") convertLevelEl.value = pdfaLevelEl.value;
+  renderConvertList();
+  updateConvertOutLabel();
+}
+function exitConvertMode() {
+  document.body.classList.remove("convert");
+  convertFiles = [];
+  renderConvertList();
+}
+function renderConvertList() {
+  convertList.innerHTML = "";
+  if (convertFiles.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "mergeEmpty";
+    empty.textContent = "No files yet. Click ＋ to add PDFs to convert.";
+    convertList.appendChild(empty);
+  } else {
+    convertFiles.forEach((f, i) => {
+      const tile = document.createElement("div");
+      tile.className = "mergeTile";
+      tile.dataset.idx = String(i);
+      tile.innerHTML = `
+        <span class="mergeIndex">${i + 1}</span>
+        <button class="mergeRemove" title="Remove" data-idx="${i}">✕</button>
+        <div class="mergeName">${f.name}</div>
+        <div class="mergePath">${f.path}</div>`;
+      convertList.appendChild(tile);
+    });
+  }
+  convertCommitBtn.disabled = convertFiles.length === 0 || !convertOutDir;
+}
+function updateConvertOutLabel() {
+  convertOutLabel.textContent = convertOutDir
+    ? `Output: ${convertOutDir}`
+    : "Output: (none chosen — pick an output folder)";
+}
+function addConvertPaths(paths: string[]) {
+  const pdfs = paths.filter((p) => /\.pdf$/i.test(p));
+  for (const p of pdfs) {
+    if (convertFiles.some((f) => f.path === p)) continue;
+    convertFiles.push({ path: p, name: fileNameFromPath(p) });
+  }
+  renderConvertList();
+}
+
+document.getElementById("convertAddBtn")!.addEventListener("click", async () => {
+  const picked = await open({
+    multiple: true,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!picked) return;
+  addConvertPaths(Array.isArray(picked) ? picked : [picked]);
+});
+document.getElementById("convertOutBtn")!.addEventListener("click", async () => {
+  const picked = await open({ directory: true, multiple: false, title: "Pick output folder" });
+  if (!picked || typeof picked !== "string") return;
+  convertOutDir = picked;
+  updateConvertOutLabel();
+  renderConvertList();
+});
+document.getElementById("convertCancelBtn")!.addEventListener("click", () => setRibbonTab("reader"));
+convertList.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest(".mergeRemove") as HTMLElement | null;
+  if (!btn) return;
+  const idx = parseInt(btn.dataset.idx || "-1", 10);
+  if (idx < 0) return;
+  convertFiles.splice(idx, 1);
+  renderConvertList();
+});
+convertCommitBtn.addEventListener("click", async () => {
+  if (convertFiles.length === 0 || !convertOutDir) return;
+  const paths = convertFiles.map((f) => f.path);
+  const level = convertLevelEl.value;
+  setStatus(`Converting ${paths.length} file${paths.length === 1 ? "" : "s"} to PDF/A-${level}…`);
+  try {
+    type ConvertResult = { files: string[]; failed: string[] };
+    const res = await invoke<ConvertResult>("convert_files_to_pdfa", {
+      paths,
+      outDir: convertOutDir,
+      level,
+    });
+    const okCount = res.files.length;
+    const failCount = res.failed.length;
+    if (failCount > 0) {
+      setStatus(`Converted ${okCount}/${paths.length}. Failed: ${res.failed.map(fileNameFromPath).join(", ")}`);
+    } else {
+      setStatus(`Converted ${okCount} file${okCount === 1 ? "" : "s"} → ${convertOutDir}`);
+    }
+    convertFiles = [];
+    renderConvertList();
+  } catch (e) {
+    setStatus(`Convert error: ${e}`);
+  }
+});
+
 let mergeMode = false;
 let mergeFiles: MergeFile[] = [];
 const mergePane = document.getElementById("mergePane") as HTMLDivElement;
@@ -2613,12 +2933,15 @@ const gsInstallEl = document.getElementById("gsInstall") as HTMLDivElement;
 const pdfaLevelEl = document.getElementById("pdfaLevel") as HTMLSelectElement;
 let gsInfo: GhostscriptInfo = { available: false, path: null, version: null };
 
-try {
-  const saved = localStorage.getItem("pdfaLevel");
-  if (saved && ["1b", "2b", "3b", "4"].includes(saved)) pdfaLevelEl.value = saved;
-} catch {}
+async function loadDefaultPdfa() {
+  try {
+    const v = await invoke<string>("get_default_pdfa");
+    if (["off", "1b", "2b", "3b", "4"].includes(v)) pdfaLevelEl.value = v;
+  } catch {}
+}
+void loadDefaultPdfa();
 pdfaLevelEl.addEventListener("change", () => {
-  try { localStorage.setItem("pdfaLevel", pdfaLevelEl.value); } catch {}
+  void invoke("set_default_pdfa", { level: pdfaLevelEl.value }).catch(() => {});
 });
 
 async function refreshGhostscript() {
@@ -2641,7 +2964,7 @@ async function refreshGhostscript() {
 }
 void refreshGhostscript();
 
-document.getElementById("settingsBtn")!.addEventListener("click", () => {
+document.getElementById("settingsBtnTop")!.addEventListener("click", () => {
   settingsOverlay.classList.remove("hidden");
   void refreshGhostscript();
   void refreshVirtualPrinter();
@@ -2663,7 +2986,7 @@ async function runSaveAsPdfa() {
     setStatus("Ghostscript required — install it first");
     return;
   }
-  const level = pdfaLevelEl.value;
+  const level = pdfaLevelEl.value === "off" ? "2b" : pdfaLevelEl.value;
   const base = currentDocPath
     ? currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
     : "document";
@@ -3072,7 +3395,7 @@ getCurrentWebview()
 // ----------------- Annotation tools (markup + shapes) -----------------
 
 type MarkupKind = "highlight" | "underline" | "strikeout";
-type ShapeKindUi = "rect" | "circle" | "line" | "arrow" | "freetext" | "ink" | "stamp";
+type ShapeKindUi = "rect" | "circle" | "line" | "arrow" | "freetext" | "ink" | "stamp" | "region";
 let annotTool: MarkupKind | null = null;
 let shapeTool: ShapeKindUi | null = null;
 let stampImagePath: string | null = null;
@@ -3261,10 +3584,10 @@ function ensureDrawLayerViewBox(slot: Slot) {
 
 function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
   const ns = "http://www.w3.org/2000/svg";
-  if (kind === "rect" || kind === "freetext" || kind === "stamp") {
+  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region") {
     const el = document.createElementNS(ns, "rect");
-    el.setAttribute("fill", "none");
-    el.setAttribute("stroke", color);
+    el.setAttribute("fill", kind === "region" ? "rgba(74,140,255,0.12)" : "none");
+    el.setAttribute("stroke", kind === "region" ? "#4a8cff" : color);
     el.setAttribute("stroke-width", "2");
     if (kind !== "rect") el.setAttribute("stroke-dasharray", "5 4");
     return el;
@@ -3305,7 +3628,7 @@ function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
 }
 
 function updatePreview(kind: ShapeKindUi, el: SVGElement, s: { x: number; y: number }, c: { x: number; y: number }) {
-  if (kind === "rect" || kind === "freetext" || kind === "stamp") {
+  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region") {
     const r = el as SVGRectElement;
     const x = Math.min(s.x, c.x), y = Math.min(s.y, c.y);
     const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
@@ -3475,6 +3798,39 @@ document.addEventListener("pointerup", async (ev) => {
   const start = imagePxToPagePt(ds.slot, ds.pageIdx, sx.x, sx.y);
   const end = imagePxToPagePt(ds.slot, ds.pageIdx, cx.x, cx.y);
   if (!start || !end) return;
+
+  if (tool === "region") {
+    const rect: RectPt = {
+      x0: Math.min(start.x, end.x),
+      y0: Math.min(start.y, end.y),
+      x1: Math.max(start.x, end.x),
+      y1: Math.max(start.y, end.y),
+    };
+    if (rect.x1 - rect.x0 < 1 || rect.y1 - rect.y0 < 1) return;
+    const base = currentDocPath
+      ? currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
+      : "document";
+    const defaultName = `${base}_page_${ds.pageIdx + 1}_region.pdf`;
+    const path = await save({
+      title: "Save region as…",
+      defaultPath: defaultName,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (!path || typeof path !== "string") return;
+    setStatus("Saving region…");
+    try {
+      await invoke("save_region", {
+        document: currentDoc,
+        page: ds.pageIdx,
+        rect,
+        path,
+      });
+      setStatus(`Region saved → ${path}`);
+    } catch (e) {
+      setStatus(`Region error: ${e}`);
+    }
+    return;
+  }
 
   if (tool === "freetext") {
     let rectPx = {

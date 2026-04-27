@@ -1,10 +1,23 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 pub const PRINTER_NAME: &str = "rustpdf";
+
+static PDFA_LEVEL: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set the default PDF/A level applied to virtual-printer output.
+/// `level` is one of `"1b" | "2b" | "3b" | "4"`. `None` disables PDF/A.
+pub fn set_pdfa_default(level: Option<String>) {
+    *PDFA_LEVEL.lock().unwrap() = level;
+}
+
+pub fn pdfa_default() -> Option<String> {
+    PDFA_LEVEL.lock().unwrap().clone()
+}
 
 pub fn spool_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
@@ -156,11 +169,19 @@ fn process_one(app: &AppHandle, ps: &Path) {
         }
     };
 
-    let status = std::process::Command::new(&gs)
-        .args(["-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=pdfwrite"])
-        .arg(format!("-sOutputFile={}", out_pdf.display()))
-        .arg(&work)
-        .status();
+    let mut cmd = std::process::Command::new(&gs);
+    cmd.args(["-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=pdfwrite"]);
+    if let Some(level) = pdfa_default() {
+        if let Ok((val, _)) = crate::pdfa_flags_for(&level) {
+            cmd.arg(format!("-dPDFA={val}"));
+            cmd.arg("-dPDFACompatibilityPolicy=1");
+            cmd.arg("-sColorConversionStrategy=RGB");
+            cmd.arg("-sProcessColorModel=DeviceRGB");
+        }
+    }
+    cmd.arg(format!("-sOutputFile={}", out_pdf.display()));
+    cmd.arg(&work);
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() => {
             let _ = std::fs::remove_file(&work);
