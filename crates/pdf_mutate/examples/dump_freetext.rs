@@ -61,6 +61,7 @@ fn main() {
         font_size: 14.0,
         opacity: 1.0,
         author: None,
+        print: true,
     };
     mdoc.add_freetext_annotation(0, &annot).unwrap();
     let out = mdoc.to_bytes().unwrap();

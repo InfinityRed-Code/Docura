@@ -83,20 +83,20 @@ Archivierung (PDF/A) und systemweiter Print-to-PDF — das PDF24/Adobe-Kernstüc
 
 ---
 
-## Meilenstein v0.5 — "Annotation" *(aktuelles Ziel)*
+## Meilenstein v0.5 — "Annotation" ✅
 
 Herzstück der Reviewer-Workflows.
 
 - [x] Textmarker (Highlight) mit Farbwahl [E + X: lopdf]
 - [x] Unterstrich / Durchstrich [E + X: lopdf]
-- [ ] Notizzettel (Sticky Notes) mit Kommentar-Popup [X: lopdf]
+- [x] Notizzettel (Sticky Notes) mit Kommentar-Popup [X: lopdf]
 - [x] Freihand-Zeichnen (Ink Annotation) [X: lopdf]
 - [x] Formen: Rechteck, Kreis, Linie, Pfeil [X: lopdf]
 - [x] Textfeld-Annotation (Freitext auf Seite) [X: lopdf]
 - [x] Stempel (Bild-Stempel via Form-XObject) [X: lopdf]
-- [ ] Kommentar-Panel rechts mit Thread + Filter [U]
-- [ ] Annotationen exportieren / importieren (FDF/XFDF) [X: neuer Crate fdf]
-- [ ] Annotationen drucken/nicht drucken Flag [C][U]
+- [x] Kommentar-Panel rechts mit Thread + Filter [U]
+- [x] Annotationen exportieren / importieren (XFDF) [X: hand-rolled]
+- [x] Annotationen drucken/nicht drucken Flag [C][U]
 
 ---
 

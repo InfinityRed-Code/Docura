@@ -46,6 +46,13 @@ pub struct MarkupAnnotation {
     pub contents: Option<String>,
     /// Optional author / title bar of the popup.
     pub author: Option<String>,
+    /// PDF /F bit 2 (Print). True = annotation included in print output.
+    pub print: bool,
+}
+
+// PDF 1.7 §12.5.3 annotation flags. We only toggle Print (bit 2 = value 4).
+fn annot_flags(print: bool) -> i64 {
+    if print { 4 } else { 0 }
 }
 
 fn page_height_pt(doc: &Document, page_id: ObjectId) -> f32 {
@@ -217,7 +224,7 @@ pub fn add_markup_annotation(
         ]),
     );
     adict.set("CA", Object::Real(opacity));
-    adict.set("F", Object::Integer(4)); // Print flag set, hidden cleared.
+    adict.set("F", Object::Integer(annot_flags(annot.print)));
     adict.set(
         "NM",
         Object::String(random_nm().into_bytes(), lopdf::StringFormat::Literal),
@@ -296,6 +303,7 @@ fn base_annot_dict(
     opacity: f32,
     contents: Option<&str>,
     author: Option<&str>,
+    print: bool,
 ) -> Dictionary {
     let mut d = Dictionary::new();
     d.set("Type", Object::Name(b"Annot".to_vec()));
@@ -318,7 +326,7 @@ fn base_annot_dict(
         ]),
     );
     d.set("CA", Object::Real(opacity.clamp(0.0, 1.0)));
-    d.set("F", Object::Integer(4));
+    d.set("F", Object::Integer(annot_flags(print)));
     d.set(
         "NM",
         Object::String(random_nm().into_bytes(), lopdf::StringFormat::Literal),
@@ -412,6 +420,7 @@ pub struct ShapeAnnotation {
     pub opacity: f32,
     pub contents: Option<String>,
     pub author: Option<String>,
+    pub print: bool,
 }
 
 pub fn add_shape_annotation(
@@ -456,6 +465,7 @@ pub fn add_shape_annotation(
         annot.opacity,
         annot.contents.as_deref(),
         annot.author.as_deref(),
+        annot.print,
     );
 
     // Border style.
@@ -583,6 +593,7 @@ pub struct FreeTextAnnotation {
     pub font_size: f32,
     pub opacity: f32,
     pub author: Option<String>,
+    pub print: bool,
 }
 
 /// Ensures the document catalog has an /AcroForm /DR /Font /Helv entry pointing
@@ -688,6 +699,7 @@ pub fn add_freetext_annotation(
         annot.opacity,
         Some(annot.text.as_str()),
         annot.author.as_deref(),
+        annot.print,
     );
 
     let fs = annot.font_size.max(4.0);
@@ -796,6 +808,7 @@ pub struct InkAnnotation {
     pub opacity: f32,
     pub contents: Option<String>,
     pub author: Option<String>,
+    pub print: bool,
 }
 
 pub fn add_ink_annotation(
@@ -841,6 +854,7 @@ pub fn add_ink_annotation(
         annot.opacity,
         annot.contents.as_deref(),
         annot.author.as_deref(),
+        annot.print,
     );
     let mut bs = Dictionary::new();
     bs.set("Type", Object::Name(b"Border".to_vec()));
@@ -864,6 +878,7 @@ pub struct StampAnnotation {
     pub opacity: f32,
     pub contents: Option<String>,
     pub author: Option<String>,
+    pub print: bool,
 }
 
 pub fn add_stamp_annotation(
@@ -938,10 +953,65 @@ pub fn add_stamp_annotation(
         annot.opacity,
         annot.contents.as_deref(),
         annot.author.as_deref(),
+        annot.print,
     );
     let mut ap = Dictionary::new();
     ap.set("N", Object::Reference(form_id));
     d.set("AP", Object::Dictionary(ap));
+
+    let annot_id = doc.add_object(Object::Dictionary(d));
+    append_annot_to_page(doc, page_id, annot_id)?;
+    Ok(annot_id)
+}
+
+// ----------------- Text note (sticky note) annotation -----------------
+
+#[derive(Clone, Debug)]
+pub struct TextNoteAnnotation {
+    /// Top-origin anchor: top-left corner of the note icon (PDF points).
+    pub x_pt: f32,
+    pub y_pt: f32,
+    pub contents: String,
+    /// RGB icon color 0..1.
+    pub color: [f32; 3],
+    /// Standard PDF /Name icon: "Note" | "Comment" | "Help" | "Insert" |
+    /// "Key" | "NewParagraph" | "Paragraph". Defaults to "Note".
+    pub icon: Option<String>,
+    pub author: Option<String>,
+    pub print: bool,
+}
+
+/// Sticky-note icon size — matches Acrobat (~22pt square).
+const TEXT_NOTE_ICON_SIZE_PT: f32 = 22.0;
+
+pub fn add_text_note_annotation(
+    doc: &mut Document,
+    page_index: u32,
+    annot: &TextNoteAnnotation,
+) -> MutateResult<ObjectId> {
+    if annot.contents.trim().is_empty() {
+        return Err(MutateError::Parse("text note: empty contents".into()));
+    }
+    let page_id = page_id_for(doc, page_index)?;
+    let page_h = page_height_pt(doc, page_id);
+    let llx = annot.x_pt;
+    let ury = page_h - annot.y_pt;
+    let urx = llx + TEXT_NOTE_ICON_SIZE_PT;
+    let lly = ury - TEXT_NOTE_ICON_SIZE_PT;
+
+    let mut d = base_annot_dict(
+        page_id,
+        "Text",
+        (llx, lly, urx, ury),
+        annot.color,
+        1.0,
+        Some(annot.contents.as_str()),
+        annot.author.as_deref(),
+        annot.print,
+    );
+    let icon = annot.icon.as_deref().unwrap_or("Note");
+    d.set("Name", Object::Name(icon.as_bytes().to_vec()));
+    d.set("Open", Object::Boolean(false));
 
     let annot_id = doc.add_object(Object::Dictionary(d));
     append_annot_to_page(doc, page_id, annot_id)?;

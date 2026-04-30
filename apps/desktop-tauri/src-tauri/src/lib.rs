@@ -14,8 +14,9 @@ use pdf_cache::{CacheKey, CachedImage, RenderCache};
 use pdf_core::{CoreError, PdfEngine, RenderRequest};
 use pdf_pdfium::PdfiumEngine;
 use pdf_types::{
-    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode, PageIndex, PageLink,
-    PageSize, RecentFile, RectPt, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
+    AnnotationInfo, AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode,
+    PageIndex, PageLink, PageSize, RecentFile, RectPt, Rotation, SearchHit, SearchQuery, TextRun,
+    ZoomLevel,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -1014,10 +1015,13 @@ struct AnnotationArgs {
     contents: Option<String>,
     #[serde(default)]
     author: Option<String>,
+    #[serde(default = "default_print_flag")]
+    print: bool,
 }
 fn default_markup_kind() -> String { "highlight".into() }
 fn default_markup_color() -> [f32; 3] { [1.0, 0.95, 0.0] }
 fn default_markup_opacity() -> f32 { 0.4 }
+fn default_print_flag() -> bool { true }
 
 fn parse_markup_kind(s: &str) -> pdf_mutate::MarkupKind {
     match s.to_ascii_lowercase().as_str() {
@@ -1049,6 +1053,7 @@ async fn add_annotation(
             opacity: args.opacity,
             contents: args.contents,
             author: args.author,
+            print: args.print,
         };
         mdoc.add_markup_annotation(args.page, &annot)
             .map_err(|e| e.to_string())?;
@@ -1089,6 +1094,8 @@ struct ShapeArgs {
     contents: Option<String>,
     #[serde(default)]
     author: Option<String>,
+    #[serde(default = "default_print_flag")]
+    print: bool,
 }
 fn default_shape_stroke() -> [f32; 3] { [0.85, 0.1, 0.1] }
 fn default_shape_border_width() -> f32 { 1.5 }
@@ -1127,6 +1134,7 @@ async fn add_shape(
             opacity: args.opacity,
             contents: args.contents,
             author: args.author,
+            print: args.print,
         };
         mdoc.add_shape_annotation(args.page, &annot)
             .map_err(|e| e.to_string())?;
@@ -1159,6 +1167,8 @@ struct FreeTextArgs {
     opacity: f32,
     #[serde(default)]
     author: Option<String>,
+    #[serde(default = "default_print_flag")]
+    print: bool,
 }
 fn default_freetext_color() -> [f32; 3] { [0.0, 0.0, 0.0] }
 fn default_freetext_size() -> f32 { 14.0 }
@@ -1184,6 +1194,7 @@ async fn add_freetext(
             font_size: args.font_size,
             opacity: args.opacity,
             author: args.author,
+            print: args.print,
         };
         mdoc.add_freetext_annotation(args.page, &annot)
             .map_err(|e| e.to_string())?;
@@ -1218,6 +1229,8 @@ struct InkArgs {
     author: Option<String>,
     #[serde(default)]
     contents: Option<String>,
+    #[serde(default = "default_print_flag")]
+    print: bool,
 }
 fn default_ink_color() -> [f32; 3] { [0.95, 0.1, 0.1] }
 fn default_ink_width() -> f32 { 1.6 }
@@ -1257,6 +1270,7 @@ async fn add_ink(
             opacity: args.opacity,
             contents: args.contents,
             author: args.author,
+            print: args.print,
         };
         mdoc.add_ink_annotation(args.page, &annot)
             .map_err(|e| e.to_string())?;
@@ -1287,6 +1301,8 @@ struct StampArgs {
     contents: Option<String>,
     #[serde(default)]
     author: Option<String>,
+    #[serde(default = "default_print_flag")]
+    print: bool,
 }
 
 #[tauri::command]
@@ -1309,6 +1325,7 @@ async fn add_stamp(
             opacity: args.opacity,
             contents: args.contents,
             author: args.author,
+            print: args.print,
         };
         mdoc.add_stamp_annotation(args.page, &annot)
             .map_err(|e| e.to_string())?;
@@ -1319,6 +1336,134 @@ async fn add_stamp(
     .await
     .map_err(|e| e.to_string())??;
 
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[derive(Deserialize)]
+struct TextNoteArgs {
+    page: u32,
+    /// Anchor point (top-origin, PDF points) — top-left of the icon.
+    x_pt: f32,
+    y_pt: f32,
+    contents: String,
+    #[serde(default = "default_textnote_color")]
+    color: [f32; 3],
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default = "default_print_flag")]
+    print: bool,
+}
+fn default_textnote_color() -> [f32; 3] { [1.0, 0.93, 0.25] }
+
+#[tauri::command]
+async fn add_text_note(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: TextNoteArgs,
+) -> Result<DocSnapshot, String> {
+    if args.contents.trim().is_empty() {
+        return Err("text note: empty contents".into());
+    }
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let annot = pdf_mutate::TextNoteAnnotation {
+            x_pt: args.x_pt,
+            y_pt: args.y_pt,
+            contents: args.contents,
+            color: args.color,
+            icon: args.icon,
+            author: args.author,
+            print: args.print,
+        };
+        mdoc.add_text_note_annotation(args.page, &annot)
+            .map_err(|e| e.to_string())?;
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("add_text_note page={}: {:?}", args.page, t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[tauri::command]
+async fn list_annotations(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<Vec<AnnotationInfo>, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<AnnotationInfo>, String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        Ok(mdoc.list_annotations())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn export_annotations_xfdf(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+) -> Result<usize, String> {
+    let engine = state.engine.clone();
+    let xml = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        mdoc.export_xfdf(None).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let len = xml.len();
+    tokio::fs::write(&path, &xml)
+        .await
+        .map_err(|e| format!("write {path}: {e}"))?;
+    Ok(len)
+}
+
+#[tauri::command]
+async fn import_annotations_xfdf(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+) -> Result<DocSnapshot, String> {
+    let xml = tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("read {path}: {e}"))?;
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes, count) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>, usize), String> {
+            let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+            let mut mdoc =
+                pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            let n = mdoc.import_xfdf(&xml).map_err(|e| e.to_string())?;
+            let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+            Ok((bytes, out, n))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    if count == 0 {
+        return Err("xfdf: no importable annotations".into());
+    }
     state.cache.lock().remove_document(document);
     let engine = state.engine.clone();
     tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
@@ -1975,6 +2120,10 @@ pub fn run() {
             add_freetext,
             add_ink,
             add_stamp,
+            add_text_note,
+            list_annotations,
+            export_annotations_xfdf,
+            import_annotations_xfdf,
             check_ghostscript,
             save_as_pdfa,
             convert_files_to_pdfa,

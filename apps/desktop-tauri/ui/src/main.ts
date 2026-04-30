@@ -62,6 +62,7 @@ app.innerHTML = `
     </div>
     <div class="ribbonBody" data-active="reader">
       <button data-ribbon="both" id="sidebarBtn" title="Toggle sidebar (F4)">☰</button>
+      <button data-ribbon="both" id="commentToggleBtn" title="Toggle comment panel (F7)">💬</button>
       <button data-ribbon="both" id="open" title="Open (Ctrl+O)">📂</button>
       <button data-ribbon="both" id="recentBtn" title="Recent files">🕘</button>
       <div id="recentMenu" class="menu hidden"></div>
@@ -158,6 +159,7 @@ app.innerHTML = `
             <button class="modeBtn annotTool" data-annot="strikeout" title="Strike through selected text">S̶</button>
           </div>
           <input type="color" id="annotColor" value="#ffe600" title="Annotation color" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
+          <button class="modeBtn active" id="printToggleBtn" title="Include new annotations when printing (toggle)">🖨</button>
         </div>
         <div class="groupLabel">Text Decoration</div>
       </div>
@@ -171,6 +173,7 @@ app.innerHTML = `
             <button class="modeBtn shapeTool" data-shape="freetext" title="Text box: drag a rectangle, then type">T</button>
             <button class="modeBtn shapeTool" data-shape="ink" title="Free-hand pen">✎</button>
             <button class="modeBtn shapeTool" data-shape="stamp" title="Stamp an image: pick a file, then drag a rectangle on the page">🔖</button>
+            <button class="modeBtn shapeTool" data-shape="note" title="Sticky note: click on the page, then type a comment">📝</button>
           </div>
         </div>
         <div class="groupLabel">Draw</div>
@@ -217,6 +220,33 @@ app.innerHTML = `
     <div id="viewer" class="viewer">
       <div id="pageList" class="pageList"></div>
     </div>
+    <aside id="commentPanel" class="commentPanel hidden">
+      <div class="commentHeader">
+        <strong>Comments</strong>
+        <button id="commentReloadBtn" title="Refresh">↻</button>
+        <button id="commentExportBtn" title="Export annotations as XFDF">⤓</button>
+        <button id="commentImportBtn" title="Import annotations from XFDF">⤒</button>
+        <button id="commentCloseBtn" class="propsClose" title="Close">✕</button>
+      </div>
+      <div class="commentFilters">
+        <select id="commentKindFilter">
+          <option value="">All kinds</option>
+          <option value="Highlight">Highlight</option>
+          <option value="Underline">Underline</option>
+          <option value="StrikeOut">Strikeout</option>
+          <option value="Square">Rectangle</option>
+          <option value="Circle">Circle</option>
+          <option value="Line">Line</option>
+          <option value="Ink">Ink</option>
+          <option value="FreeText">Text box</option>
+          <option value="Stamp">Stamp</option>
+          <option value="Text">Sticky</option>
+        </select>
+        <input id="commentAuthorFilter" placeholder="Author…" />
+        <label class="commentChk"><input type="checkbox" id="commentHasContent" /> with comment</label>
+      </div>
+      <div id="commentList" class="commentList"></div>
+    </aside>
     <div id="mergePane" class="mergePane hidden">
       <div class="mergeHeader">
         <strong>Merge PDFs</strong>
@@ -449,6 +479,26 @@ style.textContent = `
   .body { flex:1; display:flex; min-height: 0; position:relative; }
   .sidebar { width: 200px; background:#252526; border-right:1px solid #333; display:flex; flex-direction:column; min-height:0; }
   .sidebar.hidden { display:none; }
+  .commentPanel { width: 300px; background:#252526; border-left:1px solid #333; display:flex; flex-direction:column; min-height:0; }
+  .commentPanel.hidden { display:none; }
+  .commentHeader { display:flex; gap:0.3rem; align-items:center; padding:0.4rem 0.5rem; border-bottom:1px solid #333; }
+  .commentHeader strong { flex:1; }
+  .commentHeader button { background:#3a3a3a; color:#ddd; border:1px solid #4a4a4a; border-radius:3px; padding:0.15rem 0.4rem; cursor:pointer; font-size:0.85rem; }
+  .commentHeader button:hover { background:#4a4a4a; }
+  .commentFilters { display:flex; flex-direction:column; gap:0.25rem; padding:0.35rem 0.5rem; border-bottom:1px solid #333; font-size:0.8rem; }
+  .commentFilters select, .commentFilters input[type=text] { background:#3a3a3a; color:#ddd; border:1px solid #555; padding:0.15rem 0.3rem; font-size:0.8rem; }
+  .commentChk { display:flex; align-items:center; gap:0.25rem; color:#bbb; }
+  .commentList { flex:1; overflow:auto; padding:0.3rem; }
+  .commentGroup { margin-bottom:0.5rem; }
+  .commentGroupHead { font-size:0.78rem; color:#888; padding:0.2rem 0.3rem; text-transform:uppercase; letter-spacing:0.5px; }
+  .commentItem { padding:0.4rem 0.5rem; border:1px solid #333; border-radius:3px; margin-bottom:0.3rem; cursor:pointer; background:#2a2a2b; }
+  .commentItem:hover { background:#333; border-color:#4a4a4a; }
+  .commentItem .row1 { display:flex; gap:0.3rem; align-items:center; font-size:0.78rem; color:#aaa; }
+  .commentItem .row1 .kind { font-weight:bold; color:#ddd; }
+  .commentItem .row1 .author { color:#88c; }
+  .commentItem .row1 .date { margin-left:auto; color:#777; font-size:0.72rem; }
+  .commentItem .body { font-size:0.85rem; color:#ddd; margin-top:0.2rem; white-space:pre-wrap; word-break:break-word; }
+  .commentItem .nopaint { color:#c08; font-size:0.7rem; }
   .tabs { display:flex; border-bottom:1px solid #333; }
   .tab { flex:1; padding:0.4rem; background:#2a2a2b; color:#bbb; border:none; cursor:pointer; }
   .tab.active { background:#1e1e1e; color:#fff; border-bottom: 2px solid #4a8cff; }
@@ -1852,6 +1902,19 @@ type DocSnapshot = {
 };
 
 function applyDocSnapshot(snap: DocSnapshot) {
+  const prevScrollTop = viewer.scrollTop;
+  const prevScrollLeft = viewer.scrollLeft;
+  const prevPageCount = pageCount;
+  const prevPageSizes = pageSizes;
+  const sameGeometry =
+    prevPageCount === snap.page_count &&
+    prevPageSizes.length === snap.page_sizes.length &&
+    prevPageSizes.every(
+      (p, i) =>
+        p.width_pt === snap.page_sizes[i].width_pt &&
+        p.height_pt === snap.page_sizes[i].height_pt,
+    );
+
   pageCount = snap.page_count;
   pageSizes = snap.page_sizes;
   outline = snap.outline;
@@ -1864,12 +1927,23 @@ function applyDocSnapshot(snap: DocSnapshot) {
   searchCount.textContent = "";
   renderOutline();
   rebuildSlots();
-  if (viewMode === "single") navigateTo(currentPage, { recordHistory: false });
-  else scheduleRender(currentPage);
+  if (viewMode === "single") {
+    navigateTo(currentPage, { recordHistory: false });
+  } else if (sameGeometry) {
+    // Annotation-only edits: keep the user's scroll position instead of jumping.
+    viewer.scrollTop = prevScrollTop;
+    viewer.scrollLeft = prevScrollLeft;
+    scheduleRender(currentPage);
+  } else {
+    scheduleRender(currentPage);
+  }
   renderThumbsShell();
   updateChrome();
   void refreshUndoUi();
+  void notifyAnnotationsChanged();
 }
+
+let notifyAnnotationsChanged: () => Promise<void> = async () => {};
 
 type UndoStatus = { undo: number; redo: number };
 const undoBtn = document.getElementById("undoBtn") as HTMLButtonElement;
@@ -3395,11 +3469,22 @@ getCurrentWebview()
 // ----------------- Annotation tools (markup + shapes) -----------------
 
 type MarkupKind = "highlight" | "underline" | "strikeout";
-type ShapeKindUi = "rect" | "circle" | "line" | "arrow" | "freetext" | "ink" | "stamp" | "region";
+type ShapeKindUi = "rect" | "circle" | "line" | "arrow" | "freetext" | "ink" | "stamp" | "region" | "note";
 let annotTool: MarkupKind | null = null;
 let shapeTool: ShapeKindUi | null = null;
 let stampImagePath: string | null = null;
 const annotColorInput = document.getElementById("annotColor") as HTMLInputElement;
+
+let printAnnotations = true;
+const printToggleBtn = document.getElementById("printToggleBtn") as HTMLButtonElement;
+printToggleBtn.addEventListener("click", () => {
+  printAnnotations = !printAnnotations;
+  printToggleBtn.classList.toggle("active", printAnnotations);
+  printToggleBtn.title = printAnnotations
+    ? "Include new annotations when printing (toggle)"
+    : "Skip new annotations when printing (toggle)";
+  setStatus(printAnnotations ? "New annotations will print" : "New annotations will NOT print");
+});
 
 function setAnnotTool(k: MarkupKind | null) {
   annotTool = k;
@@ -3538,7 +3623,7 @@ async function applyAnnotationFromSelection() {
       const rects = byPage.get(page)!;
       snap = await invoke<DocSnapshot>("add_annotation", {
         document: currentDoc,
-        args: { page, rects, kind, color, opacity },
+        args: { page, rects, kind, color, opacity, print: printAnnotations },
       });
     }
     sel.removeAllRanges();
@@ -3783,6 +3868,7 @@ document.addEventListener("pointerup", async (ev) => {
           color: hexToRgb01(annotColorInput.value),
           width: 1.6,
           opacity: 1.0,
+          print: printAnnotations,
         },
       });
       applyDocSnapshot(snap);
@@ -3793,11 +3879,16 @@ document.addEventListener("pointerup", async (ev) => {
     return;
   }
 
-  if (dxPx < 3 && dyPx < 3 && tool !== "freetext") return;
+  if (dxPx < 3 && dyPx < 3 && tool !== "freetext" && tool !== "note") return;
 
   const start = imagePxToPagePt(ds.slot, ds.pageIdx, sx.x, sx.y);
   const end = imagePxToPagePt(ds.slot, ds.pageIdx, cx.x, cx.y);
   if (!start || !end) return;
+
+  if (tool === "note") {
+    spawnTextNoteEditor(ds.slot, ds.pageIdx, sx, start);
+    return;
+  }
 
   if (tool === "region") {
     const rect: RectPt = {
@@ -3861,7 +3952,7 @@ document.addEventListener("pointerup", async (ev) => {
     try {
       const snap = await invoke<DocSnapshot>("add_stamp", {
         document: currentDoc,
-        args: { page: ds.pageIdx, rect, image_path: stampImagePath, opacity: 1.0 },
+        args: { page: ds.pageIdx, rect, image_path: stampImagePath, opacity: 1.0, print: printAnnotations },
       });
       applyDocSnapshot(snap);
       setStatus("Stamp added");
@@ -3895,6 +3986,7 @@ document.addEventListener("pointerup", async (ev) => {
         stroke,
         border_width: 1.5,
         opacity: 1.0,
+        print: printAnnotations,
       },
     });
     applyDocSnapshot(snap);
@@ -3960,6 +4052,7 @@ function spawnFreeTextEditor(
           color: hexToRgb01(annotColorInput.value === "#ffe600" ? "#000000" : annotColorInput.value),
           font_size: 14,
           opacity: 1.0,
+          print: printAnnotations,
         },
       });
       applyDocSnapshot(snap);
@@ -3974,5 +4067,260 @@ function spawnFreeTextEditor(
     else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ed.blur(); }
   });
 }
+
+function spawnTextNoteEditor(
+  slot: Slot,
+  pageIdx: number,
+  anchorPx: { x: number; y: number },
+  anchorPt: { x: number; y: number },
+) {
+  const wrap = document.createElement("div");
+  wrap.style.position = "absolute";
+  wrap.style.left = `${anchorPx.x}px`;
+  wrap.style.top = `${anchorPx.y}px`;
+  wrap.style.width = "220px";
+  wrap.style.zIndex = "20";
+  wrap.style.background = "#fff8b0";
+  wrap.style.color = "#000";
+  wrap.style.border = "1px solid #b39a00";
+  wrap.style.boxShadow = "2px 2px 6px rgba(0,0,0,0.35)";
+  wrap.style.font = "13px Helvetica, Arial, sans-serif";
+
+  const head = document.createElement("div");
+  head.textContent = "📝 Sticky note";
+  head.style.padding = "2px 6px";
+  head.style.background = "#e6cf00";
+  head.style.borderBottom = "1px solid #b39a00";
+  head.style.fontSize = "12px";
+  wrap.appendChild(head);
+
+  const ed = document.createElement("textarea");
+  ed.placeholder = "Type comment, Enter to save, Esc to cancel";
+  ed.style.display = "block";
+  ed.style.width = "100%";
+  ed.style.height = "80px";
+  ed.style.boxSizing = "border-box";
+  ed.style.border = "0";
+  ed.style.background = "transparent";
+  ed.style.color = "#000";
+  ed.style.font = "inherit";
+  ed.style.padding = "4px 6px";
+  ed.style.resize = "vertical";
+  wrap.appendChild(ed);
+
+  slot.wrap.appendChild(wrap);
+  ed.focus();
+
+  let committed = false;
+  const cleanup = () => { wrap.remove(); };
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const text = ed.value.trim();
+    cleanup();
+    if (!text || !currentDoc) return;
+    setStatus("Adding note…");
+    try {
+      const snap = await invoke<DocSnapshot>("add_text_note", {
+        document: currentDoc,
+        args: {
+          page: pageIdx,
+          x_pt: anchorPt.x,
+          y_pt: anchorPt.y,
+          contents: text,
+          color: hexToRgb01(annotColorInput.value),
+          print: printAnnotations,
+        },
+      });
+      applyDocSnapshot(snap);
+      setStatus("Note added");
+    } catch (e) {
+      setStatus(`note error: ${e}`);
+    }
+  };
+  ed.addEventListener("blur", () => { void commit(); });
+  ed.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { committed = true; cleanup(); }
+    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ed.blur(); }
+  });
+}
+
+// ----------------- Comment panel -----------------
+
+interface AnnotationInfo {
+  id: string;
+  page: number;
+  subtype: string;
+  rect_pt: RectPt;
+  color: [number, number, number] | null;
+  opacity: number;
+  print: boolean;
+  contents: string | null;
+  author: string | null;
+  modified: string | null;
+  icon: string | null;
+}
+
+const commentPanelEl = document.getElementById("commentPanel") as HTMLElement;
+const commentListEl = document.getElementById("commentList") as HTMLDivElement;
+const commentKindFilter = document.getElementById("commentKindFilter") as HTMLSelectElement;
+const commentAuthorFilter = document.getElementById("commentAuthorFilter") as HTMLInputElement;
+const commentHasContent = document.getElementById("commentHasContent") as HTMLInputElement;
+let cachedAnnotations: AnnotationInfo[] = [];
+
+const SUBTYPE_ICON: Record<string, string> = {
+  Highlight: "🖍",
+  Underline: "U̲",
+  StrikeOut: "S̶",
+  Squiggly: "〰",
+  Square: "▭",
+  Circle: "◯",
+  Line: "／",
+  Ink: "✎",
+  FreeText: "T",
+  Stamp: "🔖",
+  Text: "📝",
+};
+
+function formatPdfDate(s: string | null): string {
+  if (!s) return "";
+  const m = /^D:(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(s);
+  if (!m) return s;
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+}
+
+function renderComments() {
+  const kindF = commentKindFilter.value;
+  const authorF = commentAuthorFilter.value.trim().toLowerCase();
+  const requireBody = commentHasContent.checked;
+  const filtered = cachedAnnotations.filter((a) => {
+    if (kindF && a.subtype !== kindF) return false;
+    if (authorF && !(a.author || "").toLowerCase().includes(authorF)) return false;
+    if (requireBody && !(a.contents && a.contents.trim())) return false;
+    return true;
+  });
+  if (filtered.length === 0) {
+    commentListEl.innerHTML = `<div style="color:#777;padding:0.5rem;font-size:0.85rem;">No annotations${cachedAnnotations.length > 0 ? " match the filters" : ""}.</div>`;
+    return;
+  }
+  const byPage = new Map<number, AnnotationInfo[]>();
+  for (const a of filtered) {
+    const list = byPage.get(a.page) ?? [];
+    list.push(a);
+    byPage.set(a.page, list);
+  }
+  const pages = Array.from(byPage.keys()).sort((a, b) => a - b);
+  const out: string[] = [];
+  for (const p of pages) {
+    out.push(`<div class="commentGroup"><div class="commentGroupHead">Page ${p + 1}</div>`);
+    for (const a of byPage.get(p)!) {
+      const icon = SUBTYPE_ICON[a.subtype] ?? "•";
+      const author = a.author ? `<span class="author">${escapeHtml(a.author)}</span>` : "";
+      const date = a.modified ? `<span class="date">${escapeHtml(formatPdfDate(a.modified))}</span>` : "";
+      const noprint = a.print ? "" : `<span class="nopaint">no-print</span>`;
+      const body = a.contents ? `<div class="body">${escapeHtml(a.contents)}</div>` : "";
+      out.push(
+        `<div class="commentItem" data-page="${p}" data-id="${escapeHtml(a.id)}">` +
+          `<div class="row1"><span class="kind">${icon} ${a.subtype}</span>${author}${noprint}${date}</div>` +
+          body +
+        `</div>`,
+      );
+    }
+    out.push(`</div>`);
+  }
+  commentListEl.innerHTML = out.join("");
+  commentListEl.querySelectorAll<HTMLDivElement>(".commentItem").forEach((el) => {
+    el.addEventListener("click", () => {
+      const p = parseInt(el.dataset.page || "0", 10);
+      navigateTo(p, { recordHistory: true });
+    });
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]!);
+}
+
+async function refreshComments() {
+  if (!currentDoc) {
+    cachedAnnotations = [];
+    renderComments();
+    return;
+  }
+  try {
+    cachedAnnotations = await invoke<AnnotationInfo[]>("list_annotations", { document: currentDoc });
+  } catch (e) {
+    setStatus(`comments error: ${e}`);
+    cachedAnnotations = [];
+  }
+  renderComments();
+}
+
+function toggleCommentPanel() {
+  const becomingVisible = commentPanelEl.classList.contains("hidden");
+  commentPanelEl.classList.toggle("hidden");
+  if (becomingVisible) void refreshComments();
+}
+
+notifyAnnotationsChanged = async () => {
+  if (!commentPanelEl.classList.contains("hidden")) await refreshComments();
+};
+
+document.getElementById("commentToggleBtn")!.addEventListener("click", toggleCommentPanel);
+document.getElementById("commentCloseBtn")!.addEventListener("click", () => commentPanelEl.classList.add("hidden"));
+document.getElementById("commentReloadBtn")!.addEventListener("click", () => void refreshComments());
+commentKindFilter.addEventListener("change", renderComments);
+commentAuthorFilter.addEventListener("input", renderComments);
+commentHasContent.addEventListener("change", renderComments);
+
+document.getElementById("commentExportBtn")!.addEventListener("click", async () => {
+  if (!currentDoc) return;
+  const base = currentDocPath
+    ? currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
+    : "annotations";
+  const path = await save({
+    title: "Export annotations as XFDF",
+    defaultPath: `${base}.xfdf`,
+    filters: [{ name: "XFDF", extensions: ["xfdf", "xml"] }],
+  });
+  if (!path || typeof path !== "string") return;
+  setStatus("Exporting XFDF…");
+  try {
+    const len = await invoke<number>("export_annotations_xfdf", { document: currentDoc, path });
+    setStatus(`Exported ${len} bytes → ${path}`);
+  } catch (e) {
+    setStatus(`xfdf export error: ${e}`);
+  }
+});
+
+document.getElementById("commentImportBtn")!.addEventListener("click", async () => {
+  if (!currentDoc) return;
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "XFDF", extensions: ["xfdf", "xml"] }],
+    title: "Import XFDF",
+  });
+  if (!picked || typeof picked !== "string") return;
+  setStatus("Importing XFDF…");
+  try {
+    const snap = await invoke<DocSnapshot>("import_annotations_xfdf", {
+      document: currentDoc,
+      path: picked,
+    });
+    applyDocSnapshot(snap);
+    setStatus("XFDF imported");
+    void refreshComments();
+  } catch (e) {
+    setStatus(`xfdf import error: ${e}`);
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "F7") {
+    e.preventDefault();
+    toggleCommentPanel();
+  }
+});
 
 updateChrome();

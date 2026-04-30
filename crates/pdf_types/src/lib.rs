@@ -146,6 +146,32 @@ pub struct DocMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnotationInfo {
+    /// Stable id from /NM, fallback to lopdf object id.
+    pub id: String,
+    /// 0-indexed page number.
+    pub page: u32,
+    /// PDF /Subtype name, e.g. "Highlight", "Text", "Square", "Ink", "FreeText", "Stamp".
+    pub subtype: String,
+    /// Bounding rect in our top-origin RectPt convention.
+    pub rect_pt: RectPt,
+    /// RGB color in 0..1 if /C is present.
+    pub color: Option<[f32; 3]>,
+    /// /CA opacity (0..1). Defaults to 1.0 when absent.
+    pub opacity: f32,
+    /// PDF /F bit 2 (Print flag).
+    pub print: bool,
+    /// /Contents text (decoded UTF-16BE or PDFDocEncoding).
+    pub contents: Option<String>,
+    /// /T author / popup title.
+    pub author: Option<String>,
+    /// /M raw modified-date string (PDF "D:YYYYMMDD..." form).
+    pub modified: Option<String>,
+    /// /Name (icon hint) for sticky notes / stamps.
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocPermissions {
     pub security_handler: String,
     pub can_print_high_quality: bool,

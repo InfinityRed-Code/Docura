@@ -14,10 +14,12 @@ use pdf_types::RectPt;
 
 mod annotations;
 mod overlay;
+mod read;
+mod xfdf;
 
 pub use annotations::{
     FreeTextAnnotation, InkAnnotation, LineEnding, MarkupAnnotation, MarkupKind,
-    ShapeAnnotation, ShapeKind, StampAnnotation,
+    ShapeAnnotation, ShapeKind, StampAnnotation, TextNoteAnnotation,
 };
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
@@ -39,7 +41,7 @@ pub struct MutableDoc {
     inner: Document,
 }
 
-fn resolve_media_box(doc: &Document, page_id: ObjectId) -> Option<[f32; 4]> {
+pub(crate) fn resolve_media_box(doc: &Document, page_id: ObjectId) -> Option<[f32; 4]> {
     let mut cur = page_id;
     loop {
         if let Ok(d) = doc.get_dictionary(cur) {
@@ -569,6 +571,41 @@ impl MutableDoc {
         annotations::add_stamp_annotation(&mut self.inner, page_index, annot)?;
         tracing::info!(
             "pdf_mutate::add_stamp_annotation page={} in {:?}",
+            page_index,
+            t.elapsed()
+        );
+        Ok(())
+    }
+
+    /// List every annotation present in the document, flat (one entry per
+    /// annotation, page-ordered). Rects are returned in our top-origin
+    /// convention.
+    pub fn list_annotations(&self) -> Vec<pdf_types::AnnotationInfo> {
+        read::list_annotations(&self.inner)
+    }
+
+    /// Serialize all annotations to an XFDF (XML) document, suitable for
+    /// import into Adobe Acrobat / Foxit. Returns the XML bytes.
+    pub fn export_xfdf(&self, source_filename: Option<&str>) -> MutateResult<Vec<u8>> {
+        xfdf::export(&self.inner, source_filename)
+    }
+
+    /// Parse an XFDF document and append its annotations to this PDF. Returns
+    /// the count of annotations imported.
+    pub fn import_xfdf(&mut self, xml: &[u8]) -> MutateResult<usize> {
+        xfdf::import(&mut self.inner, xml)
+    }
+
+    /// Add a /Text (sticky note) annotation anchored at a single point.
+    pub fn add_text_note_annotation(
+        &mut self,
+        page_index: u32,
+        annot: &TextNoteAnnotation,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        annotations::add_text_note_annotation(&mut self.inner, page_index, annot)?;
+        tracing::info!(
+            "pdf_mutate::add_text_note_annotation page={} in {:?}",
             page_index,
             t.elapsed()
         );
