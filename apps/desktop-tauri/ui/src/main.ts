@@ -543,6 +543,22 @@ style.textContent = `
                  background: transparent; border: 0; cursor:pointer;
                  text-decoration:none; }
   .linkLayer a:hover { background: rgba(74,140,255,0.22); outline: 1px solid rgba(74,140,255,0.6); }
+  .formLayer { position:absolute; inset:0; pointer-events:none; }
+  .formLayer .formField { position:absolute; pointer-events:auto;
+                  background: rgba(74,140,255,0.10); border: 1px solid rgba(74,140,255,0.45);
+                  box-sizing:border-box; }
+  .formLayer .formField:hover { background: rgba(74,140,255,0.18); }
+  .formLayer input[type=text], .formLayer textarea, .formLayer select {
+                  width:100%; height:100%; box-sizing:border-box; padding:0 2px;
+                  border:0; background:transparent; color:#000; font: inherit;
+                  font-family: Helvetica, Arial, sans-serif; resize:none; }
+  .formLayer input[type=text]:focus, .formLayer textarea:focus, .formLayer select:focus {
+                  background: rgba(255,255,255,0.85); outline:1px solid #4a8cff; }
+  .formLayer .formCheck { display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .formLayer .formCheck input { margin:0; transform: scale(1.2); }
+  .formLayer .formField.readonly { background: rgba(150,150,150,0.10); border-color: rgba(150,150,150,0.4); }
+  .formLayer .formField.required { border-color: rgba(220,160,40,0.7); }
+  .formLayer .formField.signature { background: rgba(160,80,160,0.08); border:1px dashed rgba(160,80,160,0.55); display:flex; align-items:center; justify-content:center; color:#a05ca0; font-size:0.78rem; pointer-events:none; }
   .searchPanel, .gotoPanel { position:absolute; top: 0.5rem; right: 1rem; background:#2d2d30;
                  border:1px solid #444; border-radius:4px; padding: 0.3rem;
                  display:flex; gap:0.3rem; align-items:center; z-index: 20; }
@@ -719,6 +735,7 @@ type Slot = {
   highlightLayer: HTMLDivElement;
   linkLayer: HTMLDivElement;
   drawLayer: SVGSVGElement;
+  formLayer: HTMLDivElement;
   placeholder: HTMLDivElement;
   loaded: boolean;
   renderingZoom: number | null;
@@ -826,6 +843,9 @@ function makeSlot(pageIdx: number): Slot {
   const drawLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   drawLayer.setAttribute("class", "drawLayer");
   drawLayer.dataset.page = String(pageIdx);
+  const formLayer = document.createElement("div");
+  formLayer.className = "formLayer";
+  formLayer.dataset.page = String(pageIdx);
   const placeholder = document.createElement("div");
   placeholder.className = "placeholder";
   placeholder.textContent = `${pageIdx + 1}`;
@@ -835,6 +855,7 @@ function makeSlot(pageIdx: number): Slot {
   wrap.appendChild(highlightLayer);
   wrap.appendChild(linkLayer);
   wrap.appendChild(drawLayer);
+  wrap.appendChild(formLayer);
   return {
     wrap,
     img,
@@ -842,6 +863,7 @@ function makeSlot(pageIdx: number): Slot {
     highlightLayer,
     linkLayer,
     drawLayer,
+    formLayer,
     placeholder,
     loaded: false,
     renderingZoom: null,
@@ -4322,5 +4344,175 @@ document.addEventListener("keydown", (e) => {
     toggleCommentPanel();
   }
 });
+
+// ----------------- Form fields (AcroForm) -----------------
+
+type FormFieldKind = "text" | "checkbox" | "radio" | "combobox" | "listbox" | "pushbutton" | "signature" | "unknown";
+
+interface FormFieldInfo {
+  id: string;
+  page: number;
+  rect_pt: RectPt;
+  kind: FormFieldKind;
+  value: string | null;
+  options: string[] | null;
+  export_value: string | null;
+  readonly: boolean;
+  required: boolean;
+  multiline: boolean;
+  password: boolean;
+  max_len: number | null;
+}
+
+let formFields: FormFieldInfo[] = [];
+const formFieldsByPage = new Map<number, FormFieldInfo[]>();
+
+async function refreshFormFields() {
+  if (!currentDoc) {
+    formFields = [];
+    formFieldsByPage.clear();
+    renderAllForms();
+    return;
+  }
+  try {
+    formFields = await invoke<FormFieldInfo[]>("list_form_fields", { document: currentDoc });
+  } catch (e) {
+    setStatus(`form fields error: ${e}`);
+    formFields = [];
+  }
+  formFieldsByPage.clear();
+  for (const f of formFields) {
+    const list = formFieldsByPage.get(f.page) ?? [];
+    list.push(f);
+    formFieldsByPage.set(f.page, list);
+  }
+  renderAllForms();
+}
+
+function renderAllForms() {
+  for (let i = 0; i < slots.length; i++) renderFormFor(i);
+}
+
+function renderFormFor(pageIdx: number) {
+  const slot = slots[pageIdx];
+  if (!slot) return;
+  slot.formLayer.innerHTML = "";
+  const list = formFieldsByPage.get(pageIdx);
+  if (!list || list.length === 0) return;
+  const sz = pageSizes[pageIdx];
+  if (!sz) return;
+  for (const f of list) {
+    const left = (f.rect_pt.x0 / sz.width_pt) * 100;
+    const top = (f.rect_pt.y0 / sz.height_pt) * 100;
+    const width = ((f.rect_pt.x1 - f.rect_pt.x0) / sz.width_pt) * 100;
+    const height = ((f.rect_pt.y1 - f.rect_pt.y0) / sz.height_pt) * 100;
+    const wrap = document.createElement("div");
+    wrap.className = "formField";
+    if (f.readonly) wrap.classList.add("readonly");
+    if (f.required) wrap.classList.add("required");
+    wrap.style.left = `${left}%`;
+    wrap.style.top = `${top}%`;
+    wrap.style.width = `${width}%`;
+    wrap.style.height = `${height}%`;
+    wrap.title = `${f.id}${f.required ? " *required" : ""}`;
+    if (f.kind === "text") {
+      const ed = f.multiline
+        ? document.createElement("textarea")
+        : document.createElement("input");
+      if (!f.multiline) (ed as HTMLInputElement).type = f.password ? "password" : "text";
+      ed.value = f.value ?? "";
+      if (f.readonly) (ed as HTMLInputElement | HTMLTextAreaElement).readOnly = true;
+      ed.addEventListener("blur", () => {
+        if (f.readonly) return;
+        const v = (ed as HTMLInputElement | HTMLTextAreaElement).value;
+        if (v === (f.value ?? "")) return;
+        void writeFormField(f.id, v);
+      });
+      (ed as HTMLElement).addEventListener("keydown", (e: Event) => {
+        const ke = e as KeyboardEvent;
+        if (ke.key === "Enter" && !f.multiline) {
+          ke.preventDefault();
+          (ed as HTMLInputElement).blur();
+        }
+        if (ke.key === "Escape") {
+          (ed as HTMLInputElement | HTMLTextAreaElement).value = f.value ?? "";
+          (ed as HTMLInputElement | HTMLTextAreaElement).blur();
+        }
+      });
+      wrap.appendChild(ed);
+    } else if (f.kind === "checkbox") {
+      wrap.classList.add("formCheck");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = (f.value ?? "Off") !== "Off";
+      cb.disabled = f.readonly;
+      cb.addEventListener("change", () => {
+        if (f.readonly) return;
+        void writeFormField(f.id, cb.checked ? "Yes" : "Off");
+      });
+      wrap.appendChild(cb);
+    } else if (f.kind === "radio") {
+      wrap.classList.add("formCheck");
+      const rb = document.createElement("input");
+      rb.type = "checkbox";
+      rb.checked = (f.value ?? "Off") !== "Off";
+      rb.disabled = f.readonly;
+      rb.addEventListener("change", () => {
+        if (f.readonly) return;
+        void writeFormField(f.id, rb.checked ? "On" : "Off");
+      });
+      wrap.appendChild(rb);
+    } else if (f.kind === "combobox" || f.kind === "listbox") {
+      const sel = document.createElement("select");
+      if (f.kind === "listbox") sel.size = Math.max(2, f.options?.length ?? 2);
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "—";
+      sel.appendChild(blank);
+      for (const o of f.options ?? []) {
+        const op = document.createElement("option");
+        op.value = o;
+        op.textContent = o;
+        sel.appendChild(op);
+      }
+      sel.value = f.value ?? "";
+      if (f.readonly) sel.disabled = true;
+      sel.addEventListener("change", () => {
+        if (f.readonly) return;
+        void writeFormField(f.id, sel.value);
+      });
+      wrap.appendChild(sel);
+    } else if (f.kind === "signature") {
+      wrap.classList.add("signature");
+      wrap.textContent = "Signature";
+    } else {
+      // pushbutton / unknown: skip rendering interactive control.
+      continue;
+    }
+    slot.formLayer.appendChild(wrap);
+  }
+}
+
+async function writeFormField(name: string, value: string) {
+  if (!currentDoc) return;
+  setStatus(`Setting ${name}…`);
+  try {
+    const snap = await invoke<DocSnapshot>("set_form_field", {
+      document: currentDoc,
+      name,
+      value,
+    });
+    applyDocSnapshot(snap);
+    setStatus(`Field ${name} saved`);
+  } catch (e) {
+    setStatus(`form error: ${e}`);
+  }
+}
+
+const _origNotifyAnnotations = notifyAnnotationsChanged;
+notifyAnnotationsChanged = async () => {
+  await _origNotifyAnnotations();
+  await refreshFormFields();
+};
 
 updateChrome();

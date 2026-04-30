@@ -13,6 +13,7 @@ use lopdf::{Document, Object, ObjectId};
 use pdf_types::RectPt;
 
 mod annotations;
+mod form;
 mod overlay;
 mod read;
 mod xfdf;
@@ -574,6 +575,28 @@ impl MutableDoc {
             page_index,
             t.elapsed()
         );
+        Ok(())
+    }
+
+    /// Set an AcroForm field's /V value by fully-qualified field name.
+    /// For Btn (checkbox/radio) fields, also mirrors /AS on every widget kid.
+    pub fn set_form_field(&mut self, name: &str, value: &str) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        form::set_field_value(&mut self.inner, name, value)?;
+        tracing::info!(
+            "pdf_mutate::set_form_field name={:?} value_len={} in {:?}",
+            name,
+            value.len(),
+            t.elapsed()
+        );
+        Ok(())
+    }
+
+    /// Reset every AcroForm field to its /DV (default value) or remove /V.
+    pub fn reset_form(&mut self) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        form::reset_form(&mut self.inner)?;
+        tracing::info!("pdf_mutate::reset_form in {:?}", t.elapsed());
         Ok(())
     }
 

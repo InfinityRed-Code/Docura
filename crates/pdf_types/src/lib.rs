@@ -171,6 +171,40 @@ pub struct AnnotationInfo {
     pub icon: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FormFieldKind {
+    Text,
+    Checkbox,
+    Radio,
+    ComboBox,
+    ListBox,
+    PushButton,
+    Signature,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormFieldInfo {
+    /// Fully-qualified field name (the value used for /V binding).
+    pub id: String,
+    pub page: u32,
+    /// Widget rect in our top-origin RectPt convention.
+    pub rect_pt: RectPt,
+    pub kind: FormFieldKind,
+    /// Current value (text content, "Yes"/"Off" for checkbox, export value for radio).
+    pub value: Option<String>,
+    /// Choice options for ComboBox / ListBox.
+    pub options: Option<Vec<String>>,
+    /// Sibling export value (for radio buttons — every radio in a group shares an /id but different /AS).
+    pub export_value: Option<String>,
+    pub readonly: bool,
+    pub required: bool,
+    pub multiline: bool,
+    pub password: bool,
+    pub max_len: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocPermissions {
     pub security_handler: String,

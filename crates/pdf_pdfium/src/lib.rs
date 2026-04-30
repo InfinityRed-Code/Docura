@@ -25,8 +25,9 @@ use std::sync::OnceLock;
 use parking_lot::Mutex;
 use pdf_core::{CoreError, CoreResult, PdfEngine, RenderRequest, RenderedPage};
 use pdf_types::{
-    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, LinkTarget, OutlineNode, PageIndex,
-    PageLink, PageSize, RectPt, Rotation, SearchHit, SearchQuery, TextRun,
+    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, FormFieldKind,
+    LinkTarget, OutlineNode, PageIndex, PageLink, PageSize, RectPt, Rotation, SearchHit,
+    SearchQuery, TextRun,
 };
 use pdfium_render::prelude::*;
 
@@ -424,6 +425,53 @@ impl PdfEngine for PdfiumEngine {
         Ok(bytes.to_vec())
     }
 
+    fn list_form_fields(&self, doc: DocumentId) -> CoreResult<Vec<FormFieldInfo>> {
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        if document.form().is_none() {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<FormFieldInfo> = Vec::new();
+        for (page_idx, page) in document.pages().iter().enumerate() {
+            let page_h = page.height().value;
+            for annot in page.annotations().iter() {
+                let Some(widget) = annot.as_widget_annotation() else { continue };
+                let Some(field) = widget.form_field() else { continue };
+                let Ok(bounds) = widget.bounds() else { continue };
+                let rect_pt = RectPt {
+                    x0: bounds.left.value,
+                    y0: page_h - bounds.top.value,
+                    x1: bounds.right.value,
+                    y1: page_h - bounds.bottom.value,
+                };
+                let id = field.name().unwrap_or_default();
+                if id.is_empty() {
+                    continue;
+                }
+                let readonly = field.is_read_only();
+                let required = field.is_required();
+                let (kind, value, options, export_value, multiline, password) =
+                    map_field(field);
+                out.push(FormFieldInfo {
+                    id,
+                    page: page_idx as u32,
+                    rect_pt,
+                    kind,
+                    value,
+                    options,
+                    export_value,
+                    readonly,
+                    required,
+                    multiline,
+                    password,
+                    max_len: None,
+                });
+            }
+        }
+        Ok(out)
+    }
+
     fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()> {
         let pdfium = shared_pdfium()?;
         let bytes_box: Box<[u8]> = bytes.into_boxed_slice();
@@ -613,4 +661,89 @@ fn snippet_around(chars: &[(char, RectPt)], start: usize, end: usize) -> String 
     let lo = start.saturating_sub(20);
     let hi = (end + 20).min(chars.len());
     chars[lo..hi].iter().map(|(c, _)| *c).collect()
+}
+
+fn map_field(
+    field: &PdfFormField<'_>,
+) -> (
+    FormFieldKind,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<String>,
+    bool,
+    bool,
+) {
+    match field.field_type() {
+        PdfFormFieldType::Text => {
+            let tf = field.as_text_field().expect("text field");
+            (
+                FormFieldKind::Text,
+                tf.value(),
+                None,
+                None,
+                tf.is_multiline(),
+                tf.is_password(),
+            )
+        }
+        PdfFormFieldType::Checkbox => {
+            let cb = field.as_checkbox_field().expect("checkbox field");
+            let on = cb.is_checked().unwrap_or(false);
+            (
+                FormFieldKind::Checkbox,
+                Some(if on { "Yes".to_string() } else { "Off".to_string() }),
+                None,
+                None,
+                false,
+                false,
+            )
+        }
+        PdfFormFieldType::RadioButton => {
+            let rb = field.as_radio_button_field().expect("radio field");
+            let on = rb.is_checked().unwrap_or(false);
+            let idx = rb.index_in_group();
+            (
+                FormFieldKind::Radio,
+                Some(if on { "On".to_string() } else { "Off".to_string() }),
+                None,
+                Some(idx.to_string()),
+                false,
+                false,
+            )
+        }
+        PdfFormFieldType::ComboBox => {
+            let cb = field.as_combo_box_field().expect("combo field");
+            let opts: Vec<String> = cb
+                .options()
+                .iter()
+                .map(|o| o.label().cloned().unwrap_or_default())
+                .collect();
+            (
+                FormFieldKind::ComboBox,
+                cb.value(),
+                Some(opts),
+                None,
+                false,
+                false,
+            )
+        }
+        PdfFormFieldType::ListBox => {
+            let lb = field.as_list_box_field().expect("listbox field");
+            let opts: Vec<String> = lb
+                .options()
+                .iter()
+                .map(|o| o.label().cloned().unwrap_or_default())
+                .collect();
+            (
+                FormFieldKind::ListBox,
+                lb.value(),
+                Some(opts),
+                None,
+                false,
+                false,
+            )
+        }
+        PdfFormFieldType::PushButton => (FormFieldKind::PushButton, None, None, None, false, false),
+        PdfFormFieldType::Signature => (FormFieldKind::Signature, None, None, None, false, false),
+        PdfFormFieldType::Unknown => (FormFieldKind::Unknown, None, None, None, false, false),
+    }
 }

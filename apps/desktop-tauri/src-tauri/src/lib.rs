@@ -14,9 +14,9 @@ use pdf_cache::{CacheKey, CachedImage, RenderCache};
 use pdf_core::{CoreError, PdfEngine, RenderRequest};
 use pdf_pdfium::PdfiumEngine;
 use pdf_types::{
-    AnnotationInfo, AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode,
-    PageIndex, PageLink, PageSize, RecentFile, RectPt, Rotation, SearchHit, SearchQuery, TextRun,
-    ZoomLevel,
+    AnnotationInfo, AttachmentInfo, DocMetadata, DocPermissions, DocumentId, FormFieldInfo,
+    OutlineNode, PageIndex, PageLink, PageSize, RecentFile, RectPt, Rotation, SearchHit,
+    SearchQuery, TextRun, ZoomLevel,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -1405,6 +1405,71 @@ async fn add_text_note(
 }
 
 #[tauri::command]
+async fn list_form_fields(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<Vec<FormFieldInfo>, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.list_form_fields(document).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn set_form_field(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    name: String,
+    value: String,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+            let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+            let mut mdoc =
+                pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            mdoc.set_form_field(&name, &value).map_err(|e| e.to_string())?;
+            let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+            Ok((bytes, out))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[tauri::command]
+async fn reset_form(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+            let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+            let mut mdoc =
+                pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            mdoc.reset_form().map_err(|e| e.to_string())?;
+            let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+            Ok((bytes, out))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[tauri::command]
 async fn list_annotations(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
@@ -2121,6 +2186,9 @@ pub fn run() {
             add_ink,
             add_stamp,
             add_text_note,
+            list_form_fields,
+            set_form_field,
+            reset_form,
             list_annotations,
             export_annotations_xfdf,
             import_annotations_xfdf,
@@ -2196,6 +2264,12 @@ impl PdfEngine for NullEngine {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
     fn reload_bytes(&self, _: DocumentId, _: Vec<u8>) -> pdf_core::CoreResult<()> {
+        Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+    fn list_form_fields(
+        &self,
+        _: DocumentId,
+    ) -> pdf_core::CoreResult<Vec<pdf_types::FormFieldInfo>> {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
     }
 }

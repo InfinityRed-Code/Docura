@@ -1,7 +1,7 @@
 use crate::error::CoreResult;
 use pdf_types::{
-    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, OutlineNode, PageIndex, PageLink,
-    PageSize, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
+    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, OutlineNode, PageIndex,
+    PageLink, PageSize, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -47,4 +47,6 @@ pub trait PdfEngine: Send + Sync {
     /// The `DocumentId` is preserved so callers (UI, cache) don't need to
     /// re-key. Used after structural mutations (delete/insert/reorder pages).
     fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()>;
+    /// Enumerate AcroForm fields. Returns empty Vec for documents without forms.
+    fn list_form_fields(&self, doc: DocumentId) -> CoreResult<Vec<FormFieldInfo>>;
 }
