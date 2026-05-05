@@ -104,13 +104,13 @@ Herzstück der Reviewer-Workflows.
 
 Abdeckung aller AcroForm-basierten Behörden-/Unternehmensformulare.
 
-- [ ] AcroForm-Felder erkennen und rendern [E]
-- [ ] Textfeld-, Checkbox-, Radio-, Dropdown-Eingabe [E][U]
+- [x] AcroForm-Felder erkennen und rendern [E]
+- [x] Textfeld-, Checkbox-, Radio-, Dropdown-Eingabe [E][U]
 - [ ] Feld-Berechnungen (JS-Formeln für Summen/Format) [X: boa / quickjs-Bindung]
-- [ ] Formular speichern (ausgefüllt) [X: lopdf]
-- [ ] Formular zurücksetzen
-- [ ] Validierung + Required-Feld-Hinweise [U]
-- [ ] Signaturfelder vorbereiten (Platzhalter, noch ohne Krypto)
+- [x] Formular speichern (ausgefüllt) [X: lopdf]
+- [x] Formular zurücksetzen
+- [x] Validierung + Required-Feld-Hinweise [U]
+- [x] Signaturfelder vorbereiten (Platzhalter, noch ohne Krypto)
 
 ---
 

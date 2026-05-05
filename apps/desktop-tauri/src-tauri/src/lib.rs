@@ -1421,14 +1421,15 @@ async fn set_form_field(
     document: DocumentId,
     name: String,
     value: String,
-) -> Result<DocSnapshot, String> {
+) -> Result<Option<FormFieldInfo>, String> {
     let engine = state.engine.clone();
+    let name_for_mutate = name.clone();
     let (pre_bytes, new_bytes) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
             let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
             let mut mdoc =
                 pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
-            mdoc.set_form_field(&name, &value).map_err(|e| e.to_string())?;
+            mdoc.set_form_field(&name_for_mutate, &value).map_err(|e| e.to_string())?;
             let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
             Ok((bytes, out))
         })
@@ -1440,7 +1441,19 @@ async fn set_form_field(
         .await
         .map_err(|e| e.to_string())??;
     state.undo.lock().record(document, pre_bytes);
-    snapshot_doc(state, document).await
+    // Return only the updated field. The UI keeps its current page bitmap and
+    // patches the in-memory form state in place — no full document reload,
+    // no image re-render flash.
+    let engine = state.engine.clone();
+    let updated = tokio::task::spawn_blocking(move || {
+        engine
+            .list_form_fields(document)
+            .map(|fields| fields.into_iter().find(|f| f.id == name))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(updated)
 }
 
 #[tauri::command]

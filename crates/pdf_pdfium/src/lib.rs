@@ -686,8 +686,14 @@ fn map_field(
             )
         }
         PdfFormFieldType::Checkbox => {
-            let cb = field.as_checkbox_field().expect("checkbox field");
-            let on = cb.is_checked().unwrap_or(false);
+            // pdfium-render 0.8 only honors "Yes" as the on-state name; PDFs
+            // commonly use other names (e.g. "On", "Ja", "_3F"), so we read
+            // the appearance state directly and treat anything other than
+            // missing or "Off" as checked.
+            let stream = field.appearance_stream().unwrap_or_default();
+            let on = !stream.is_empty()
+                && stream != "Off"
+                && stream != "/Off";
             (
                 FormFieldKind::Checkbox,
                 Some(if on { "Yes".to_string() } else { "Off".to_string() }),
@@ -699,7 +705,10 @@ fn map_field(
         }
         PdfFormFieldType::RadioButton => {
             let rb = field.as_radio_button_field().expect("radio field");
-            let on = rb.is_checked().unwrap_or(false);
+            let stream = field.appearance_stream().unwrap_or_default();
+            let on = !stream.is_empty()
+                && stream != "Off"
+                && stream != "/Off";
             let idx = rb.index_in_group();
             (
                 FormFieldKind::Radio,

@@ -193,6 +193,13 @@ app.innerHTML = `
         </div>
         <div class="groupLabel">Layout</div>
       </div>
+      <div data-ribbon="edit" id="formGroup" class="ribbonGroup hidden">
+        <div class="groupBody">
+          <button id="formValidateBtn" title="Check required form fields">✓</button>
+          <button id="formResetBtn" title="Reset all form fields to defaults">↺</button>
+        </div>
+        <div class="groupLabel">Form</div>
+      </div>
       <span data-ribbon="organize" id="organizeHint" class="modeHint">Drag thumbnails to reorder. Click / Ctrl+click / Shift+click to select multiple.</span>
       <div data-ribbon="convert" class="ribbonGroup">
         <div class="groupBody">
@@ -545,19 +552,22 @@ style.textContent = `
   .linkLayer a:hover { background: rgba(74,140,255,0.22); outline: 1px solid rgba(74,140,255,0.6); }
   .formLayer { position:absolute; inset:0; pointer-events:none; }
   .formLayer .formField { position:absolute; pointer-events:auto;
-                  background: rgba(74,140,255,0.10); border: 1px solid rgba(74,140,255,0.45);
+                  background: #d6e7ff; border: 1px solid rgba(74,140,255,0.55);
                   box-sizing:border-box; }
-  .formLayer .formField:hover { background: rgba(74,140,255,0.18); }
-  .formLayer input[type=text], .formLayer textarea, .formLayer select {
+  .formLayer .formField:hover { background: #c6dbfb; border-color: rgba(74,140,255,0.9); }
+  .formLayer input[type=text], .formLayer input[type=password], .formLayer textarea, .formLayer select {
                   width:100%; height:100%; box-sizing:border-box; padding:0 2px;
-                  border:0; background:transparent; color:#000; font: inherit;
+                  border:0; background: #d6e7ff; color:#000; font: inherit;
                   font-family: Helvetica, Arial, sans-serif; resize:none; }
-  .formLayer input[type=text]:focus, .formLayer textarea:focus, .formLayer select:focus {
-                  background: rgba(255,255,255,0.85); outline:1px solid #4a8cff; }
+  .formLayer input[type=text]:focus, .formLayer input[type=password]:focus, .formLayer textarea:focus, .formLayer select:focus {
+                  background: #ffffff; outline:1px solid #4a8cff; }
   .formLayer .formCheck { display:flex; align-items:center; justify-content:center; cursor:pointer; }
   .formLayer .formCheck input { margin:0; transform: scale(1.2); }
-  .formLayer .formField.readonly { background: rgba(150,150,150,0.10); border-color: rgba(150,150,150,0.4); }
-  .formLayer .formField.required { border-color: rgba(220,160,40,0.7); }
+  .formLayer .formField.readonly { background: #e8e8e8; border-color: rgba(150,150,150,0.5); }
+  .formLayer .formField.readonly input, .formLayer .formField.readonly textarea, .formLayer .formField.readonly select { background: #e8e8e8; }
+  .formLayer .formField.required { border-color: rgba(220,160,40,0.85); }
+  .formLayer .formField.invalid { border: 2px solid #d04848; box-shadow: 0 0 0 2px rgba(208,72,72,0.25); }
+  .ribbonGroup.hidden { display:none; }
   .formLayer .formField.signature { background: rgba(160,80,160,0.08); border:1px dashed rgba(160,80,160,0.55); display:flex; align-items:center; justify-content:center; color:#a05ca0; font-size:0.78rem; pointer-events:none; }
   .searchPanel, .gotoPanel { position:absolute; top: 0.5rem; right: 1rem; background:#2d2d30;
                  border:1px solid #444; border-radius:4px; padding: 0.3rem;
@@ -1046,6 +1056,7 @@ async function renderSlot(idx: number) {
     await ensureTextLayer(idx);
     renderHighlightsFor(idx);
     await ensureLinkLayer(idx);
+    renderFormFor(idx);
   } catch (e) {
     setStatus(`Render error p${idx + 1}: ${e}`);
   } finally {
@@ -1344,6 +1355,8 @@ function applyOpenedDoc(doc: OpenedDocument, label: string) {
     pageRotation.clear();
     textRunsCache.clear();
     linksCache.clear();
+    formFields = [];
+    formFieldsByPage.clear();
     searchCount.textContent = "";
     renderOutline();
     rebuildSlots();
@@ -1354,6 +1367,7 @@ function applyOpenedDoc(doc: OpenedDocument, label: string) {
     setStatus(`${label} — ${pageCount} pages`);
     updateChrome();
     void refreshUndoUi();
+    void refreshFormFields();
   } catch (e) {
     setStatus(`Error: ${e}`);
   }
@@ -1940,7 +1954,6 @@ function applyDocSnapshot(snap: DocSnapshot) {
   pageCount = snap.page_count;
   pageSizes = snap.page_sizes;
   outline = snap.outline;
-  pageRotation.clear();
   if (currentPage >= pageCount) currentPage = Math.max(0, pageCount - 1);
   textRunsCache.clear();
   linksCache.clear();
@@ -1948,16 +1961,25 @@ function applyDocSnapshot(snap: DocSnapshot) {
   currentHit = -1;
   searchCount.textContent = "";
   renderOutline();
-  rebuildSlots();
-  if (viewMode === "single") {
-    navigateTo(currentPage, { recordHistory: false });
-  } else if (sameGeometry) {
-    // Annotation-only edits: keep the user's scroll position instead of jumping.
+  if (sameGeometry) {
+    // Annotation / form edit: bytes changed but page count + sizes stable.
+    // Keep the existing slot DOM, scroll position, and any focused HTML
+    // overlay; just invalidate render state so visible pages refresh in
+    // place when they're picked up by the queue.
+    for (const s of slots) {
+      s.loaded = false;
+      s.lastZoom = null;
+    }
     viewer.scrollTop = prevScrollTop;
     viewer.scrollLeft = prevScrollLeft;
-    scheduleRender(currentPage);
+    for (let i = 0; i < slots.length; i++) {
+      if (Math.abs(i - currentPage) <= MAX_RENDER_DIST) scheduleRender(i);
+    }
   } else {
-    scheduleRender(currentPage);
+    pageRotation.clear();
+    rebuildSlots();
+    if (viewMode === "single") navigateTo(currentPage, { recordHistory: false });
+    else scheduleRender(currentPage);
   }
   renderThumbsShell();
   updateChrome();
@@ -2194,6 +2216,17 @@ async function triggerSaveAs() {
   });
   if (!dest || typeof dest !== "string") return;
   const level = pdfaLevelEl?.value ?? "off";
+  if (level !== "off" && hasInteractiveFormFields()) {
+    // Default save must never destroy a fillable form. PDF/A flattens AcroForm
+    // fields to static content, so route around it for form documents.
+    setStatus(`PDF/A skipped — document is a fillable form. Saved plain PDF: ${dest}`);
+    try {
+      await invoke("save_pdf_as", { document: currentDoc, path: dest });
+    } catch (e) {
+      setStatus(`Save error: ${e}`);
+    }
+    return;
+  }
   if (level !== "off") {
     setStatus(`Saving as PDF/A-${level}…`);
     try {
@@ -2214,6 +2247,22 @@ async function triggerSaveAs() {
   } catch (e) {
     setStatus(`Save error: ${e}`);
   }
+}
+
+function hasInteractiveFormFields(): boolean {
+  return formFields.some(
+    (f) => !f.readonly && (f.kind === "text" || f.kind === "checkbox" ||
+      f.kind === "radio" || f.kind === "combobox" || f.kind === "listbox" ||
+      f.kind === "signature"),
+  );
+}
+
+async function confirmFormsLostInPdfa(level: string): Promise<boolean> {
+  if (!hasInteractiveFormFields()) return true;
+  return await confirmDialog(
+    `This document contains interactive form fields. Saving as PDF/A-${level} flattens the form: field values are baked into static content and the document is no longer fillable.\n\nContinue and lose the interactive form?`,
+    { title: "PDF/A would flatten the form", kind: "warning" },
+  );
 }
 
 async function triggerPrint() {
@@ -3092,6 +3141,10 @@ async function runSaveAsPdfa() {
     title: `Save as PDF/A-${level}`,
   });
   if (!dest || typeof dest !== "string") return;
+  if (!(await confirmFormsLostInPdfa(level))) {
+    setStatus("Save cancelled");
+    return;
+  }
   settingsOverlay.classList.add("hidden");
   setStatus(`Converting to PDF/A-${level}…`);
   try {
@@ -4366,6 +4419,76 @@ interface FormFieldInfo {
 
 let formFields: FormFieldInfo[] = [];
 const formFieldsByPage = new Map<number, FormFieldInfo[]>();
+const invalidFieldIds = new Set<string>();
+const formGroupEl = document.getElementById("formGroup") as HTMLElement;
+
+function isFieldEmpty(f: FormFieldInfo): boolean {
+  switch (f.kind) {
+    case "text":
+    case "combobox":
+    case "listbox":
+      return !f.value || f.value.length === 0;
+    case "checkbox":
+    case "radio":
+      return (f.value ?? "Off") === "Off";
+    case "signature":
+      return true; // we don't sign yet
+    default:
+      return false;
+  }
+}
+
+function validateForm() {
+  invalidFieldIds.clear();
+  const missing: FormFieldInfo[] = [];
+  for (const f of formFields) {
+    if (!f.required || f.readonly) continue;
+    if (isFieldEmpty(f)) {
+      missing.push(f);
+      invalidFieldIds.add(f.id);
+    }
+  }
+  for (let i = 0; i < slots.length; i++) renderFormFor(i);
+  if (missing.length === 0) {
+    const total = formFields.filter((f) => f.required && !f.readonly).length;
+    setStatus(total === 0 ? "No required fields" : `All ${total} required fields filled`);
+    return;
+  }
+  setStatus(
+    `${missing.length} required field${missing.length > 1 ? "s" : ""} missing — first: ${missing[0].id}`,
+  );
+  const first = missing[0];
+  const slot = slots[first.page];
+  if (slot) {
+    slot.wrap.scrollIntoView({ block: "center", behavior: "smooth" });
+    const wrap = slot.formLayer.querySelector(
+      `.formField[data-field-id="${CSS.escape(first.id)}"]`,
+    ) as HTMLElement | null;
+    const ed = wrap?.querySelector("input, textarea, select") as HTMLElement | null;
+    ed?.focus();
+  }
+}
+
+async function runResetForm() {
+  if (!currentDoc) return;
+  const ok = await confirmDialog(
+    "Reset all form fields to their default values?",
+    { title: "Reset form", kind: "warning" },
+  );
+  if (!ok) return;
+  invalidFieldIds.clear();
+  setStatus("Resetting form…");
+  try {
+    const snap = await invoke<DocSnapshot>("reset_form", { document: currentDoc });
+    applyDocSnapshot(snap);
+    setStatus("Form reset");
+  } catch (e) {
+    setStatus(`Reset error: ${e}`);
+  }
+}
+
+document.getElementById("formValidateBtn")!.addEventListener("click", validateForm);
+document.getElementById("formResetBtn")!.addEventListener("click", () => void runResetForm());
 
 async function refreshFormFields() {
   if (!currentDoc) {
@@ -4386,110 +4509,186 @@ async function refreshFormFields() {
     list.push(f);
     formFieldsByPage.set(f.page, list);
   }
+  // Drop validation marks for fields that no longer exist.
+  for (const id of Array.from(invalidFieldIds)) {
+    if (!formFields.some((f) => f.id === id)) invalidFieldIds.delete(id);
+  }
+  formGroupEl.classList.toggle("hidden", formFields.length === 0);
   renderAllForms();
 }
 
 function renderAllForms() {
+  // Preserve focus across re-render so users can keep typing / tabbing while
+  // a previous field's edit is round-tripping through the backend.
+  const active = document.activeElement as HTMLElement | null;
+  const activeWrap = active?.closest(".formField") as HTMLElement | null;
+  const activeFieldId = activeWrap?.dataset.fieldId ?? null;
+  let caretStart: number | null = null;
+  let caretEnd: number | null = null;
+  if (active && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) {
+    caretStart = active.selectionStart;
+    caretEnd = active.selectionEnd;
+  }
   for (let i = 0; i < slots.length; i++) renderFormFor(i);
+  if (activeFieldId) {
+    const wrap = document.querySelector(
+      `.formField[data-field-id="${CSS.escape(activeFieldId)}"]`,
+    ) as HTMLElement | null;
+    const ed = wrap?.querySelector("input, textarea, select") as HTMLElement | null;
+    if (ed) {
+      ed.focus();
+      if (
+        caretStart !== null &&
+        (ed instanceof HTMLInputElement || ed instanceof HTMLTextAreaElement)
+      ) {
+        try {
+          ed.setSelectionRange(caretStart, caretEnd ?? caretStart);
+        } catch {
+          // Some input types (e.g. number) reject setSelectionRange.
+        }
+      }
+    }
+  }
 }
 
 function renderFormFor(pageIdx: number) {
   const slot = slots[pageIdx];
   if (!slot) return;
-  slot.formLayer.innerHTML = "";
-  const list = formFieldsByPage.get(pageIdx);
-  if (!list || list.length === 0) return;
+  const list = formFieldsByPage.get(pageIdx) ?? [];
   const sz = pageSizes[pageIdx];
-  if (!sz) return;
+  if (!sz || !slot.loaded || slot.img.width === 0 || slot.img.height === 0) {
+    slot.formLayer.innerHTML = "";
+    return;
+  }
+  // Index existing wraps by fieldId so we can update them in place — this
+  // avoids a DOM tear-down on every backend round-trip and keeps focus,
+  // caret position, and selection intact across edits.
+  const existing = new Map<string, HTMLElement>();
+  for (const w of Array.from(slot.formLayer.children) as HTMLElement[]) {
+    const id = w.dataset.fieldId;
+    if (id) existing.set(id, w);
+    else w.remove();
+  }
+  const seen = new Set<string>();
+  const rot = effectiveRotation(pageIdx);
   for (const f of list) {
-    const left = (f.rect_pt.x0 / sz.width_pt) * 100;
-    const top = (f.rect_pt.y0 / sz.height_pt) * 100;
-    const width = ((f.rect_pt.x1 - f.rect_pt.x0) / sz.width_pt) * 100;
-    const height = ((f.rect_pt.y1 - f.rect_pt.y0) / sz.height_pt) * 100;
-    const wrap = document.createElement("div");
-    wrap.className = "formField";
-    if (f.readonly) wrap.classList.add("readonly");
-    if (f.required) wrap.classList.add("required");
-    wrap.style.left = `${left}%`;
-    wrap.style.top = `${top}%`;
-    wrap.style.width = `${width}%`;
-    wrap.style.height = `${height}%`;
-    wrap.title = `${f.id}${f.required ? " *required" : ""}`;
-    if (f.kind === "text") {
-      const ed = f.multiline
-        ? document.createElement("textarea")
-        : document.createElement("input");
-      if (!f.multiline) (ed as HTMLInputElement).type = f.password ? "password" : "text";
-      ed.value = f.value ?? "";
-      if (f.readonly) (ed as HTMLInputElement | HTMLTextAreaElement).readOnly = true;
-      ed.addEventListener("blur", () => {
-        if (f.readonly) return;
-        const v = (ed as HTMLInputElement | HTMLTextAreaElement).value;
-        if (v === (f.value ?? "")) return;
-        void writeFormField(f.id, v);
-      });
-      (ed as HTMLElement).addEventListener("keydown", (e: Event) => {
-        const ke = e as KeyboardEvent;
-        if (ke.key === "Enter" && !f.multiline) {
-          ke.preventDefault();
-          (ed as HTMLInputElement).blur();
-        }
-        if (ke.key === "Escape") {
-          (ed as HTMLInputElement | HTMLTextAreaElement).value = f.value ?? "";
-          (ed as HTMLInputElement | HTMLTextAreaElement).blur();
-        }
-      });
-      wrap.appendChild(ed);
-    } else if (f.kind === "checkbox") {
-      wrap.classList.add("formCheck");
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = (f.value ?? "Off") !== "Off";
-      cb.disabled = f.readonly;
-      cb.addEventListener("change", () => {
-        if (f.readonly) return;
-        void writeFormField(f.id, cb.checked ? "Yes" : "Off");
-      });
-      wrap.appendChild(cb);
-    } else if (f.kind === "radio") {
-      wrap.classList.add("formCheck");
-      const rb = document.createElement("input");
-      rb.type = "checkbox";
-      rb.checked = (f.value ?? "Off") !== "Off";
-      rb.disabled = f.readonly;
-      rb.addEventListener("change", () => {
-        if (f.readonly) return;
-        void writeFormField(f.id, rb.checked ? "On" : "Off");
-      });
-      wrap.appendChild(rb);
-    } else if (f.kind === "combobox" || f.kind === "listbox") {
-      const sel = document.createElement("select");
-      if (f.kind === "listbox") sel.size = Math.max(2, f.options?.length ?? 2);
-      const blank = document.createElement("option");
-      blank.value = "";
-      blank.textContent = "—";
-      sel.appendChild(blank);
-      for (const o of f.options ?? []) {
-        const op = document.createElement("option");
-        op.value = o;
-        op.textContent = o;
-        sel.appendChild(op);
-      }
-      sel.value = f.value ?? "";
-      if (f.readonly) sel.disabled = true;
-      sel.addEventListener("change", () => {
-        if (f.readonly) return;
-        void writeFormField(f.id, sel.value);
-      });
-      wrap.appendChild(sel);
-    } else if (f.kind === "signature") {
-      wrap.classList.add("signature");
-      wrap.textContent = "Signature";
+    const box = rotateRectToSlot(f.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    if (box.width <= 0 || box.height <= 0) continue;
+    seen.add(f.id);
+    let wrap = existing.get(f.id);
+    if (!wrap) {
+      wrap = buildFormFieldWrap(f);
+      slot.formLayer.appendChild(wrap);
     } else {
-      // pushbutton / unknown: skip rendering interactive control.
-      continue;
+      updateFormFieldWrap(wrap, f);
     }
-    slot.formLayer.appendChild(wrap);
+    wrap.style.left = `${box.left}px`;
+    wrap.style.top = `${box.top}px`;
+    wrap.style.width = `${box.width}px`;
+    wrap.style.height = `${box.height}px`;
+  }
+  for (const [id, w] of existing) {
+    if (!seen.has(id)) w.remove();
+  }
+}
+
+function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "formField";
+  wrap.dataset.fieldId = f.id;
+  wrap.dataset.kind = f.kind;
+  if (f.readonly) wrap.classList.add("readonly");
+  if (f.required) wrap.classList.add("required");
+  if (invalidFieldIds.has(f.id)) wrap.classList.add("invalid");
+  wrap.title = `${f.id}${f.required ? " *required" : ""}`;
+  if (f.kind === "text") {
+    const ed = f.multiline
+      ? document.createElement("textarea")
+      : document.createElement("input");
+    if (!f.multiline) (ed as HTMLInputElement).type = f.password ? "password" : "text";
+    ed.value = f.value ?? "";
+    if (f.readonly) (ed as HTMLInputElement | HTMLTextAreaElement).readOnly = true;
+    ed.addEventListener("blur", () => {
+      if (wrap.classList.contains("readonly")) return;
+      const v = (ed as HTMLInputElement | HTMLTextAreaElement).value;
+      if (v === (wrap.dataset.lastValue ?? "")) return;
+      wrap.dataset.lastValue = v;
+      void writeFormField(f.id, v);
+    });
+    (ed as HTMLElement).addEventListener("keydown", (evt: Event) => {
+      const e = evt as KeyboardEvent;
+      if (e.key === "Enter" && !f.multiline) {
+        e.preventDefault();
+        (ed as HTMLInputElement).blur();
+      }
+      if (e.key === "Escape") {
+        (ed as HTMLInputElement | HTMLTextAreaElement).value = wrap.dataset.lastValue ?? "";
+        (ed as HTMLInputElement | HTMLTextAreaElement).blur();
+      }
+    });
+    wrap.dataset.lastValue = f.value ?? "";
+    wrap.appendChild(ed);
+  } else if (f.kind === "checkbox" || f.kind === "radio") {
+    wrap.classList.add("formCheck");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = (f.value ?? "Off") !== "Off";
+    cb.disabled = f.readonly;
+    cb.addEventListener("change", () => {
+      if (wrap.classList.contains("readonly")) return;
+      const onValue = f.kind === "checkbox" ? "Yes" : "On";
+      void writeFormField(f.id, cb.checked ? onValue : "Off");
+    });
+    wrap.appendChild(cb);
+  } else if (f.kind === "combobox" || f.kind === "listbox") {
+    const sel = document.createElement("select");
+    if (f.kind === "listbox") sel.size = Math.max(2, f.options?.length ?? 2);
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "—";
+    sel.appendChild(blank);
+    for (const o of f.options ?? []) {
+      const op = document.createElement("option");
+      op.value = o;
+      op.textContent = o;
+      sel.appendChild(op);
+    }
+    sel.value = f.value ?? "";
+    if (f.readonly) sel.disabled = true;
+    sel.addEventListener("change", () => {
+      if (wrap.classList.contains("readonly")) return;
+      void writeFormField(f.id, sel.value);
+    });
+    wrap.appendChild(sel);
+  } else if (f.kind === "signature") {
+    wrap.classList.add("signature");
+    wrap.textContent = "Signature";
+  }
+  return wrap;
+}
+
+function updateFormFieldWrap(wrap: HTMLElement, f: FormFieldInfo) {
+  wrap.classList.toggle("readonly", f.readonly);
+  wrap.classList.toggle("required", f.required);
+  wrap.classList.toggle("invalid", invalidFieldIds.has(f.id));
+  wrap.title = `${f.id}${f.required ? " *required" : ""}`;
+  const active = document.activeElement;
+  if (f.kind === "text") {
+    const ed = wrap.querySelector("input, textarea") as
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | null;
+    if (ed && ed !== active) ed.value = f.value ?? "";
+    wrap.dataset.lastValue = f.value ?? "";
+    if (ed) ed.readOnly = f.readonly;
+  } else if (f.kind === "checkbox" || f.kind === "radio") {
+    const cb = wrap.querySelector("input[type=checkbox]") as HTMLInputElement | null;
+    if (cb && cb !== active) cb.checked = (f.value ?? "Off") !== "Off";
+    if (cb) cb.disabled = f.readonly;
+  } else if (f.kind === "combobox" || f.kind === "listbox") {
+    const sel = wrap.querySelector("select") as HTMLSelectElement | null;
+    if (sel && sel !== active) sel.value = f.value ?? "";
+    if (sel) sel.disabled = f.readonly;
   }
 }
 
@@ -4497,12 +4696,28 @@ async function writeFormField(name: string, value: string) {
   if (!currentDoc) return;
   setStatus(`Setting ${name}…`);
   try {
-    const snap = await invoke<DocSnapshot>("set_form_field", {
+    const updated = await invoke<FormFieldInfo | null>("set_form_field", {
       document: currentDoc,
       name,
       value,
     });
-    applyDocSnapshot(snap);
+    if (updated) {
+      // Patch in-memory form state without triggering a doc snapshot or page
+      // re-render. The HTML overlay is the source of truth visually; the
+      // backing bitmap will refresh next time the page is rendered.
+      const idx = formFields.findIndex((f) => f.id === name);
+      if (idx >= 0) formFields[idx] = updated;
+      const list = formFieldsByPage.get(updated.page);
+      if (list) {
+        const j = list.findIndex((f) => f.id === name);
+        if (j >= 0) list[j] = updated;
+      }
+      // Clear stale validation mark once the field has content.
+      if (invalidFieldIds.has(name) && !isFieldEmpty(updated)) {
+        invalidFieldIds.delete(name);
+      }
+      renderFormFor(updated.page);
+    }
     setStatus(`Field ${name} saved`);
   } catch (e) {
     setStatus(`form error: ${e}`);

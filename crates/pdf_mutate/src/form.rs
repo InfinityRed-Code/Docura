@@ -251,9 +251,21 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
     match ft.as_slice() {
         b"Tx" | b"Ch" => {
             let v = pdf_string_text(value);
+            let widgets = widget_kids(doc, target);
             if let Ok(d) = doc.get_dictionary_mut(target) {
                 d.set("V", v);
-                d.remove(b"AP"); // force regeneration
+                d.remove(b"AP"); // force regeneration on viewers that honor NeedAppearances
+            }
+            // The widget kid carries the visible /AP stream. Strip it so our
+            // PDFium renderer (which doesn't run FFLDraw) doesn't keep
+            // painting the stale appearance under the HTML overlay.
+            for w in widgets {
+                if w == target {
+                    continue;
+                }
+                if let Ok(d) = doc.get_dictionary_mut(w) {
+                    d.remove(b"AP");
+                }
             }
         }
         b"Btn" => {
@@ -317,6 +329,7 @@ pub fn reset_form(doc: &mut Document) -> MutateResult<()> {
         let dv = doc.get_dictionary(fid).ok().and_then(|d| d.get(b"DV").ok().cloned());
         match ft.as_slice() {
             b"Tx" | b"Ch" => {
+                let widgets = widget_kids(doc, fid);
                 if let Ok(d) = doc.get_dictionary_mut(fid) {
                     if let Some(dv) = dv {
                         d.set("V", dv);
@@ -324,6 +337,14 @@ pub fn reset_form(doc: &mut Document) -> MutateResult<()> {
                         d.remove(b"V");
                     }
                     d.remove(b"AP");
+                }
+                for w in widgets {
+                    if w == fid {
+                        continue;
+                    }
+                    if let Ok(d) = doc.get_dictionary_mut(w) {
+                        d.remove(b"AP");
+                    }
                 }
             }
             b"Btn" => {
