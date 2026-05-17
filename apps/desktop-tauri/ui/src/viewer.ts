@@ -1,0 +1,738 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  PageLink, PageSize, RectPt, Rendered, FitMode, Slot, TextRun, ViewMode,
+} from "./types";
+import { state, callbacks } from "./state";
+import { dom, setStatus } from "./dom";
+
+const ZOOM_PRESETS = [0.1, 0.5, 0.8, 1, 1.2, 1.5, 2];
+const EVICT_DIST = 10;
+const MAX_RENDER_DIST = 6;
+
+export function syncZoomUi() {
+  const pct = Math.round(state.zoom * 100);
+  dom.zoomCustomOpt.textContent = `${pct}%`;
+  const hit = ZOOM_PRESETS.find((v) => Math.abs(v - state.zoom) < 0.005);
+  dom.zoomSelect.value = hit !== undefined ? String(hit) : "custom";
+}
+
+export function updateChrome() {
+  if (!state.currentDoc) {
+    dom.pageInput.value = "1";
+    dom.pageTotal.textContent = "/ 0";
+    syncZoomUi();
+    return;
+  }
+  dom.pageInput.value = String(state.currentPage + 1);
+  dom.pageInput.max = String(state.pageCount);
+  dom.pageTotal.textContent = `/ ${state.pageCount}`;
+  syncZoomUi();
+  state.thumbWraps.forEach((w, i) => w.classList.toggle("active", i === state.currentPage));
+}
+
+export function computeZoom(): number {
+  if (!state.currentDoc || !state.pageSizes[state.currentPage]) return state.zoom;
+  const rs = rotatedSize(state.currentPage);
+  if (rs.w === 0) return state.zoom;
+  const vw = dom.viewer.clientWidth - 32;
+  const vh = dom.viewer.clientHeight - 32;
+  if (vw <= 0 || vh <= 0) return state.zoom;
+  const cols = state.viewMode === "double" ? 2 : 1;
+  const colW = (vw - (cols - 1) * 10) / cols;
+  switch (state.fitMode) {
+    case "width":
+      return clampZoom(colW / rs.w);
+    case "page":
+      return clampZoom(Math.min(colW / rs.w, vh / rs.h));
+    case "actual":
+      return 1.0;
+    case "custom":
+    default:
+      return state.zoom;
+  }
+}
+
+export function clampZoom(z: number) {
+  return Math.max(0.1, Math.min(10, z));
+}
+
+export function effectiveRotation(idx: number): number {
+  return ((state.docRotation + (state.pageRotation.get(idx) || 0)) % 4 + 4) % 4;
+}
+
+export function rotatedSize(idx: number): { w: number; h: number } {
+  const sz = state.pageSizes[idx];
+  if (!sz) return { w: 0, h: 0 };
+  const rot = effectiveRotation(idx);
+  if (rot === 1 || rot === 3) return { w: sz.height_pt, h: sz.width_pt };
+  return { w: sz.width_pt, h: sz.height_pt };
+}
+
+export function makeSlot(pageIdx: number): Slot {
+  const wrap = document.createElement("div");
+  wrap.className = "pageSlot";
+  wrap.dataset.page = String(pageIdx);
+  const img = document.createElement("img");
+  img.className = "page";
+  img.alt = `Page ${pageIdx + 1}`;
+  const selectLayer = document.createElement("div");
+  selectLayer.className = "selectLayer";
+  const highlightLayer = document.createElement("div");
+  highlightLayer.className = "highlightLayer";
+  const linkLayer = document.createElement("div");
+  linkLayer.className = "linkLayer";
+  const drawLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  drawLayer.setAttribute("class", "drawLayer");
+  drawLayer.dataset.page = String(pageIdx);
+  const formLayer = document.createElement("div");
+  formLayer.className = "formLayer";
+  formLayer.dataset.page = String(pageIdx);
+  const placeholder = document.createElement("div");
+  placeholder.className = "placeholder";
+  placeholder.textContent = `${pageIdx + 1}`;
+  wrap.appendChild(placeholder);
+  wrap.appendChild(img);
+  wrap.appendChild(selectLayer);
+  wrap.appendChild(highlightLayer);
+  wrap.appendChild(linkLayer);
+  wrap.appendChild(drawLayer);
+  wrap.appendChild(formLayer);
+  return {
+    wrap, img, selectLayer, highlightLayer, linkLayer, drawLayer, formLayer, placeholder,
+    loaded: false, renderingZoom: null, lastZoom: null,
+  };
+}
+
+export function rebuildSlots() {
+  dom.pageList.innerHTML = "";
+  state.slots = [];
+  for (let i = 0; i < state.pageCount; i++) {
+    const s = makeSlot(i);
+    dom.pageList.appendChild(s.wrap);
+    state.slots.push(s);
+  }
+  applyViewMode();
+  sizeSlots();
+  recenterScrollX();
+  setupObserver();
+}
+
+export function applyViewMode() {
+  dom.pageList.classList.remove("single", "continuous", "double");
+  dom.pageList.classList.add(state.viewMode);
+  if (state.viewMode === "single") {
+    state.slots.forEach((s, i) => s.wrap.classList.toggle("current", i === state.currentPage));
+  }
+}
+
+export function sizeSlots() {
+  if (state.slots.length === 0) return;
+  state.zoom = computeZoom();
+  for (let i = 0; i < state.slots.length; i++) {
+    const rs = rotatedSize(i);
+    if (rs.w === 0) continue;
+    const w = Math.round(rs.w * state.zoom);
+    const h = Math.round(rs.h * state.zoom);
+    const slot = state.slots[i];
+    slot.wrap.style.width = `${w}px`;
+    slot.wrap.style.height = `${h}px`;
+    slot.img.width = w;
+    slot.img.height = h;
+  }
+  if (state.wheelZoomMode) {
+    const bx = Math.max(16, dom.viewer.clientWidth);
+    const by = Math.max(16, dom.viewer.clientHeight);
+    dom.pageList.style.padding = `${by}px ${bx}px`;
+  } else {
+    dom.pageList.style.padding = "";
+  }
+}
+
+export function recenterScrollX() {
+  const extra = dom.viewer.scrollWidth - dom.viewer.clientWidth;
+  if (extra > 0) dom.viewer.scrollLeft = extra / 2;
+}
+
+export function evictSlot(idx: number) {
+  const slot = state.slots[idx];
+  if (!slot || !slot.loaded) return;
+  slot.img.removeAttribute("src");
+  slot.img.width = 0;
+  slot.img.height = 0;
+  slot.selectLayer.innerHTML = "";
+  slot.highlightLayer.innerHTML = "";
+  slot.linkLayer.innerHTML = "";
+  slot.loaded = false;
+  slot.lastZoom = null;
+  state.renderQueue.delete(idx);
+}
+
+export function evictFarSlots() {
+  for (let i = 0; i < state.slots.length; i++) {
+    if (Math.abs(i - state.currentPage) > EVICT_DIST) evictSlot(i);
+  }
+}
+
+export function setupObserver() {
+  if (state.observer) state.observer.disconnect();
+  state.observer = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const idx = parseInt((e.target as HTMLElement).dataset.page || "-1", 10);
+        if (idx < 0) continue;
+        if (e.isIntersecting) {
+          scheduleRender(idx);
+          if (state.viewMode === "continuous" || state.viewMode === "double") {
+            updateCurrentFromScroll();
+          }
+        } else if (Math.abs(idx - state.currentPage) > EVICT_DIST) {
+          evictSlot(idx);
+        }
+      }
+    },
+    { root: dom.viewer, rootMargin: "200px 0px", threshold: 0.01 },
+  );
+  for (const s of state.slots) state.observer.observe(s.wrap);
+}
+
+export function scheduleRender(idx: number) {
+  if (!state.currentDoc) return;
+  const slot = state.slots[idx];
+  if (!slot) return;
+  if (slot.loaded && slot.lastZoom === state.zoom) return;
+  state.renderQueue.add(idx);
+  pumpRenderQueue();
+}
+
+function pruneRenderQueue() {
+  for (const idx of state.renderQueue) {
+    if (Math.abs(idx - state.currentPage) > MAX_RENDER_DIST) {
+      state.renderQueue.delete(idx);
+    }
+  }
+}
+
+async function pumpRenderQueue() {
+  if (state.renderRunning) return;
+  state.renderRunning = true;
+  try {
+    while (state.renderQueue.size > 0) {
+      pruneRenderQueue();
+      const nearest = pickNearest();
+      if (nearest === null) break;
+      state.renderQueue.delete(nearest);
+      await renderSlot(nearest);
+    }
+  } finally {
+    state.renderRunning = false;
+  }
+}
+
+function pickNearest(): number | null {
+  let best: number | null = null;
+  let bestDist = Infinity;
+  for (const idx of state.renderQueue) {
+    const d = Math.abs(idx - state.currentPage);
+    if (d < bestDist) {
+      bestDist = d;
+      best = idx;
+    }
+  }
+  return best;
+}
+
+async function renderSlot(idx: number) {
+  if (!state.currentDoc) return;
+  const slot = state.slots[idx];
+  if (!slot) return;
+  const docAtStart = state.currentDoc;
+  const zoomAtStart = state.zoom;
+  slot.renderingZoom = zoomAtStart;
+  try {
+    const res = await invoke<Rendered>("render_page", {
+      document: docAtStart,
+      page: idx,
+      zoom: zoomAtStart,
+      rotation: effectiveRotation(idx),
+    });
+    if (docAtStart !== state.currentDoc) return;
+    slot.img.src = res.data_url;
+    slot.img.width = res.width;
+    slot.img.height = res.height;
+    slot.wrap.style.width = `${res.width}px`;
+    slot.wrap.style.height = `${res.height}px`;
+    slot.placeholder.style.display = "none";
+    slot.loaded = true;
+    slot.lastZoom = zoomAtStart;
+    await ensureTextLayer(idx);
+    renderHighlightsFor(idx);
+    await ensureLinkLayer(idx);
+    callbacks.renderFormFor(idx);
+  } catch (e) {
+    setStatus(`Render error p${idx + 1}: ${e}`);
+  } finally {
+    slot.renderingZoom = null;
+  }
+}
+
+async function ensureTextLayer(idx: number) {
+  if (!state.currentDoc) return;
+  const slot = state.slots[idx];
+  if (!slot) return;
+  let runs = state.textRunsCache.get(idx);
+  if (!runs) {
+    try {
+      runs = await invoke<TextRun[]>("page_text_layout_cmd", {
+        document: state.currentDoc,
+        page: idx,
+      });
+      state.textRunsCache.set(idx, runs);
+    } catch {
+      runs = [];
+    }
+  }
+  const sz = state.pageSizes[idx];
+  if (!sz) return;
+  const rot = effectiveRotation(idx);
+  slot.selectLayer.innerHTML = "";
+  for (const run of runs) {
+    const box = rotateRectToSlot(run.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    if (box.width <= 0 || box.height <= 0) continue;
+    const span = document.createElement("span");
+    span.textContent = run.text;
+    span.style.left = `${box.left}px`;
+    span.style.top = `${box.top}px`;
+    span.style.fontSize = `${box.height}px`;
+    span.style.height = `${box.height}px`;
+    span.style.width = `${box.width}px`;
+    slot.selectLayer.appendChild(span);
+  }
+}
+
+export function rotateRectToSlot(
+  r: RectPt,
+  rot: number,
+  sz: PageSize,
+  imgW: number,
+  imgH: number,
+): { left: number; top: number; width: number; height: number } {
+  const w0 = sz.width_pt;
+  const h0 = sz.height_pt;
+  let nx0 = r.x0, ny0 = r.y0, nx1 = r.x1, ny1 = r.y1;
+  let dw = w0, dh = h0;
+  switch (rot & 3) {
+    case 0:
+      break;
+    case 1:
+      nx0 = h0 - r.y1; ny0 = r.x0; nx1 = h0 - r.y0; ny1 = r.x1;
+      dw = h0; dh = w0;
+      break;
+    case 2:
+      nx0 = w0 - r.x1; ny0 = h0 - r.y1; nx1 = w0 - r.x0; ny1 = h0 - r.y0;
+      break;
+    case 3:
+      nx0 = r.y0; ny0 = w0 - r.x1; nx1 = r.y1; ny1 = w0 - r.x0;
+      dw = h0; dh = w0;
+      break;
+  }
+  const sx = imgW / dw;
+  const sy = imgH / dh;
+  return {
+    left: nx0 * sx,
+    top: ny0 * sy,
+    width: (nx1 - nx0) * sx,
+    height: (ny1 - ny0) * sy,
+  };
+}
+
+async function ensureLinkLayer(idx: number) {
+  if (!state.currentDoc) return;
+  const slot = state.slots[idx];
+  if (!slot) return;
+  slot.linkLayer.innerHTML = "";
+  let links = state.linksCache.get(idx);
+  if (!links) {
+    try {
+      links = await invoke<PageLink[]>("page_links_cmd", {
+        document: state.currentDoc,
+        page: idx,
+      });
+      state.linksCache.set(idx, links);
+    } catch {
+      links = [];
+    }
+  }
+  const sz = state.pageSizes[idx];
+  if (!sz || links.length === 0) return;
+  const rot = effectiveRotation(idx);
+  for (const link of links) {
+    const box = rotateRectToSlot(link.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    if (box.width <= 0 || box.height <= 0) continue;
+    const a = document.createElement("a");
+    a.style.left = `${box.left}px`;
+    a.style.top = `${box.top}px`;
+    a.style.width = `${box.width}px`;
+    a.style.height = `${box.height}px`;
+    if (link.target.kind === "Page") {
+      const targetPage = link.target.value;
+      a.title = `Page ${targetPage + 1}`;
+      a.href = `#page-${targetPage + 1}`;
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        navigateTo(targetPage, { recordHistory: true });
+      });
+    } else {
+      const url = link.target.value;
+      a.title = url;
+      a.href = url;
+      a.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        try {
+          await invoke("open_external", { url });
+        } catch (err) {
+          setStatus(`Open link error: ${err}`);
+        }
+      });
+    }
+    slot.linkLayer.appendChild(a);
+  }
+}
+
+export function renderHighlightsFor(idx: number) {
+  const slot = state.slots[idx];
+  if (!slot) return;
+  const sz = state.pageSizes[idx];
+  if (!sz) return;
+  slot.highlightLayer.innerHTML = "";
+  const rot = effectiveRotation(idx);
+  state.hits.forEach((hit, hIdx) => {
+    if (hit.page !== idx) return;
+    for (const r of hit.rects_pt) {
+      const box = rotateRectToSlot(r, rot, sz, slot.img.width, slot.img.height);
+      if (box.width <= 0 || box.height <= 0) continue;
+      const el = document.createElement("div");
+      el.className = "hit" + (hIdx === state.currentHit ? " current" : "");
+      el.style.left = `${box.left}px`;
+      el.style.top = `${box.top}px`;
+      el.style.width = `${box.width}px`;
+      el.style.height = `${box.height}px`;
+      slot.highlightLayer.appendChild(el);
+    }
+  });
+}
+
+export function renderAllHighlights() {
+  for (let i = 0; i < state.slots.length; i++) renderHighlightsFor(i);
+}
+
+export function invalidateRenders() {
+  for (const s of state.slots) {
+    s.loaded = false;
+    s.lastZoom = null;
+    s.placeholder.style.display = "";
+    s.img.removeAttribute("src");
+    s.linkLayer.innerHTML = "";
+  }
+  state.renderQueue.clear();
+}
+
+export function reflow() {
+  if (!state.currentDoc) return;
+  invalidateRenders();
+  sizeSlots();
+  recenterScrollX();
+  if (state.viewMode === "single") {
+    applyViewMode();
+    scheduleRender(state.currentPage);
+    const slot = state.slots[state.currentPage];
+    if (slot) slot.wrap.scrollIntoView({ block: "start", inline: "center" });
+  } else {
+    for (const [i, slot] of state.slots.entries()) {
+      const rect = slot.wrap.getBoundingClientRect();
+      const vRect = dom.viewer.getBoundingClientRect();
+      const visible = rect.bottom > vRect.top - 400 && rect.top < vRect.bottom + 400;
+      if (visible) scheduleRender(i);
+    }
+  }
+  updateChrome();
+}
+
+export function updateCurrentFromScroll() {
+  if (state.slots.length === 0) return;
+  const vRect = dom.viewer.getBoundingClientRect();
+  const midY = vRect.top + vRect.height / 2;
+  let best = state.currentPage;
+  let bestDist = Infinity;
+  for (let i = 0; i < state.slots.length; i++) {
+    const r = state.slots[i].wrap.getBoundingClientRect();
+    const c = (r.top + r.bottom) / 2;
+    const d = Math.abs(c - midY);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  if (best !== state.currentPage) {
+    state.currentPage = best;
+    updateChrome();
+  }
+}
+
+export function navigateTo(idx: number, _opts: { recordHistory?: boolean } = {}) {
+  const clamped = Math.max(0, Math.min(state.pageCount - 1, idx));
+  if (clamped === state.currentPage) {
+    updateChrome();
+    return;
+  }
+  state.currentPage = clamped;
+  if (state.viewMode === "single") {
+    applyViewMode();
+    scheduleRender(clamped);
+  } else {
+    const slot = state.slots[clamped];
+    if (slot) slot.wrap.scrollIntoView({ block: "start", inline: "center", behavior: "auto" });
+    scheduleRender(clamped);
+  }
+  evictFarSlots();
+  updateChrome();
+}
+
+export function goToPage(idx: number) {
+  navigateTo(idx);
+}
+
+export function rotate(delta: number, docWide: boolean) {
+  if (!state.currentDoc) return;
+  if (docWide) {
+    state.docRotation = (((state.docRotation + delta) % 4) + 4) % 4;
+  } else {
+    const cur = state.pageRotation.get(state.currentPage) || 0;
+    state.pageRotation.set(state.currentPage, (((cur + delta) % 4) + 4) % 4);
+  }
+  reflow();
+}
+
+export function setDarkMode(on: boolean) {
+  state.darkMode = on;
+  document.body.classList.toggle("dark", state.darkMode);
+}
+
+function findSlotAtClient(clientX: number, clientY: number): { slot: Slot; idx: number } | null {
+  let best: { slot: Slot; idx: number; dist: number } | null = null;
+  for (let i = 0; i < state.slots.length; i++) {
+    const s = state.slots[i];
+    if (!s) continue;
+    const r = s.wrap.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) continue;
+    if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+      return { slot: s, idx: i };
+    }
+    const cx = (r.left + r.right) / 2;
+    const cy = (r.top + r.bottom) / 2;
+    const d = Math.hypot(clientX - cx, clientY - cy);
+    if (!best || d < best.dist) best = { slot: s, idx: i, dist: d };
+  }
+  return best ? { slot: best.slot, idx: best.idx } : null;
+}
+
+export function applyZoomAround(newZoom: number, clientX: number, clientY: number) {
+  if (!state.currentDoc) return;
+  const clamped = clampZoom(newZoom);
+  if (clamped === state.zoom) return;
+  const anchor = findSlotAtClient(clientX, clientY);
+  let fx = 0.5, fy = 0.5;
+  let anchorSlot: Slot | null = null;
+  if (anchor) {
+    const r = anchor.slot.wrap.getBoundingClientRect();
+    fx = (clientX - r.left) / r.width;
+    fy = (clientY - r.top) / r.height;
+    anchorSlot = anchor.slot;
+  }
+  state.fitMode = "custom";
+  dom.fitSelect.value = "custom";
+  state.zoom = clamped;
+  invalidateRenders();
+  sizeSlots();
+  if (state.viewMode === "single") {
+    applyViewMode();
+    scheduleRender(state.currentPage);
+  } else {
+    for (const [i, slot] of state.slots.entries()) {
+      const rect = slot.wrap.getBoundingClientRect();
+      const vRect = dom.viewer.getBoundingClientRect();
+      const visible = rect.bottom > vRect.top - 400 && rect.top < vRect.bottom + 400;
+      if (visible) scheduleRender(i);
+    }
+  }
+  if (anchorSlot) {
+    const nr = anchorSlot.wrap.getBoundingClientRect();
+    const wantedLeft = clientX - nr.width * fx;
+    const wantedTop = clientY - nr.height * fy;
+    dom.viewer.scrollLeft += nr.left - wantedLeft;
+    dom.viewer.scrollTop += nr.top - wantedTop;
+  }
+  updateChrome();
+}
+
+export function setWheelZoomMode(on: boolean) {
+  state.wheelZoomMode = on;
+  document.body.classList.toggle("wheelZoomMode", on);
+  if (!on) document.body.classList.remove("panning");
+  const btn = document.getElementById("wheelZoomBtn");
+  if (btn) btn.classList.toggle("active", on);
+  if (state.currentDoc) {
+    sizeSlots();
+    const slot = state.slots[state.currentPage];
+    if (slot) {
+      slot.wrap.scrollIntoView({ block: "start", inline: "center" });
+    } else if (on) {
+      recenterScrollX();
+    }
+  }
+}
+
+export function toggleSidebar() {
+  const becomingVisible = dom.sidebarEl.classList.contains("hidden");
+  dom.sidebarEl.classList.toggle("hidden");
+  if (becomingVisible) {
+    const activeTab = document.querySelector(".tab.active") as HTMLElement | null;
+    const tab = activeTab?.dataset.tab;
+    if (tab === "thumbs") {
+      // armThumbObserver is in doc.ts (thumbs section). Use callback if needed; here defer to import.
+      // Inline: dispatch a custom event that doc.ts listens for.
+      document.dispatchEvent(new CustomEvent("rustpdf:arm-thumb-observer"));
+    }
+  }
+}
+
+export function initViewer() {
+  // Page nav
+  document.getElementById("prevPage")!.addEventListener("click", () => goToPage(state.currentPage - 1));
+  document.getElementById("nextPage")!.addEventListener("click", () => goToPage(state.currentPage + 1));
+  dom.pageInput.addEventListener("change", () => {
+    const v = parseInt(dom.pageInput.value, 10);
+    if (!isNaN(v)) goToPage(v - 1);
+  });
+
+  // Zoom buttons / dropdowns
+  document.getElementById("zoomIn")!.addEventListener("click", () => {
+    state.fitMode = "custom";
+    dom.fitSelect.value = "custom";
+    state.zoom = clampZoom(state.zoom + 0.1);
+    reflow();
+  });
+  document.getElementById("zoomOut")!.addEventListener("click", () => {
+    state.fitMode = "custom";
+    dom.fitSelect.value = "custom";
+    state.zoom = clampZoom(state.zoom - 0.1);
+    reflow();
+  });
+  dom.fitSelect.addEventListener("change", () => {
+    state.fitMode = dom.fitSelect.value as FitMode;
+    reflow();
+  });
+  dom.fitSelect.value = state.fitMode;
+  dom.zoomSelect.addEventListener("change", () => {
+    const v = dom.zoomSelect.value;
+    if (v === "custom") { syncZoomUi(); return; }
+    const z = parseFloat(v);
+    if (!isFinite(z)) return;
+    state.fitMode = "custom";
+    dom.fitSelect.value = "custom";
+    state.zoom = clampZoom(z);
+    reflow();
+  });
+
+  // View mode
+  dom.viewModeSelect.addEventListener("change", () => {
+    state.viewMode = dom.viewModeSelect.value as ViewMode;
+    applyViewMode();
+    reflow();
+    if (state.viewMode === "single") navigateTo(state.currentPage, { recordHistory: false });
+  });
+  dom.viewModeSelect.value = state.viewMode;
+
+  // Rotate / dark
+  document.getElementById("rotLeft")!.addEventListener("click", (e) => rotate(-1, (e as MouseEvent).shiftKey));
+  document.getElementById("rotRight")!.addEventListener("click", (e) => rotate(1, (e as MouseEvent).shiftKey));
+  document.getElementById("darkToggle")!.addEventListener("click", () => setDarkMode(!state.darkMode));
+
+  // Sidebar
+  document.getElementById("sidebarBtn")!.addEventListener("click", toggleSidebar);
+
+  // Wheel-zoom mode toggle
+  document.getElementById("wheelZoomBtn")!.addEventListener("click", () => {
+    setWheelZoomMode(!state.wheelZoomMode);
+  });
+
+  // Pan via left-drag in wheel-zoom mode
+  dom.viewer.addEventListener("pointerdown", (e: PointerEvent) => {
+    if (!state.wheelZoomMode) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    state.panState = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startScrollLeft: dom.viewer.scrollLeft,
+      startScrollTop: dom.viewer.scrollTop,
+    };
+    dom.viewer.setPointerCapture(e.pointerId);
+    document.body.classList.add("panning");
+  });
+  dom.viewer.addEventListener("pointermove", (e: PointerEvent) => {
+    if (!state.panState || e.pointerId !== state.panState.pointerId) return;
+    dom.viewer.scrollLeft = state.panState.startScrollLeft - (e.clientX - state.panState.startClientX);
+    dom.viewer.scrollTop = state.panState.startScrollTop - (e.clientY - state.panState.startClientY);
+  });
+  const endPan = (e: PointerEvent) => {
+    if (!state.panState || e.pointerId !== state.panState.pointerId) return;
+    try { dom.viewer.releasePointerCapture(state.panState.pointerId); } catch { /* ignore */ }
+    state.panState = null;
+    document.body.classList.remove("panning");
+  };
+  dom.viewer.addEventListener("pointerup", endPan);
+  dom.viewer.addEventListener("pointercancel", endPan);
+
+  // Wheel zoom / single-page-mode wheel turn
+  dom.viewer.addEventListener(
+    "wheel",
+    (e: WheelEvent) => {
+      if (!state.currentDoc) return;
+      if (e.ctrlKey || state.wheelZoomMode) {
+        e.preventDefault();
+        const step = e.ctrlKey ? 0.1 : 0.15;
+        const delta = e.deltaY > 0 ? -step : step;
+        applyZoomAround(state.zoom + delta, e.clientX, e.clientY);
+        return;
+      }
+      if (state.viewMode !== "single") return;
+      const cs = getComputedStyle(dom.pageList);
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padBottom = parseFloat(cs.paddingBottom) || 0;
+      const atTop = dom.viewer.scrollTop <= padTop + 1;
+      const atBottom =
+        dom.viewer.scrollTop + dom.viewer.clientHeight >= dom.viewer.scrollHeight - padBottom - 1;
+      if (e.deltaY < 0 && atTop && state.currentPage > 0) {
+        e.preventDefault();
+        goToPage(state.currentPage - 1);
+        dom.viewer.scrollTop = dom.viewer.scrollHeight;
+      } else if (e.deltaY > 0 && atBottom && state.currentPage < state.pageCount - 1) {
+        e.preventDefault();
+        goToPage(state.currentPage + 1);
+        dom.viewer.scrollTop = 0;
+      }
+    },
+    { passive: false },
+  );
+
+  // Scroll updates current page
+  dom.viewer.addEventListener("scroll", () => {
+    if (state.viewMode !== "single") updateCurrentFromScroll();
+  });
+
+  // Resize re-flows fit modes
+  window.addEventListener("resize", () => {
+    if (state.fitMode === "width" || state.fitMode === "page") reflow();
+  });
+}

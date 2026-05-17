@@ -590,7 +590,15 @@ pub struct FreeTextAnnotation {
     pub text: String,
     /// RGB text color 0..1.
     pub color: [f32; 3],
+    /// RGBA background. Alpha == 0 means "no background fill".
+    pub bg_color: [f32; 4],
     pub font_size: f32,
+    /// Logical font name. Only "Helv" is wired up today; the field exists so
+    /// future fonts can flow through without an API break.
+    pub font_family: String,
+    /// Viewer rotation at insert time (0/1/2/3 = 0/90/180/270 deg CW).
+    /// Used to rotate the appearance so text reads upright in the rotated view.
+    pub rotation_quadrant: u8,
     pub opacity: f32,
     pub author: Option<String>,
     pub print: bool,
@@ -718,7 +726,24 @@ pub fn add_freetext_annotation(
     // Build /AP /N — PDFium needs an explicit appearance stream for FreeText.
     let w = urx - llx;
     let h = ury - lly;
-    let content = build_freetext_appearance(&annot.text, fs, c, w, h);
+    let bg = if annot.bg_color[3] > 0.0 {
+        Some([
+            annot.bg_color[0].clamp(0.0, 1.0),
+            annot.bg_color[1].clamp(0.0, 1.0),
+            annot.bg_color[2].clamp(0.0, 1.0),
+        ])
+    } else {
+        None
+    };
+    let content = build_freetext_appearance(
+        &annot.text,
+        fs,
+        c,
+        bg,
+        w,
+        h,
+        annot.rotation_quadrant & 3,
+    );
     let mut font_dict = Dictionary::new();
     font_dict.set("Helv", Object::Reference(helv_id));
     let mut resources = Dictionary::new();
@@ -771,21 +796,63 @@ fn pdf_literal_string(s: &str) -> Vec<u8> {
     out
 }
 
-fn build_freetext_appearance(text: &str, fs: f32, rgb: [f32; 3], w: f32, h: f32) -> Vec<u8> {
+fn build_freetext_appearance(
+    text: &str,
+    fs: f32,
+    rgb: [f32; 3],
+    bg: Option<[f32; 3]>,
+    w: f32,
+    h: f32,
+    rotation_quadrant: u8,
+) -> Vec<u8> {
     use std::io::Write;
-    let mut buf: Vec<u8> = Vec::with_capacity(text.len() + 160);
-    let r = rgb[0]; let g = rgb[1]; let b = rgb[2];
+    let mut buf: Vec<u8> = Vec::with_capacity(text.len() + 200);
+    let r = rgb[0];
+    let g = rgb[1];
+    let b = rgb[2];
     let margin = 2.0_f32;
     let leading = fs * 1.2;
-    // DEBUG: yellow background so we can tell whether PDFium uses /AP /N at all.
-    let _ = write!(&mut buf, "q\n1 1 0 rg\n0 0 {w:.2} {h:.2} re f\nQ\n");
-    let _ = write!(&mut buf, "q\nBT\n/Helv {fs:.2} Tf\n{leading:.2} TL\n{r:.3} {g:.3} {b:.3} rg\n");
-    let first_y = h - margin - fs;
-    let _ = write!(&mut buf, "1 0 0 1 {margin:.2} {first_y:.2} Tm\n");
+
+    if let Some(bg) = bg {
+        let _ = write!(
+            &mut buf,
+            "q\n{br:.3} {bg2:.3} {bb:.3} rg\n0 0 {w:.2} {h:.2} re f\nQ\n",
+            br = bg[0],
+            bg2 = bg[1],
+            bb = bg[2],
+        );
+    }
+
+    // Pick text matrix + first-line origin so the rendered text reads upright
+    // in the user's rotated viewer.  Each quadrant rotates the glyph orientation
+    // by the same angle the viewer is rotated, which cancels out at render time.
+    // The line-advance vector is the displacement between successive baselines,
+    // applied via `Td` (we cannot rely on `T*` because T*'s direction depends on
+    // text-space orientation and would point "up" in the user's view for q=2).
+    let (tm, origin, advance) = match rotation_quadrant {
+        // No rotation: existing behavior — top-left origin, baseline goes +x.
+        0 => ("1 0 0 1", (margin, h - margin - fs), (0.0_f32, -leading)),
+        // 90° CW viewer rotation: text reads bottom-up in PDF (view left-to-right).
+        1 => ("0 1 -1 0", (margin + fs, margin), (leading, 0.0)),
+        // 180° viewer rotation: text reads right-to-left and lines stack downward
+        // in PDF space (= downward in viewer too, since both flip together).
+        2 => ("-1 0 0 -1", (w - margin, margin + fs), (0.0, leading)),
+        // 90° CCW viewer rotation (= 270° CW): text reads top-down in PDF.
+        3 => (
+            "0 -1 1 0",
+            (w - margin - fs, h - margin),
+            (-leading, 0.0),
+        ),
+        _ => ("1 0 0 1", (margin, h - margin - fs), (0.0, -leading)),
+    };
+
+    let _ = write!(&mut buf, "q\nBT\n/Helv {fs:.2} Tf\n");
+    let _ = write!(&mut buf, "{r:.3} {g:.3} {b:.3} rg\n");
+    let _ = write!(&mut buf, "{tm} {ex:.2} {ey:.2} Tm\n", ex = origin.0, ey = origin.1);
     let mut first = true;
     for line in text.split('\n') {
         if !first {
-            buf.extend_from_slice(b"T*\n");
+            let _ = write!(&mut buf, "{ax:.2} {ay:.2} Td\n", ax = advance.0, ay = advance.1);
         }
         first = false;
         let s = pdf_literal_string(line);

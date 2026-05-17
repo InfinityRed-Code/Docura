@@ -1161,8 +1161,14 @@ struct FreeTextArgs {
     text: String,
     #[serde(default = "default_freetext_color")]
     color: [f32; 3],
+    #[serde(default = "default_freetext_bg")]
+    bg_color: [f32; 4],
     #[serde(default = "default_freetext_size")]
     font_size: f32,
+    #[serde(default = "default_freetext_font")]
+    font_family: String,
+    #[serde(default)]
+    rotation_quadrant: u8,
     #[serde(default = "default_shape_opacity")]
     opacity: f32,
     #[serde(default)]
@@ -1172,6 +1178,8 @@ struct FreeTextArgs {
 }
 fn default_freetext_color() -> [f32; 3] { [0.0, 0.0, 0.0] }
 fn default_freetext_size() -> f32 { 14.0 }
+fn default_freetext_bg() -> [f32; 4] { [1.0, 1.0, 1.0, 1.0] }
+fn default_freetext_font() -> String { "Helv".to_string() }
 
 #[tauri::command]
 async fn add_freetext(
@@ -1191,7 +1199,10 @@ async fn add_freetext(
             rect: args.rect,
             text: args.text,
             color: args.color,
+            bg_color: args.bg_color,
             font_size: args.font_size,
+            font_family: args.font_family,
+            rotation_quadrant: args.rotation_quadrant,
             opacity: args.opacity,
             author: args.author,
             print: args.print,
