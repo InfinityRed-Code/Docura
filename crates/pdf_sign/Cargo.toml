@@ -1,0 +1,42 @@
+[package]
+name = "pdf_sign"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+lopdf = { workspace = true }
+serde = { workspace = true }
+
+# ASN.1 / PKI (RustCrypto) — pure Rust for a clean Windows build.
+der = { version = "0.7", features = ["oid", "alloc", "derive"] }
+spki = "0.7"
+x509-cert = "0.2"
+cms = "0.2"
+pkcs8 = { version = "0.10", features = ["pkcs5", "encryption"] }
+pkcs5 = { version = "0.7", features = ["alloc", "pbes2", "3des"] }
+pkcs12 = "0.1"
+rsa = { version = "0.9", features = ["sha2"] }
+p256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+signature = "2"
+
+# RFC 3161 timestamp client (blocking HTTP, rustls — no native TLS).
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+[features]
+# Windows certificate-store signing (CNG). Off by default; the PKCS#12 path
+# needs no native APIs.
+win-store = ["dep:windows"]
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", optional = true, features = [
+    "Win32_Security_Cryptography",
+    "Win32_Foundation",
+] }
+
+[dev-dependencies]
+hex = "0.4"
+lopdf = { workspace = true }

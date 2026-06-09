@@ -118,14 +118,30 @@ Abdeckung aller AcroForm-basierten Behörden-/Unternehmensformulare.
 
 Unterschreiben — Adobe-Kernfeature.
 
-- [ ] Freihand-Unterschrift zeichnen + speichern [U]
-- [ ] Unterschrift als Bild einfügen [X: lopdf + image]
-- [ ] Initial-Stempel [U + X: lopdf]
-- [ ] Textfelder per Klick auf beliebige Stelle [U]
-- [ ] Datum, Häkchen, Kreuz-Stempel [U]
-- [ ] Digitale Signatur (PKCS#7, PAdES-B) — Zertifikat aus Windows-Keystore [X: ring / openssl / windows-crates]
-- [ ] Signaturprüfung (Validität, Trust-Chain, Zeitstempel) [X]
-- [ ] Zeitstempel-Dienst (RFC 3161) optional [X]
+- [x] Freihand-Unterschrift zeichnen + speichern [U] — Sign-Tab, Canvas-Zeichnen, persistiert als PNG
+- [x] Unterschrift als Bild einfügen [X: lopdf + image] — Import + Stamp mit Alpha (/SMask)
+- [x] Initial-Stempel [U + X: lopdf]
+- [x] Textfelder per Klick auf beliebige Stelle [U]
+- [x] Datum, Häkchen, Kreuz-Stempel [U] — Klick-platzierte Marks (Ink/Shape/FreeText)
+- [x] Digitale Signatur (PKCS#7/CMS, PAdES-B-B) — PKCS#12-Datei + Windows-Keystore (CNG) [crate `pdf_sign`, pure RustCrypto]
+- [x] Signaturprüfung (ByteRange-Digest + CMS-Signatur + Signer-CN + Coverage) [X]
+- [x] Zeitstempel-Dienst (RFC 3161) → PAdES-B-T [X: ureq]
+
+> Hinweis: `pdf_sign` nutzt pure-RustCrypto (sauberer Windows-Build). PKCS#12
+> nur mit PBES2 (AES/3DES) — alte RC2-`.pfx` neu exportieren mit
+> `-keypbe AES-256-CBC -certpbe AES-256-CBC`. Signatur kryptographisch via
+> OpenSSL-Oracle-Test verifiziert; mit echtem Adobe/`pdfsig` gegenprüfen.
+
+**Zusätzlich mit v0.7 umgesetzt (UX/Infra, nicht im ursprünglichen Milestone):**
+
+- [x] Eigener **Forms-Tab** — Feld-Navigation (vor/zurück), Validieren, Reset, Highlight-Toggle, Live-Feldzähler
+- [x] Eigener **Sign-Tab** — Unterschrift zeichnen/tippen/importieren, Marks per Klick
+- [x] **Foxit-Light-Theme** als Default + Hell/Dunkel-Umschalter in den Einstellungen
+- [x] **i18n** — Deutsch (Standard) + Englisch, umschaltbar (`i18n.ts`, `t()`); komplette Oberfläche lokalisiert
+- [x] **Nativer Windows-Druckdialog** (`PrintDlgW` + GDI/pdfium-Raster auf Drucker-DC) statt Still-Druck auf Standarddrucker
+
+> Offen aus v0.6: Feld-Berechnungen (JS-Formeln). Status-Toasts in
+> `edit.ts`/`doc.ts`/`chrome.ts`/`viewer.ts` noch nicht lokalisiert.
 
 ---
 

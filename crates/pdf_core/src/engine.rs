@@ -49,4 +49,11 @@ pub trait PdfEngine: Send + Sync {
     fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()>;
     /// Enumerate AcroForm fields. Returns empty Vec for documents without forms.
     fn list_form_fields(&self, doc: DocumentId) -> CoreResult<Vec<FormFieldInfo>>;
+    /// Show the native OS print dialog and print the document. Returns `true`
+    /// if the user printed, `false` if they cancelled. Default: unsupported.
+    fn print_with_dialog(&self, _doc: DocumentId) -> CoreResult<bool> {
+        Err(crate::error::CoreError::Engine(
+            "printing is not supported on this platform".into(),
+        ))
+    }
 }

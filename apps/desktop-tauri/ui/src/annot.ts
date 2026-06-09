@@ -5,15 +5,26 @@ import type {
   RectPt, ShapeKindUi, Slot,
 } from "./types";
 import { state, callbacks } from "./state";
+import { t } from "./i18n";
 import { dom, setStatus } from "./dom";
 import { applyDocSnapshot } from "./doc";
-import { effectiveRotation, navigateTo, rotateRectToSlot } from "./viewer";
+import { effectiveRotation, goToPage, navigateTo, rotateRectToSlot } from "./viewer";
 
 // ---------- Annotation tools (markup + shapes) ----------
 
+// Clear any active Fill & Sign tool selection (sign.ts owns its own buttons,
+// but markup/shape tools are mutually exclusive with it).
+export function clearSignToolUi() {
+  state.signTool = null;
+  document.querySelectorAll<HTMLButtonElement>(".signMark").forEach((b) => b.classList.remove("active"));
+  document.getElementById("signSignatureBtn")?.classList.remove("active");
+  document.getElementById("signInitialsBtn")?.classList.remove("active");
+  document.body.classList.remove("signMode");
+}
+
 function setAnnotTool(k: MarkupKind | null) {
   state.annotTool = k;
-  if (k !== null) state.shapeTool = null;
+  if (k !== null) { state.shapeTool = null; clearSignToolUi(); }
   document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.annot === k);
   });
@@ -24,9 +35,9 @@ function setAnnotTool(k: MarkupKind | null) {
   document.body.classList.toggle("shapeMode", false);
 }
 
-function setShapeTool(k: ShapeKindUi | null) {
+export function setShapeTool(k: ShapeKindUi | null) {
   state.shapeTool = k;
-  if (k !== null) state.annotTool = null;
+  if (k !== null) { state.annotTool = null; clearSignToolUi(); }
   document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.shape === k);
   });
@@ -37,7 +48,7 @@ function setShapeTool(k: ShapeKindUi | null) {
   document.body.classList.toggle("annotMode", false);
 }
 
-function hexToRgb01(hex: string): [number, number, number] {
+export function hexToRgb01(hex: string): [number, number, number] {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return [1, 0.95, 0];
   const v = parseInt(m[1], 16);
@@ -232,7 +243,7 @@ function updateInkPreview(el: SVGElement, points: { x: number; y: number }[]) {
   poly.setAttribute("points", points.map((p) => `${p.x},${p.y}`).join(" "));
 }
 
-function imagePxToPagePt(slot: Slot, pageIdx: number, x: number, y: number): { x: number; y: number } | null {
+export function imagePxToPagePt(slot: Slot, pageIdx: number, x: number, y: number): { x: number; y: number } | null {
   const sz = state.pageSizes[pageIdx];
   if (!sz) return null;
   const bb = slot.wrap.getBoundingClientRect();
@@ -253,7 +264,7 @@ function imagePxToPagePt(slot: Slot, pageIdx: number, x: number, y: number): { x
   }
 }
 
-function findSlotFromTarget(target: EventTarget | null): { slot: Slot; idx: number } | null {
+export function findSlotFromTarget(target: EventTarget | null): { slot: Slot; idx: number } | null {
   let node: HTMLElement | null = target as HTMLElement | null;
   while (node && node !== document.body) {
     if (node.classList && node.classList.contains("pageSlot")) {
@@ -267,7 +278,7 @@ function findSlotFromTarget(target: EventTarget | null): { slot: Slot; idx: numb
   return null;
 }
 
-function spawnFreeTextEditor(
+export function spawnFreeTextEditor(
   slot: Slot,
   pageIdx: number,
   rectPx: { x: number; y: number; w: number; h: number },
@@ -556,12 +567,10 @@ function validateForm() {
   for (let i = 0; i < state.slots.length; i++) renderFormFor(i);
   if (missing.length === 0) {
     const total = state.formFields.filter((f) => f.required && !f.readonly).length;
-    setStatus(total === 0 ? "No required fields" : `All ${total} required fields filled`);
+    setStatus(total === 0 ? t("form.noRequired") : t("form.allFilled", { total }));
     return;
   }
-  setStatus(
-    `${missing.length} required field${missing.length > 1 ? "s" : ""} missing — first: ${missing[0].id}`,
-  );
+  setStatus(t("form.missing", { count: missing.length, id: missing[0].id }));
   const first = missing[0];
   const slot = state.slots[first.page];
   if (slot) {
@@ -577,18 +586,18 @@ function validateForm() {
 async function runResetForm() {
   if (!state.currentDoc) return;
   const ok = await confirmDialog(
-    "Reset all form fields to their default values?",
-    { title: "Reset form", kind: "warning" },
+    t("form.resetConfirm"),
+    { title: t("form.resetTitle"), kind: "warning" },
   );
   if (!ok) return;
   state.invalidFieldIds.clear();
-  setStatus("Resetting form…");
+  setStatus(t("form.resetting"));
   try {
     const snap = await invoke<DocSnapshot>("reset_form", { document: state.currentDoc });
     applyDocSnapshot(snap);
-    setStatus("Form reset");
+    setStatus(t("form.reset"));
   } catch (e) {
-    setStatus(`Reset error: ${e}`);
+    setStatus(t("form.resetError", { e: String(e) }));
   }
 }
 
@@ -602,7 +611,7 @@ async function refreshFormFields() {
   try {
     state.formFields = await invoke<FormFieldInfo[]>("list_form_fields", { document: state.currentDoc });
   } catch (e) {
-    setStatus(`form fields error: ${e}`);
+    setStatus(t("form.fieldsError", { e: String(e) }));
     state.formFields = [];
   }
   state.formFieldsByPage.clear();
@@ -614,8 +623,65 @@ async function refreshFormFields() {
   for (const id of Array.from(state.invalidFieldIds)) {
     if (!state.formFields.some((f) => f.id === id)) state.invalidFieldIds.delete(id);
   }
-  dom.formGroupEl.classList.toggle("hidden", state.formFields.length === 0);
+  updateFormHint();
   renderAllForms();
+}
+
+// Fields in fill order: by page, then top-to-bottom, then left-to-right.
+function orderedFillableFields(): FormFieldInfo[] {
+  return state.formFields
+    .filter((f) => !f.readonly && f.kind !== "signature")
+    .sort((a, b) =>
+      a.page - b.page ||
+      a.rect_pt.y0 - b.rect_pt.y0 ||
+      a.rect_pt.x0 - b.rect_pt.x0);
+}
+
+function updateFormHint() {
+  const total = state.formFields.length;
+  const fillable = orderedFillableFields().length;
+  const required = state.formFields.filter((f) => f.required && !f.readonly).length;
+  const hasDoc = !!state.currentDoc;
+  let msg: string;
+  if (!hasDoc) msg = t("hint.noDoc");
+  else if (total === 0) msg = t("form.noFields");
+  else msg = required
+    ? t("form.countReq", { total, fillable, required })
+    : t("form.count", { total, fillable });
+  dom.formHintEl.textContent = msg;
+  const noFields = fillable === 0;
+  dom.formPrevBtn.disabled = noFields;
+  dom.formNextBtn.disabled = noFields;
+}
+
+function focusField(f: FormFieldInfo) {
+  goToPage(f.page);
+  requestAnimationFrame(() => {
+    const wrap = document.querySelector(
+      `.formField[data-field-id="${CSS.escape(f.id)}"]`,
+    ) as HTMLElement | null;
+    if (!wrap) return;
+    wrap.scrollIntoView({ block: "center", behavior: "smooth" });
+    const ed = wrap.querySelector("input, textarea, select") as HTMLElement | null;
+    ed?.focus();
+  });
+}
+
+function navigateField(dir: 1 | -1) {
+  const fields = orderedFillableFields();
+  if (fields.length === 0) return;
+  const active = document.activeElement as HTMLElement | null;
+  const curId = active?.closest(".formField")?.getAttribute("data-field-id") ?? null;
+  let idx = curId ? fields.findIndex((f) => f.id === curId) : -1;
+  idx = idx < 0
+    ? (dir === 1 ? 0 : fields.length - 1)
+    : (idx + dir + fields.length) % fields.length;
+  focusField(fields[idx]);
+}
+
+function toggleFormHighlight() {
+  const on = document.body.classList.toggle("formsNoHl");
+  dom.formHighlightBtn.classList.toggle("active", !on);
 }
 
 function renderAllForms() {
@@ -790,7 +856,7 @@ function updateFormFieldWrap(wrap: HTMLElement, f: FormFieldInfo) {
 
 async function writeFormField(name: string, value: string) {
   if (!state.currentDoc) return;
-  setStatus(`Setting ${name}…`);
+  setStatus(t("form.setting", { name }));
   try {
     const updated = await invoke<FormFieldInfo | null>("set_form_field", {
       document: state.currentDoc,
@@ -810,9 +876,9 @@ async function writeFormField(name: string, value: string) {
       }
       renderFormFor(updated.page);
     }
-    setStatus(`Field ${name} saved`);
+    setStatus(t("form.fieldSaved", { name }));
   } catch (e) {
-    setStatus(`form error: ${e}`);
+    setStatus(t("form.error", { e: String(e) }));
   }
 }
 
@@ -1135,6 +1201,10 @@ export function initAnnot() {
   // Form action buttons
   document.getElementById("formValidateBtn")!.addEventListener("click", validateForm);
   document.getElementById("formResetBtn")!.addEventListener("click", () => void runResetForm());
+  dom.formPrevBtn.addEventListener("click", () => navigateField(-1));
+  dom.formNextBtn.addEventListener("click", () => navigateField(1));
+  dom.formHighlightBtn.addEventListener("click", toggleFormHighlight);
+  updateFormHint();
 
   // Register callbacks so other modules can trigger annot/form updates
   // without import cycles.

@@ -9,6 +9,58 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.7.0] — 2026-06-09
+
+Milestone v0.7 — "Fill & Sign". Visual filling/signing plus cryptographic
+PAdES digital signatures, a Foxit-style UI redesign, theming, German/English
+localization, and native printing.
+
+### Added
+- **Forms tab.** Dedicated ribbon tab for AcroForm filling: field navigation
+  (previous/next), required-field validation, reset, a field-highlight toggle,
+  and a live field counter. (The backend form-fill from v0.6 is unchanged.)
+- **Sign tab — visual Fill & Sign.** Draw / type / import a reusable
+  signature and initials (stored as PNG under the app config dir); click-to-
+  place check / cross / dot / date / text marks. Reuses the existing
+  annotation writers (ink / shape / freetext / stamp).
+- **Transparent stamps.** `add_stamp` now preserves an image's alpha channel
+  via an `/SMask` soft mask, so drawn signatures keep their transparency
+  instead of painting an opaque white box. Opaque images still use JPEG.
+- **Digital signatures (PAdES).** New `pdf_sign` crate (pure RustCrypto):
+  - PAdES-B-B detached CMS `SignedData` with the ESS signing-certificate-v2
+    signed attribute; signing key from a **PKCS#12** `.pfx` (PBES2) or the
+    **Windows certificate store** (CNG / `NCryptSignHash`).
+  - Signing is an **incremental PDF update**, so any pre-existing signature
+    stays valid.
+  - **RFC 3161 timestamp** support upgrades signatures to PAdES-B-T.
+  - **Verification**: recomputes the `/ByteRange` digest, verifies the CMS
+    signature and signer certificate, and reports validity, coverage, signer
+    CN and timestamp presence.
+  - Tauri commands `sign_pdf_pkcs12`, `sign_pdf_windows_cert`,
+    `list_windows_certificates`, `verify_signatures`, plus a Sign-tab signing
+    modal and verification panel.
+- **Theme switch.** Light / dark interface toggle in Settings (persisted),
+  with light as the default.
+- **Localization (i18n).** German (default) and English, switchable in
+  Settings; the entire UI chrome and the new feature strings are translated.
+
+### Changed
+- **Foxit-style UI redesign.** The interface moved to a light Office-ribbon
+  look (CSS variables, light ribbon, blue accent, dark page canvas); the dark
+  theme is now an opt-in `body.theme-dark` variable override.
+- **Printing opens the native Windows print dialog.** `print_document` now
+  shows `PrintDlgW` and rasterises each page onto the chosen printer's device
+  context (`StretchDIBits`) instead of silently spooling the PDF to the
+  default printer. New engine method `PdfEngine::print_with_dialog`.
+- Workspace version bumped to 0.7.0.
+
+### Notes
+- PKCS#12 import supports PBES2 (AES/3DES) only; legacy RC2-encrypted `.pfx`
+  files must be re-exported with `-keypbe AES-256-CBC -certpbe AES-256-CBC`.
+- The Windows-cert-store signer and native printing compile cleanly but were
+  not runtime-verified in CI; digital signatures were cross-checked with
+  OpenSSL but should also be validated in Adobe Reader / poppler `pdfsig`.
+
 ## [0.6.2] — 2026-05-17
 
 ### Changed

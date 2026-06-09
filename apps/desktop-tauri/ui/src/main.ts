@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { initI18n } from "./i18n";
 import { applyTemplate } from "./template";
 import { initDom } from "./dom";
 import { state } from "./state";
@@ -6,8 +7,12 @@ import { initViewer, updateChrome, goToPage } from "./viewer";
 import { initDoc, openByPath } from "./doc";
 import { initEdit, addMergePaths } from "./edit";
 import { initAnnot } from "./annot";
+import { initSign } from "./sign";
 import { initChrome } from "./chrome";
 import { dom } from "./dom";
+
+// 0. Resolve language (German default) before the template renders.
+initI18n();
 
 // 1. Build DOM + capture refs before any module touches the page.
 applyTemplate();
@@ -17,6 +22,7 @@ initDom();
 // by doc.applyDocSnapshot, so it must run before any snapshot fires.
 initViewer();
 initAnnot();
+initSign();
 initDoc();
 initEdit();
 initChrome();

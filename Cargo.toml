@@ -7,11 +7,12 @@ members = [
     "crates/pdf_services",
     "crates/pdf_cache",
     "crates/pdf_mutate",
+    "crates/pdf_sign",
     "apps/desktop-tauri/src-tauri",
 ]
 
 [workspace.package]
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -35,6 +36,7 @@ pdf_pdfium = { path = "crates/pdf_pdfium" }
 pdf_services = { path = "crates/pdf_services" }
 pdf_cache = { path = "crates/pdf_cache" }
 pdf_mutate = { path = "crates/pdf_mutate" }
+pdf_sign = { path = "crates/pdf_sign" }
 
 [profile.release]
 lto = "thin"

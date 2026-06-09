@@ -31,6 +31,9 @@ use pdf_types::{
 };
 use pdfium_render::prelude::*;
 
+#[cfg(windows)]
+mod print_win;
+
 struct SyncPdfium(Pdfium);
 
 // SAFETY: All calls into PDFium are serialised through `PdfiumEngine::inner`.
@@ -425,6 +428,11 @@ impl PdfEngine for PdfiumEngine {
         Ok(bytes.to_vec())
     }
 
+    #[cfg(windows)]
+    fn print_with_dialog(&self, doc: DocumentId) -> CoreResult<bool> {
+        print_win::print_document_dialog(self, doc)
+    }
+
     fn list_form_fields(&self, doc: DocumentId) -> CoreResult<Vec<FormFieldInfo>> {
         let inner = self.inner.lock();
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
@@ -440,10 +448,10 @@ impl PdfEngine for PdfiumEngine {
                 let Some(field) = widget.form_field() else { continue };
                 let Ok(bounds) = widget.bounds() else { continue };
                 let rect_pt = RectPt {
-                    x0: bounds.left.value,
-                    y0: page_h - bounds.top.value,
-                    x1: bounds.right.value,
-                    y1: page_h - bounds.bottom.value,
+                    x0: bounds.left().value,
+                    y0: page_h - bounds.top().value,
+                    x1: bounds.right().value,
+                    y1: page_h - bounds.bottom().value,
                 };
                 let id = field.name().unwrap_or_default();
                 if id.is_empty() {

@@ -2,8 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use parking_lot::Mutex;
@@ -1863,99 +1862,16 @@ async fn redo_doc(
 }
 
 #[tauri::command]
+/// Show the native OS print dialog and print the document. Returns `true` if
+/// the user printed, `false` if they cancelled.
 async fn print_document(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let engine = state.engine.clone();
-    let bytes = tokio::task::spawn_blocking(move || {
-        engine.document_bytes(document).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        sweep_old_print_tempfiles();
-        let mut path = std::env::temp_dir();
-        path.push(format!("rustpdf-print-{}.pdf", tempfile_suffix()));
-        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
-        shell_print(&path).map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-static TEMPFILE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn tempfile_suffix() -> String {
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let c = TEMPFILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    format!("{pid:x}-{t:x}-{c:x}")
-}
-
-fn sweep_old_print_tempfiles() {
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return;
-    };
-    let now = SystemTime::now();
-    let max_age = Duration::from_secs(60 * 60);
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(s) = name.to_str() else { continue };
-        if !(s.starts_with("rustpdf-print-") && s.ends_with(".pdf")) {
-            continue;
-        }
-        let age = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|mt| now.duration_since(mt).ok());
-        if age.map(|a| a > max_age).unwrap_or(false) {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn shell_print(path: &Path) -> std::io::Result<()> {
-    use std::process::Command;
-    let path_str = path.to_string_lossy().replace('\'', "''");
-    let ps = format!(
-        "Start-Process -FilePath '{}' -Verb Print -WindowStyle Hidden",
-        path_str
-    );
-    let encoded = encode_powershell_command(&ps);
-    Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            &encoded,
-        ])
-        .spawn()
-        .map(|_| ())
-}
-
-#[cfg(target_os = "windows")]
-fn encode_powershell_command(cmd: &str) -> String {
-    let utf16: Vec<u16> = cmd.encode_utf16().collect();
-    let mut bytes = Vec::with_capacity(utf16.len() * 2);
-    for u in utf16 {
-        bytes.extend_from_slice(&u.to_le_bytes());
-    }
-    base64::engine::general_purpose::STANDARD.encode(&bytes)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn shell_print(path: &Path) -> std::io::Result<()> {
-    use std::process::Command;
-    Command::new("lp").arg(path).spawn().map(|_| ())
+    tokio::task::spawn_blocking(move || engine.print_with_dialog(document).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1996,6 +1912,263 @@ fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(trimmed, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+// ----------------- Saved signatures (Fill & Sign) -----------------
+
+/// Reusable signatures (drawn or imported) live as PNG files under the app
+/// config dir so they survive restarts and can be re-stamped onto any PDF.
+fn signatures_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("signatures");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn sanitize_signature_kind(kind: &str) -> String {
+    kind.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+struct SignatureEntry {
+    kind: String,
+    path: String,
+}
+
+#[tauri::command]
+fn save_signature(app: tauri::AppHandle, kind: String, data: Vec<u8>) -> Result<String, String> {
+    let safe = sanitize_signature_kind(&kind);
+    if safe.is_empty() {
+        return Err("invalid signature name".into());
+    }
+    let path = signatures_dir(&app)?.join(format!("{safe}.png"));
+    std::fs::write(&path, &data).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn list_signatures(app: tauri::AppHandle) -> Result<Vec<SignatureEntry>, String> {
+    let dir = signatures_dir(&app)?;
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("png") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    out.push(SignatureEntry {
+                        kind: stem.to_string(),
+                        path: p.to_string_lossy().into_owned(),
+                    });
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.kind.cmp(&b.kind));
+    Ok(out)
+}
+
+#[tauri::command]
+fn import_signature(
+    app: tauri::AppHandle,
+    kind: String,
+    src_path: String,
+) -> Result<String, String> {
+    let safe = sanitize_signature_kind(&kind);
+    if safe.is_empty() {
+        return Err("invalid signature name".into());
+    }
+    // Copy the raw bytes verbatim; the stamp decoder sniffs the format by
+    // content, so a non-PNG source keeps working (and PNG keeps its alpha).
+    let dest = signatures_dir(&app)?.join(format!("{safe}.png"));
+    std::fs::copy(&src_path, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_signature(app: tauri::AppHandle, kind: String) -> Result<(), String> {
+    let safe = sanitize_signature_kind(&kind);
+    if safe.is_empty() {
+        return Err("invalid signature name".into());
+    }
+    let path = signatures_dir(&app)?.join(format!("{safe}.png"));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ----------------- Digital signatures (PAdES) -----------------
+
+#[derive(Deserialize, Default)]
+struct DigitalSignMeta {
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    contact: Option<String>,
+    /// Optional RFC 3161 timestamp authority URL (PAdES-B-T).
+    #[serde(default)]
+    tsa_url: Option<String>,
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Format a UTC PDF date string `D:YYYYMMDDHHmmSS+00'00'` from epoch seconds.
+fn pdf_utc_date(epoch: i64) -> String {
+    let days = epoch.div_euclid(86_400);
+    let sod = epoch.rem_euclid(86_400);
+    let (h, mi, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as i64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("D:{year:04}{m:02}{d:02}{h:02}{mi:02}{s:02}+00'00'")
+}
+
+fn sign_options(meta: DigitalSignMeta, epoch: i64) -> pdf_sign::SignOptions {
+    pdf_sign::SignOptions {
+        reason: meta.reason,
+        name: meta.name,
+        location: meta.location,
+        contact: meta.contact,
+        pdf_date: pdf_utc_date(epoch),
+        signing_time_epoch: epoch,
+        ..Default::default()
+    }
+}
+
+async fn apply_signed_bytes(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pre_bytes: Vec<u8>,
+    new_bytes: Vec<u8>,
+) -> Result<DocSnapshot, String> {
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+#[tauri::command]
+async fn sign_pdf_pkcs12(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pfx_path: String,
+    password: String,
+    meta: DigitalSignMeta,
+) -> Result<DocSnapshot, String> {
+    let pfx = tokio::fs::read(&pfx_path)
+        .await
+        .map_err(|e| format!("read {pfx_path}: {e}"))?;
+    let engine = state.engine.clone();
+    let epoch = now_epoch();
+    let (pre, new) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let signer = pdf_sign::load_pkcs12(&pfx, &password).map_err(|e| e.to_string())?;
+        let tsa = meta.tsa_url.clone().filter(|u| !u.is_empty()).map(pdf_sign::TsaClient::new);
+        let opt = sign_options(meta, epoch);
+        let out = pdf_sign::sign_pdf(
+            &bytes,
+            &signer,
+            &opt,
+            tsa.as_ref().map(|t| t as &dyn pdf_sign::TimestampClient),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    apply_signed_bytes(state, document, pre, new).await
+}
+
+#[tauri::command]
+async fn verify_signatures(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<Vec<pdf_sign::SignatureReport>, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        pdf_sign::verify(&bytes).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn list_windows_certificates() -> Result<Vec<pdf_sign::windows::WinCertEntry>, String> {
+    pdf_sign::windows::list_certificates().map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn list_windows_certificates() -> Result<Vec<serde_json::Value>, String> {
+    Err("Windows certificate store is only available on Windows".into())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn sign_pdf_windows_cert(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    thumbprint: String,
+    meta: DigitalSignMeta,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let epoch = now_epoch();
+    let (pre, new) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let signer = pdf_sign::windows::WindowsSigner::from_thumbprint(&thumbprint)
+            .map_err(|e| e.to_string())?;
+        let tsa = meta.tsa_url.clone().filter(|u| !u.is_empty()).map(pdf_sign::TsaClient::new);
+        let opt = sign_options(meta, epoch);
+        let out = pdf_sign::sign_pdf(
+            &bytes,
+            &signer,
+            &opt,
+            tsa.as_ref().map(|t| t as &dyn pdf_sign::TimestampClient),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    apply_signed_bytes(state, document, pre, new).await
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+async fn sign_pdf_windows_cert(
+    _state: tauri::State<'_, AppState>,
+    _document: DocumentId,
+    _thumbprint: String,
+    _meta: DigitalSignMeta,
+) -> Result<DocSnapshot, String> {
+    Err("Windows certificate store is only available on Windows".into())
 }
 
 #[tauri::command]
@@ -2210,6 +2383,14 @@ pub fn run() {
             add_ink,
             add_stamp,
             add_text_note,
+            save_signature,
+            list_signatures,
+            import_signature,
+            delete_signature,
+            sign_pdf_pkcs12,
+            verify_signatures,
+            list_windows_certificates,
+            sign_pdf_windows_cert,
             list_form_fields,
             set_form_field,
             reset_form,

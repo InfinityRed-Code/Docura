@@ -6,6 +6,7 @@ import type {
   FitMode, GhostscriptInfo, SearchHit, VirtualPrinterInfo,
 } from "./types";
 import { state } from "./state";
+import { getLang, setLang, type Lang } from "./i18n";
 import { dom, setStatus } from "./dom";
 import {
   applyViewMode, goToPage, reflow, renderAllHighlights,
@@ -255,6 +256,27 @@ export function initChrome() {
   // Fullscreen / Presentation
   document.getElementById("fullscreenBtn")!.addEventListener("click", toggleFullscreen);
   document.getElementById("presentBtn")!.addEventListener("click", togglePresentation);
+
+  // Theme (light / dark) — persisted in localStorage.
+  const themeSelect = document.getElementById("themeSelect") as HTMLSelectElement;
+  const applyTheme = (theme: string) => {
+    document.body.classList.toggle("theme-dark", theme === "dark");
+  };
+  const savedTheme = localStorage.getItem("rustpdf-theme") ?? "light";
+  themeSelect.value = savedTheme;
+  applyTheme(savedTheme);
+  themeSelect.addEventListener("change", () => {
+    localStorage.setItem("rustpdf-theme", themeSelect.value);
+    applyTheme(themeSelect.value);
+  });
+
+  // Language — changing it re-renders the whole UI, so reload after persisting.
+  const langSelect = document.getElementById("langSelect") as HTMLSelectElement;
+  langSelect.value = getLang();
+  langSelect.addEventListener("change", () => {
+    setLang(langSelect.value as Lang);
+    location.reload();
+  });
 
   // Settings overlay
   void loadDefaultPdfa();

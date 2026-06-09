@@ -84,7 +84,10 @@ class DomRefs {
   commentHasContent!: HTMLInputElement;
 
   // Forms
-  formGroupEl!: HTMLElement;
+  formHintEl!: HTMLSpanElement;
+  formPrevBtn!: HTMLButtonElement;
+  formNextBtn!: HTMLButtonElement;
+  formHighlightBtn!: HTMLButtonElement;
 }
 
 export const dom = new DomRefs();
@@ -163,7 +166,10 @@ export function initDom() {
   dom.commentAuthorFilter = document.getElementById("commentAuthorFilter") as HTMLInputElement;
   dom.commentHasContent = document.getElementById("commentHasContent") as HTMLInputElement;
 
-  dom.formGroupEl = document.getElementById("formGroup") as HTMLElement;
+  dom.formHintEl = document.getElementById("formHint") as HTMLSpanElement;
+  dom.formPrevBtn = document.getElementById("formPrevBtn") as HTMLButtonElement;
+  dom.formNextBtn = document.getElementById("formNextBtn") as HTMLButtonElement;
+  dom.formHighlightBtn = document.getElementById("formHighlightBtn") as HTMLButtonElement;
 }
 
 export function setStatus(s: string) {

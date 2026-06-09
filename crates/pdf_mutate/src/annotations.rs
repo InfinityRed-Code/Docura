@@ -958,28 +958,66 @@ pub fn add_stamp_annotation(
     let page_id = page_id_for(doc, page_index)?;
     let page_h = page_height_pt(doc, page_id);
 
-    // Decode + re-encode image as JPEG.
+    // Decode image. Images with an alpha channel (e.g. drawn signatures on a
+    // transparent background) keep their transparency via an /SMask soft mask
+    // so they don't paint an opaque box over the page. Opaque images are
+    // re-encoded as JPEG, which is smaller for photos.
     let img = image::load_from_memory(&annot.image)
         .map_err(|e| MutateError::Parse(format!("stamp image decode: {e}")))?;
-    let rgb = img.to_rgb8();
-    let (iw, ih) = (rgb.width(), rgb.height());
-    let mut jpeg: Vec<u8> = Vec::new();
-    {
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85);
-        encoder
-            .encode(rgb.as_raw(), iw, ih, image::ExtendedColorType::Rgb8)
-            .map_err(|e| MutateError::Parse(format!("stamp jpeg: {e}")))?;
-    }
-    let image_dict = dictionary! {
-        "Type" => "XObject",
-        "Subtype" => "Image",
-        "Width" => iw as i64,
-        "Height" => ih as i64,
-        "ColorSpace" => "DeviceRGB",
-        "BitsPerComponent" => 8,
-        "Filter" => "DCTDecode",
+    let image_id = if img.color().has_alpha() {
+        let rgba = img.to_rgba8();
+        let (iw, ih) = (rgba.width(), rgba.height());
+        let n = (iw as usize) * (ih as usize);
+        let mut rgb: Vec<u8> = Vec::with_capacity(n * 3);
+        let mut alpha: Vec<u8> = Vec::with_capacity(n);
+        for px in rgba.pixels() {
+            rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+            alpha.push(px[3]);
+        }
+        let smask_dict = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => iw as i64,
+            "Height" => ih as i64,
+            "ColorSpace" => "DeviceGray",
+            "BitsPerComponent" => 8,
+        };
+        let mut smask_stream = Stream::new(smask_dict, alpha);
+        let _ = smask_stream.compress();
+        let smask_id = doc.add_object(Object::Stream(smask_stream));
+        let image_dict = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => iw as i64,
+            "Height" => ih as i64,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+            "SMask" => Object::Reference(smask_id),
+        };
+        let mut image_stream = Stream::new(image_dict, rgb);
+        let _ = image_stream.compress();
+        doc.add_object(Object::Stream(image_stream))
+    } else {
+        let rgb = img.to_rgb8();
+        let (iw, ih) = (rgb.width(), rgb.height());
+        let mut jpeg: Vec<u8> = Vec::new();
+        {
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85);
+            encoder
+                .encode(rgb.as_raw(), iw, ih, image::ExtendedColorType::Rgb8)
+                .map_err(|e| MutateError::Parse(format!("stamp jpeg: {e}")))?;
+        }
+        let image_dict = dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => iw as i64,
+            "Height" => ih as i64,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+            "Filter" => "DCTDecode",
+        };
+        doc.add_object(Object::Stream(Stream::new(image_dict, jpeg)))
     };
-    let image_id = doc.add_object(Object::Stream(Stream::new(image_dict, jpeg)));
 
     let (llx, lly, urx, ury) = rect_native(&annot.rect, page_h);
     let w = (urx - llx).max(1.0);

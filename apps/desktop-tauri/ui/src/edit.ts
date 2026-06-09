@@ -4,12 +4,14 @@ import type {
   DocSnapshot, EditMode, InsertWhere, MergeFile, OpenedDocument, RibbonTab,
 } from "./types";
 import { state, makeMdrag, makePdrag } from "./state";
+import { t } from "./i18n";
 import { dom, setStatus } from "./dom";
 import { reflow } from "./viewer";
 import {
   applyDocSnapshot, applyOpenedDoc, clearSelection, handleThumbSelect,
   refreshSelectionUi,
 } from "./doc";
+import { clearSignToolUi, setShapeTool } from "./annot";
 
 // ---------- Page operations ----------
 
@@ -151,12 +153,14 @@ export async function confirmFormsLostInPdfa(level: string): Promise<boolean> {
 
 export async function triggerPrint() {
   if (!state.currentDoc) return;
-  setStatus("Opening print dialog…");
+  setStatus(t("st.printDialog"));
   try {
-    await invoke("print_document", { document: state.currentDoc });
-    setStatus("Print dialog launched");
+    // Opens the native Windows print dialog (printer selection, copies, …) on
+    // the Rust side and rasterises the PDF onto the chosen printer.
+    const printed = await invoke<boolean>("print_document", { document: state.currentDoc });
+    setStatus(printed ? t("st.printSent") : t("st.printCancelled"));
   } catch (e) {
-    setStatus(`Print error: ${e}`);
+    setStatus(t("st.printError", { e: String(e) }));
   }
 }
 
@@ -170,6 +174,8 @@ export function setRibbonTab(tab: RibbonTab) {
   });
   const wasOrganize = document.body.classList.contains("organize");
   const wasConvert = document.body.classList.contains("convert");
+  // Leaving the Sign tab disarms any signature/mark tool.
+  if (tab !== "sign") { clearSignToolUi(); setShapeTool(null); }
   if (state.mergeMode && tab !== "organize") exitMergeMode();
   if (tab !== "convert" && wasConvert) exitConvertMode();
   if (tab === "convert" && !wasConvert) enterConvertMode();
@@ -177,7 +183,7 @@ export function setRibbonTab(tab: RibbonTab) {
   if (tab === "organize") {
     document.getElementById("sidebar")!.classList.remove("hidden");
     void setEditMode("select");
-  } else if (tab === "reader") {
+  } else if (tab === "reader" || tab === "forms" || tab === "sign") {
     void setEditMode("select");
     clearSelection();
   }

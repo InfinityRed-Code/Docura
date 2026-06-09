@@ -41,7 +41,7 @@ export type DocPermissions = {
 
 export type FitMode = "custom" | "width" | "page" | "actual";
 export type ViewMode = "single" | "continuous" | "double";
-export type RibbonTab = "reader" | "edit" | "convert" | "organize";
+export type RibbonTab = "reader" | "edit" | "forms" | "sign" | "convert" | "organize";
 export type EditMode = "select" | "delete";
 export type InsertWhere = "before" | "after" | "end";
 export type MergeFile = { path: string; name: string };
@@ -49,6 +49,22 @@ export type MarkupKind = "highlight" | "underline" | "strikeout";
 export type ShapeKindUi =
   | "rect" | "circle" | "line" | "arrow"
   | "freetext" | "ink" | "stamp" | "region" | "note";
+// Click-to-place Fill & Sign marks (signature/initials reuse the stamp tool).
+export type SignTool = "check" | "cross" | "dot" | "date" | "text";
+export type SignatureEntry = { kind: string; path: string };
+// Digital signatures (PAdES).
+export type SignatureStatus = "valid" | "invalid" | "unsupported";
+export type SignatureReport = {
+  field: string | null;
+  signer_cn: string | null;
+  signing_time: string | null;
+  status: SignatureStatus;
+  digest_matches: boolean;
+  covers_whole_document: boolean;
+  has_timestamp: boolean;
+  detail: string;
+};
+export type WinCertEntry = { thumbprint: string; subject: string; has_private_key: boolean };
 export type FormFieldKind =
   | "text" | "checkbox" | "radio" | "combobox"
   | "listbox" | "pushbutton" | "signature" | "unknown";

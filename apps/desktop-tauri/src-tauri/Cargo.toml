@@ -32,9 +32,13 @@ pdf_pdfium = { workspace = true }
 pdf_services = { workspace = true }
 pdf_cache = { workspace = true }
 pdf_mutate = { workspace = true }
+pdf_sign = { workspace = true }
 pdf_types = { workspace = true }
 mozjpeg = "0.10"
 base64 = "0.22"
 parking_lot = "0.12"
 notify = "6"
 dirs = "5"
+
+[target.'cfg(windows)'.dependencies]
+pdf_sign = { workspace = true, features = ["win-store"] }

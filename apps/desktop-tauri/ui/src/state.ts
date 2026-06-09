@@ -1,8 +1,8 @@
 import type {
   AnnotationInfo, DrawState, FitMode, FormFieldInfo, GhostscriptInfo,
   MDrag, MarkupKind, MergeFile, OutlineNode, PDrag, PageLink, PageSize,
-  PanState, RibbonTab, EditMode, SearchHit, ShapeKindUi, Slot, TextRun,
-  ViewMode,
+  PanState, RibbonTab, EditMode, SearchHit, ShapeKindUi, SignTool,
+  SignatureEntry, Slot, TextRun, ViewMode,
 } from "./types";
 
 export const state = {
@@ -80,6 +80,10 @@ export const state = {
   formFields: [] as FormFieldInfo[],
   formFieldsByPage: new Map<number, FormFieldInfo[]>(),
   invalidFieldIds: new Set<string>(),
+
+  // Fill & Sign
+  signTool: null as SignTool | null,
+  signatures: [] as SignatureEntry[],
 };
 
 export function makeMdrag(): MDrag {
