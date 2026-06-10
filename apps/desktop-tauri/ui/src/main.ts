@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { initI18n } from "./i18n";
 import { applyTemplate } from "./template";
 import { initDom } from "./dom";
+import { refreshIcons } from "./icons";
 import { state } from "./state";
 import { initViewer, updateChrome, goToPage } from "./viewer";
 import { initDoc, openByPath } from "./doc";
@@ -18,6 +19,7 @@ initI18n();
 // 1. Build DOM + capture refs before any module touches the page.
 applyTemplate();
 initDom();
+refreshIcons();
 
 // 2. Wire each subsystem. Order matters: annot registers callbacks consumed
 // by doc.applyDocSnapshot, so it must run before any snapshot fires.

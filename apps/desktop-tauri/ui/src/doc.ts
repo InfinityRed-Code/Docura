@@ -7,6 +7,7 @@ import type {
 import { state, callbacks } from "./state";
 import { dom, setStatus } from "./dom";
 import { t } from "./i18n";
+import { refreshIcons } from "./icons";
 import {
   applyViewMode, evictFarSlots, navigateTo, rebuildSlots, reflow,
   renderAllHighlights, rotatedSize, scheduleRender, updateChrome,
@@ -543,17 +544,20 @@ export function refreshSelectionUi() {
   const btn = document.getElementById("deleteSelectionBtn") as HTMLButtonElement | null;
   if (btn) {
     btn.disabled = state.selectedPages.size === 0;
-    btn.textContent = state.selectedPages.size > 0
-      ? `🗑 Delete ${state.selectedPages.size} page${state.selectedPages.size === 1 ? "" : "s"}`
-      : "🗑 Delete selected";
+    const label = state.selectedPages.size > 0
+      ? `Delete ${state.selectedPages.size} page${state.selectedPages.size === 1 ? "" : "s"}`
+      : "Delete selected";
+    btn.innerHTML = `<i data-lucide="trash-2"></i> ${label}`;
   }
   const ex = document.getElementById("extractSelectionBtn") as HTMLButtonElement | null;
   if (ex) {
     ex.disabled = state.selectedPages.size === 0;
-    ex.textContent = state.selectedPages.size > 0
-      ? `⬇ Extract ${state.selectedPages.size} page${state.selectedPages.size === 1 ? "" : "s"}`
-      : "⬇ Extract selected";
+    const label = state.selectedPages.size > 0
+      ? `Extract ${state.selectedPages.size} page${state.selectedPages.size === 1 ? "" : "s"}`
+      : "Extract selected";
+    ex.innerHTML = `<i data-lucide="file-output"></i> ${label}`;
   }
+  refreshIcons();
   if (dom.modeHint) {
     const base = state.selectedPages.size === 0 ? "" : `${state.selectedPages.size} selected`;
     dom.modeHint.textContent = state.editMode === "delete"

@@ -84,6 +84,8 @@ export function makeSlot(pageIdx: number): Slot {
   const drawLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   drawLayer.setAttribute("class", "drawLayer");
   drawLayer.dataset.page = String(pageIdx);
+  const noteLayer = document.createElement("div");
+  noteLayer.className = "noteLayer";
   const formLayer = document.createElement("div");
   formLayer.className = "formLayer";
   formLayer.dataset.page = String(pageIdx);
@@ -95,10 +97,11 @@ export function makeSlot(pageIdx: number): Slot {
   wrap.appendChild(selectLayer);
   wrap.appendChild(highlightLayer);
   wrap.appendChild(linkLayer);
+  wrap.appendChild(noteLayer);
   wrap.appendChild(drawLayer);
   wrap.appendChild(formLayer);
   return {
-    wrap, img, selectLayer, highlightLayer, linkLayer, drawLayer, formLayer, placeholder,
+    wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, drawLayer, formLayer, placeholder,
     loaded: false, renderingZoom: null, lastZoom: null,
   };
 }
@@ -267,6 +270,7 @@ async function renderSlot(idx: number) {
     await ensureTextLayer(idx);
     renderHighlightsFor(idx);
     await ensureLinkLayer(idx);
+    callbacks.renderNotesFor(idx);
     callbacks.renderFormFor(idx);
   } catch (e) {
     setStatus(`Render error p${idx + 1}: ${e}`);

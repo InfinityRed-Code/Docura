@@ -9,6 +9,27 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.7.3] — 2026-06-10
+
+### Added
+- **Interactive sticky-note popups.** Note icons on the page are now
+  clickable: hovering previews the note in its yellow sticky look, a click
+  pins it open, a second click closes it. Popups flip to the left near the
+  page edge and track zoom/rotation (new per-page note layer).
+
+### Changed
+- **Lucide icon set.** All ~75 toolbar/panel buttons switched from
+  emoji/unicode glyphs to Lucide SVG icons (ISC license, tree-shaken,
+  `stroke: currentColor` so they follow the light/dark theme). Covers the
+  ribbon (all tabs), comment panel, merge/convert bars, sign marks and the
+  settings gear; duplicate emoji inside i18n button labels removed; the
+  comment list's annotation-type icons use Lucide too.
+- **Sidebar tabs are icons.** "Miniaturen / Gliederung / Dateien" no longer
+  overflow the 200 px sidebar — the tabs show grid / tree / paperclip icons
+  with the localized name as tooltip.
+- Sticky-note editor restyled onto shared CSS classes and localized
+  (German/English) instead of hardcoded English strings.
+
 ## [0.7.2] — 2026-06-10
 
 ### Added

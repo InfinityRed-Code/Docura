@@ -103,6 +103,7 @@ export function makePdrag(): PDrag {
 // Set by the module that owns the implementation, called by consumers.
 export const callbacks = {
   renderFormFor: (_idx: number) => {},
+  renderNotesFor: (_idx: number) => {},
   notifyAnnotationsChanged: async () => {},
   refreshFormFields: async () => {},
   refreshComments: async () => {},

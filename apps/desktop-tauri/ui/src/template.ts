@@ -12,25 +12,25 @@ export function buildHtml(): string {
       <button class="ribbonTab" data-ribbon-tab="convert">${t("tab.convert")}</button>
       <button class="ribbonTab" data-ribbon-tab="organize">${t("tab.organize")}</button>
       <button class="ribbonTab" data-ribbon-tab="protect">${t("tab.protect")}</button>
-      <button id="settingsBtnTop" class="ribbonTab settingsTab" title="${t("tip.settings")}">⚙</button>
+      <button id="settingsBtnTop" class="ribbonTab settingsTab" title="${t("tip.settings")}"><i data-lucide="settings"></i></button>
     </div>
     <div class="ribbonBody" data-active="reader">
-      <button data-ribbon="both" id="sidebarBtn" title="${t("tip.sidebar")}">☰</button>
-      <button data-ribbon="both" id="commentToggleBtn" title="${t("tip.comments")}">💬</button>
-      <button data-ribbon="both" id="open" title="${t("tip.open")}">📂</button>
-      <button data-ribbon="both" id="recentBtn" title="${t("tip.recent")}">🕘</button>
+      <button data-ribbon="both" id="sidebarBtn" title="${t("tip.sidebar")}"><i data-lucide="panel-left"></i></button>
+      <button data-ribbon="both" id="commentToggleBtn" title="${t("tip.comments")}"><i data-lucide="message-square-text"></i></button>
+      <button data-ribbon="both" id="open" title="${t("tip.open")}"><i data-lucide="folder-open"></i></button>
+      <button data-ribbon="both" id="recentBtn" title="${t("tip.recent")}"><i data-lucide="history"></i></button>
       <div id="recentMenu" class="menu hidden"></div>
       <span data-ribbon="both" class="sep"></span>
-      <button data-ribbon="both" id="undoBtn" title="${t("tip.undo")}" disabled>↶</button>
-      <button data-ribbon="both" id="redoBtn" title="${t("tip.redo")}" disabled>↷</button>
+      <button data-ribbon="both" id="undoBtn" title="${t("tip.undo")}" disabled><i data-lucide="undo-2"></i></button>
+      <button data-ribbon="both" id="redoBtn" title="${t("tip.redo")}" disabled><i data-lucide="redo-2"></i></button>
       <span data-ribbon="both" class="sep"></span>
-      <button data-ribbon="both" id="prevPage" title="${t("tip.prevPage")}">◀</button>
+      <button data-ribbon="both" id="prevPage" title="${t("tip.prevPage")}"><i data-lucide="chevron-left"></i></button>
       <input data-ribbon="both" id="pageInput" type="number" min="1" value="1" style="width:4rem" />
       <span data-ribbon="both" id="pageTotal">/ 0</span>
-      <button data-ribbon="both" id="nextPage" title="${t("tip.nextPage")}">▶</button>
-      <button data-ribbon="both" id="gotoBtn" title="${t("tip.goto")}">⇥</button>
+      <button data-ribbon="both" id="nextPage" title="${t("tip.nextPage")}"><i data-lucide="chevron-right"></i></button>
+      <button data-ribbon="both" id="gotoBtn" title="${t("tip.goto")}"><i data-lucide="arrow-right-to-line"></i></button>
       <span data-ribbon="reader" class="sep"></span>
-      <button data-ribbon="reader" id="zoomOut" title="${t("tip.zoomOut")}">−</button>
+      <button data-ribbon="reader" id="zoomOut" title="${t("tip.zoomOut")}"><i data-lucide="zoom-out"></i></button>
       <select data-ribbon="reader" id="fitSelect" title="${t("tip.fit")}">
         <option value="custom">${t("fit.custom")}</option>
         <option value="width">${t("fit.width")}</option>
@@ -47,43 +47,43 @@ export function buildHtml(): string {
         <option value="1.5">150%</option>
         <option value="2">200%</option>
       </select>
-      <button data-ribbon="reader" id="zoomIn" title="${t("tip.zoomIn")}">+</button>
-      <button data-ribbon="reader" id="wheelZoomBtn" title="${t("tip.wheelZoom")}">🔎</button>
+      <button data-ribbon="reader" id="zoomIn" title="${t("tip.zoomIn")}"><i data-lucide="zoom-in"></i></button>
+      <button data-ribbon="reader" id="wheelZoomBtn" title="${t("tip.wheelZoom")}"><i data-lucide="mouse"></i></button>
       <span data-ribbon="reader" class="sep"></span>
       <select data-ribbon="reader" id="viewModeSelect" title="${t("tip.viewMode")}">
         <option value="single">${t("view.single")}</option>
         <option value="continuous">${t("view.continuous")}</option>
         <option value="double">${t("view.double")}</option>
       </select>
-      <button data-ribbon="reader" id="rotLeft" title="${t("tip.rotLeft")}">↶</button>
-      <button data-ribbon="reader" id="rotRight" title="${t("tip.rotRight")}">↷</button>
-      <button data-ribbon="reader" id="darkToggle" title="${t("tip.invert")}">☾</button>
-      <button data-ribbon="reader" id="fullscreenBtn" title="${t("tip.fullscreen")}">⛶</button>
-      <button data-ribbon="reader" id="presentBtn" title="${t("tip.present")}">▶▶</button>
+      <button data-ribbon="reader" id="rotLeft" title="${t("tip.rotLeft")}"><i data-lucide="rotate-ccw"></i></button>
+      <button data-ribbon="reader" id="rotRight" title="${t("tip.rotRight")}"><i data-lucide="rotate-cw"></i></button>
+      <button data-ribbon="reader" id="darkToggle" title="${t("tip.invert")}"><i data-lucide="moon"></i></button>
+      <button data-ribbon="reader" id="fullscreenBtn" title="${t("tip.fullscreen")}"><i data-lucide="maximize"></i></button>
+      <button data-ribbon="reader" id="presentBtn" title="${t("tip.present")}"><i data-lucide="presentation"></i></button>
       <span data-ribbon="reader" class="sep"></span>
-      <button data-ribbon="reader" id="searchBtn" title="${t("tip.search")}">🔍</button>
-      <button data-ribbon="both" id="saveAsBtn" title="${t("tip.saveAs")}">💾</button>
-      <button data-ribbon="reader" id="printBtn" title="${t("tip.print")}">🖨</button>
-      <button data-ribbon="reader" id="propsBtn" title="${t("tip.props")}">ⓘ</button>
+      <button data-ribbon="reader" id="searchBtn" title="${t("tip.search")}"><i data-lucide="search"></i></button>
+      <button data-ribbon="both" id="saveAsBtn" title="${t("tip.saveAs")}"><i data-lucide="save"></i></button>
+      <button data-ribbon="reader" id="printBtn" title="${t("tip.print")}"><i data-lucide="printer"></i></button>
+      <button data-ribbon="reader" id="propsBtn" title="${t("tip.props")}"><i data-lucide="info"></i></button>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn active" data-mode="select" title="${t("tip.modeSelect")}">👆</button>
-            <button class="modeBtn" data-mode="delete" title="${t("tip.modeDelete")}">🗑</button>
+            <button class="modeBtn active" data-mode="select" title="${t("tip.modeSelect")}"><i data-lucide="mouse-pointer-2"></i></button>
+            <button class="modeBtn" data-mode="delete" title="${t("tip.modeDelete")}"><i data-lucide="trash-2"></i></button>
           </div>
-          <button id="deleteSelectionBtn" class="deleteAction" disabled title="${t("tip.deleteSel")}">🗑</button>
-          <button id="extractSelectionBtn" disabled title="${t("tip.extractSel")}">⬇</button>
+          <button id="deleteSelectionBtn" class="deleteAction" disabled title="${t("tip.deleteSel")}"><i data-lucide="trash-2"></i></button>
+          <button id="extractSelectionBtn" disabled title="${t("tip.extractSel")}"><i data-lucide="file-output"></i></button>
         </div>
         <div class="groupLabel">${t("grp.modi")}</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="menuHost">
-            <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.rotatePages")}">⟳</button>
+            <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.rotatePages")}"><i data-lucide="rotate-cw-square"></i></button>
             <div id="rotateMenu" class="popover hidden" role="menu">
-              <button id="rotateLeftBtn" role="menuitem" title="${t("tip.rotateCcw")}">↺</button>
-              <button id="rotateRightBtn" role="menuitem" title="${t("tip.rotateCw")}">↻</button>
-              <button id="rotate180Btn" role="menuitem" title="${t("tip.rotate180")}">⇅</button>
+              <button id="rotateLeftBtn" role="menuitem" title="${t("tip.rotateCcw")}"><i data-lucide="rotate-ccw"></i></button>
+              <button id="rotateRightBtn" role="menuitem" title="${t("tip.rotateCw")}"><i data-lucide="rotate-cw"></i></button>
+              <button id="rotate180Btn" role="menuitem" title="${t("tip.rotate180")}"><i data-lucide="arrow-up-down"></i></button>
             </div>
           </div>
         </div>
@@ -92,41 +92,41 @@ export function buildHtml(): string {
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="menuHost">
-            <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.insertPages")}">＋</button>
+            <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.insertPages")}"><i data-lucide="file-plus-2"></i></button>
             <div id="insertMenu" class="popover hidden" role="menu">
-              <button id="insertBeforeBtn" role="menuitem" title="${t("tip.insertBefore")}">↥</button>
-              <button id="insertAfterBtn" role="menuitem" title="${t("tip.insertAfter")}">↧</button>
-              <button id="insertEndBtn" role="menuitem" title="${t("tip.insertEnd")}">⤓</button>
+              <button id="insertBeforeBtn" role="menuitem" title="${t("tip.insertBefore")}"><i data-lucide="arrow-up-to-line"></i></button>
+              <button id="insertAfterBtn" role="menuitem" title="${t("tip.insertAfter")}"><i data-lucide="arrow-down-to-line"></i></button>
+              <button id="insertEndBtn" role="menuitem" title="${t("tip.insertEnd")}"><i data-lucide="list-end"></i></button>
             </div>
           </div>
         </div>
         <div class="groupLabel">${t("grp.insert")}</div>
       </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
-      <button data-ribbon="organize" id="mergePdfsBtn" title="${t("tip.merge")}">⊕</button>
-      <button data-ribbon="organize" id="splitPdfBtn" title="${t("tip.split")}">✂</button>
+      <button data-ribbon="organize" id="mergePdfsBtn" title="${t("tip.merge")}"><i data-lucide="merge"></i></button>
+      <button data-ribbon="organize" id="splitPdfBtn" title="${t("tip.split")}"><i data-lucide="scissors"></i></button>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup" id="annotToolGroup" title="${t("tip.markText")}">
-            <button class="modeBtn annotTool" data-annot="highlight" title="${t("tip.highlight")}">🖍</button>
-            <button class="modeBtn annotTool" data-annot="underline" title="${t("tip.underline")}"><u>U</u></button>
-            <button class="modeBtn annotTool" data-annot="strikeout" title="${t("tip.strikeout")}">S̶</button>
+            <button class="modeBtn annotTool" data-annot="highlight" title="${t("tip.highlight")}"><i data-lucide="highlighter"></i></button>
+            <button class="modeBtn annotTool" data-annot="underline" title="${t("tip.underline")}"><i data-lucide="underline"></i></button>
+            <button class="modeBtn annotTool" data-annot="strikeout" title="${t("tip.strikeout")}"><i data-lucide="strikethrough"></i></button>
           </div>
           <input type="color" id="annotColor" value="#ffe600" title="${t("tip.annotColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
-          <button class="modeBtn active" id="printToggleBtn" title="${t("tip.printToggle")}">🖨</button>
+          <button class="modeBtn active" id="printToggleBtn" title="${t("tip.printToggle")}"><i data-lucide="printer"></i></button>
         </div>
         <div class="groupLabel">${t("grp.textDecoration")}</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup" id="shapeToolGroup" title="${t("tip.drawDrag")}">
-            <button class="modeBtn shapeTool" data-shape="rect" title="${t("tip.rect")}">▭</button>
-            <button class="modeBtn shapeTool" data-shape="circle" title="${t("tip.circle")}">◯</button>
-            <button class="modeBtn shapeTool" data-shape="line" title="${t("tip.line")}">／</button>
-            <button class="modeBtn shapeTool" data-shape="arrow" title="${t("tip.arrow")}">↗</button>
-            <button class="modeBtn shapeTool" data-shape="ink" title="${t("tip.ink")}">✎</button>
-            <button class="modeBtn shapeTool" data-shape="stamp" title="${t("tip.stamp")}">🔖</button>
-            <button class="modeBtn shapeTool" data-shape="note" title="${t("tip.note")}">📝</button>
+            <button class="modeBtn shapeTool" data-shape="rect" title="${t("tip.rect")}"><i data-lucide="square"></i></button>
+            <button class="modeBtn shapeTool" data-shape="circle" title="${t("tip.circle")}"><i data-lucide="circle"></i></button>
+            <button class="modeBtn shapeTool" data-shape="line" title="${t("tip.line")}"><i data-lucide="slash"></i></button>
+            <button class="modeBtn shapeTool" data-shape="arrow" title="${t("tip.arrow")}"><i data-lucide="arrow-up-right"></i></button>
+            <button class="modeBtn shapeTool" data-shape="ink" title="${t("tip.ink")}"><i data-lucide="pen-line"></i></button>
+            <button class="modeBtn shapeTool" data-shape="stamp" title="${t("tip.stamp")}"><i data-lucide="stamp"></i></button>
+            <button class="modeBtn shapeTool" data-shape="note" title="${t("tip.note")}"><i data-lucide="sticky-note"></i></button>
           </div>
         </div>
         <div class="groupLabel">${t("grp.draw")}</div>
@@ -134,7 +134,7 @@ export function buildHtml(): string {
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn shapeTool" data-shape="freetext" title="${t("tip.freetext")}">T</button>
+            <button class="modeBtn shapeTool" data-shape="freetext" title="${t("tip.freetext")}"><i data-lucide="type"></i></button>
           </div>
           <input type="color" id="textFgColor" value="#000000" title="${t("tip.textColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
           <input type="color" id="textBgColor" value="#ffffff" title="${t("tip.bgColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
@@ -149,62 +149,62 @@ export function buildHtml(): string {
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn shapeTool" data-shape="region" title="${t("tip.regionTool")}">✂</button>
+            <button class="modeBtn shapeTool" data-shape="region" title="${t("tip.regionTool")}"><i data-lucide="crop"></i></button>
           </div>
         </div>
         <div class="groupLabel">${t("grp.region")}</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
-          <button id="watermarkBtn" title="${t("tip.watermark")}">💧</button>
-          <button id="headerFooterBtn" title="${t("tip.headerFooter")}">🅷</button>
+          <button id="watermarkBtn" title="${t("tip.watermark")}"><i data-lucide="droplet"></i></button>
+          <button id="headerFooterBtn" title="${t("tip.headerFooter")}"><i data-lucide="heading"></i></button>
         </div>
         <div class="groupLabel">${t("grp.layout")}</div>
       </div>
       <div data-ribbon="forms" class="ribbonGroup">
         <div class="groupBody">
-          <button id="formPrevBtn" title="${t("tip.formPrev")}">◀</button>
-          <button id="formNextBtn" title="${t("tip.formNext")}">▶</button>
+          <button id="formPrevBtn" title="${t("tip.formPrev")}"><i data-lucide="chevron-left"></i></button>
+          <button id="formNextBtn" title="${t("tip.formNext")}"><i data-lucide="chevron-right"></i></button>
         </div>
         <div class="groupLabel">${t("grp.navigate")}</div>
       </div>
       <div data-ribbon="forms" class="ribbonGroup">
         <div class="groupBody">
-          <button id="formValidateBtn" title="${t("tip.formValidate")}">✓</button>
-          <button id="formResetBtn" title="${t("tip.formReset")}">↺</button>
+          <button id="formValidateBtn" title="${t("tip.formValidate")}"><i data-lucide="check"></i></button>
+          <button id="formResetBtn" title="${t("tip.formReset")}"><i data-lucide="eraser"></i></button>
         </div>
         <div class="groupLabel">${t("grp.fill")}</div>
       </div>
       <div data-ribbon="forms" class="ribbonGroup">
         <div class="groupBody">
-          <button id="formHighlightBtn" class="active" title="${t("tip.formHighlight")}">👁</button>
+          <button id="formHighlightBtn" class="active" title="${t("tip.formHighlight")}"><i data-lucide="eye"></i></button>
         </div>
         <div class="groupLabel">${t("grp.view")}</div>
       </div>
       <span data-ribbon="forms" id="formHint" class="modeHint">${t("hint.noDoc")}</span>
       <div data-ribbon="sign" class="ribbonGroup">
         <div class="groupBody">
-          <button id="signSignatureBtn" title="${t("tip.placeSignature")}">${t("btn.signature")}</button>
+          <button id="signSignatureBtn" title="${t("tip.placeSignature")}"><i data-lucide="signature"></i> ${t("btn.signature")}</button>
           <button id="signInitialsBtn" title="${t("tip.placeInitials")}">${t("btn.initials")}</button>
-          <button id="signManageBtn" class="menuTrigger" title="${t("tip.manageSig")}">✎</button>
+          <button id="signManageBtn" class="menuTrigger" title="${t("tip.manageSig")}"><i data-lucide="pen-line"></i></button>
         </div>
         <div class="groupLabel">${t("grp.sign")}</div>
       </div>
       <div data-ribbon="sign" class="ribbonGroup">
         <div class="groupBody">
-          <button class="signMark" data-sign="check" title="${t("tip.markCheck")}">✓</button>
-          <button class="signMark" data-sign="cross" title="${t("tip.markCross")}">✗</button>
-          <button class="signMark" data-sign="dot" title="${t("tip.markDot")}">●</button>
-          <button class="signMark" data-sign="date" title="${t("tip.markDate")}">📅</button>
-          <button class="signMark" data-sign="text" title="${t("tip.signText")}">T</button>
+          <button class="signMark" data-sign="check" title="${t("tip.markCheck")}"><i data-lucide="check"></i></button>
+          <button class="signMark" data-sign="cross" title="${t("tip.markCross")}"><i data-lucide="x"></i></button>
+          <button class="signMark" data-sign="dot" title="${t("tip.markDot")}"><i data-lucide="dot"></i></button>
+          <button class="signMark" data-sign="date" title="${t("tip.markDate")}"><i data-lucide="calendar"></i></button>
+          <button class="signMark" data-sign="text" title="${t("tip.signText")}"><i data-lucide="type"></i></button>
           <input type="color" id="signColor" value="#1a3a8f" title="${t("tip.markColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
         </div>
         <div class="groupLabel">${t("grp.fill")}</div>
       </div>
       <div data-ribbon="sign" class="ribbonGroup">
         <div class="groupBody">
-          <button id="dsignBtn" title="${t("tip.digitalSign")}">${t("btn.digitalSign")}</button>
-          <button id="dverifyBtn" title="${t("tip.verify")}">${t("btn.verify")}</button>
+          <button id="dsignBtn" title="${t("tip.digitalSign")}"><i data-lucide="file-key-2"></i> ${t("btn.digitalSign")}</button>
+          <button id="dverifyBtn" title="${t("tip.verify")}"><i data-lucide="shield-check"></i> ${t("btn.verify")}</button>
         </div>
         <div class="groupLabel">${t("grp.digital")}</div>
       </div>
@@ -213,7 +213,7 @@ export function buildHtml(): string {
       <div data-ribbon="convert" class="ribbonGroup">
         <div class="groupBody">
           <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn active" data-conv="pdfa" title="${t("tip.convPdfa")}" type="button">📄→Ⓐ</button>
+            <button class="modeBtn active" data-conv="pdfa" title="${t("tip.convPdfa")}" type="button"><i data-lucide="file-check-2"></i> PDF/A</button>
           </div>
         </div>
         <div class="groupLabel">${t("grp.conversion")}</div>
@@ -221,8 +221,8 @@ export function buildHtml(): string {
       <span data-ribbon="convert" class="modeHint">${t("hint.convert")}</span>
       <div data-ribbon="protect" class="ribbonGroup">
         <div class="groupBody">
-          <button id="protectBtn" title="${t("tip.protect")}">🔒 ${t("btn.protect")}</button>
-          <button id="unprotectBtn" title="${t("tip.unprotect")}" disabled>🔓 ${t("btn.unprotect")}</button>
+          <button id="protectBtn" title="${t("tip.protect")}"><i data-lucide="lock"></i> ${t("btn.protect")}</button>
+          <button id="unprotectBtn" title="${t("tip.unprotect")}" disabled><i data-lucide="lock-open"></i> ${t("btn.unprotect")}</button>
         </div>
         <div class="groupLabel">${t("grp.password")}</div>
       </div>
@@ -233,9 +233,9 @@ export function buildHtml(): string {
   <div class="body">
     <aside id="sidebar" class="sidebar hidden">
       <div class="tabs">
-        <button class="tab active" data-tab="thumbs">${t("tab.thumbs")}</button>
-        <button class="tab" data-tab="outline">${t("tab.outline")}</button>
-        <button class="tab" data-tab="attachments">${t("tab.files")}</button>
+        <button class="tab active" data-tab="thumbs" title="${t("tab.thumbs")}"><i data-lucide="layout-grid"></i></button>
+        <button class="tab" data-tab="outline" title="${t("tab.outline")}"><i data-lucide="list-tree"></i></button>
+        <button class="tab" data-tab="attachments" title="${t("tab.files")}"><i data-lucide="paperclip"></i></button>
       </div>
       <div id="thumbsPanel" class="panel"></div>
       <div id="outlinePanel" class="panel hidden"></div>
@@ -247,9 +247,9 @@ export function buildHtml(): string {
     <aside id="commentPanel" class="commentPanel hidden">
       <div class="commentHeader">
         <strong>${t("comments.title")}</strong>
-        <button id="commentReloadBtn" title="${t("tip.refresh")}">↻</button>
-        <button id="commentExportBtn" title="${t("tip.exportXfdf")}">⤓</button>
-        <button id="commentImportBtn" title="${t("tip.importXfdf")}">⤒</button>
+        <button id="commentReloadBtn" title="${t("tip.refresh")}"><i data-lucide="refresh-cw"></i></button>
+        <button id="commentExportBtn" title="${t("tip.exportXfdf")}"><i data-lucide="file-down"></i></button>
+        <button id="commentImportBtn" title="${t("tip.importXfdf")}"><i data-lucide="file-up"></i></button>
         <button id="commentCloseBtn" class="propsClose" title="${t("tip.close")}">✕</button>
       </div>
       <div class="commentFilters">
@@ -274,9 +274,9 @@ export function buildHtml(): string {
     <div id="mergePane" class="mergePane hidden">
       <div class="mergeHeader">
         <strong>${t("merge.title")}</strong>
-        <button id="mergeAddBtn" title="${t("tip.pickPdfs")}">＋</button>
-        <button id="mergeCommitBtn" disabled title="${t("tip.buildMerged")}">✔</button>
-        <button id="mergeCancelBtn" title="${t("tip.cancel")}">✕</button>
+        <button id="mergeAddBtn" title="${t("tip.pickPdfs")}"><i data-lucide="plus"></i></button>
+        <button id="mergeCommitBtn" disabled title="${t("tip.buildMerged")}"><i data-lucide="check"></i></button>
+        <button id="mergeCancelBtn" title="${t("tip.cancel")}"><i data-lucide="x"></i></button>
         <span class="mergeHint">${t("hint.merge")}</span>
       </div>
       <div id="mergeList" class="mergeList"></div>
@@ -284,16 +284,16 @@ export function buildHtml(): string {
     <div id="convertPane" class="mergePane convertPane hidden">
       <div class="mergeHeader">
         <strong>${t("convert.title")}</strong>
-        <button id="convertAddBtn" title="${t("tip.pickPdfs")}">＋</button>
+        <button id="convertAddBtn" title="${t("tip.pickPdfs")}"><i data-lucide="plus"></i></button>
         <select id="convertLevel" title="${t("tip.pdfaLevel")}">
           <option value="1b">PDF/A-1b</option>
           <option value="2b" selected>PDF/A-2b</option>
           <option value="3b">PDF/A-3b</option>
           <option value="4">PDF/A-4</option>
         </select>
-        <button id="convertOutBtn" title="${t("tip.pickOutFolder")}">📂</button>
-        <button id="convertCommitBtn" disabled title="${t("tip.convertAll")}">✔</button>
-        <button id="convertCancelBtn" title="${t("tip.cancel")}">✕</button>
+        <button id="convertOutBtn" title="${t("tip.pickOutFolder")}"><i data-lucide="folder-open"></i></button>
+        <button id="convertCommitBtn" disabled title="${t("tip.convertAll")}"><i data-lucide="check"></i></button>
+        <button id="convertCancelBtn" title="${t("tip.cancel")}"><i data-lucide="x"></i></button>
         <span id="convertOutLabel" class="mergeHint">${t("convert.output")}</span>
       </div>
       <div id="convertList" class="mergeList"></div>
@@ -592,6 +592,14 @@ export const CSS = `
                               border-color:#bcd4f6; }
   .ribbonBody input[type=color] { background:var(--bg) !important; border:1px solid var(--border-2) !important; }
   .ribbonBody input:focus, .ribbonBody select:focus { outline:2px solid var(--accent-tint); border-color:var(--accent); }
+  /* Lucide SVG icons: stroke follows the text color of the host button. */
+  svg.lucide { width:16px; height:16px; stroke-width:2; flex:none; pointer-events:none; vertical-align:-3px; }
+  .ribbonBody button, .commentHeader button, .mergeHeader button,
+  .ribbonTab.settingsTab, .modeGroup .modeBtn {
+    display:inline-flex; align-items:center; justify-content:center; gap:0.3rem;
+  }
+  .modeGroup .modeBtn svg.lucide, .signMark svg.lucide { width:15px; height:15px; }
+  .commentItem .kind svg.lucide { width:13px; height:13px; }
   body.wheelZoomMode .viewer { cursor: grab; }
   body.wheelZoomMode.panning .viewer { cursor: grabbing; }
   body.wheelZoomMode .selectLayer, body.wheelZoomMode .drawLayer { pointer-events: none; }
@@ -698,7 +706,8 @@ export const CSS = `
   .commentItem .body { font-size:0.85rem; color:var(--text); margin-top:0.2rem; white-space:pre-wrap; word-break:break-word; }
   .commentItem .nopaint { color:#c0392b; font-size:0.7rem; }
   .tabs { display:flex; border-bottom:1px solid var(--border); }
-  .tab { flex:1; padding:0.45rem; background:var(--bg-2); color:var(--text-2); border:none; cursor:pointer; border-bottom:2px solid transparent; }
+  .tab { flex:1; padding:0.45rem; background:var(--bg-2); color:var(--text-2); border:none; cursor:pointer; border-bottom:2px solid transparent;
+         display:inline-flex; align-items:center; justify-content:center; }
   .tab:hover { background:var(--bg-3); }
   .tab.active { background:var(--bg); color:var(--accent); font-weight:600; border-bottom: 2px solid var(--accent); }
   .panel { flex:1; overflow:auto; padding:0.4rem; }
@@ -756,6 +765,21 @@ export const CSS = `
   .highlightLayer .hit { position:absolute; background: rgba(255,220,0,0.45); }
   .highlightLayer .hit.current { background: rgba(255,140,0,0.6); outline:1px solid orange; }
   .linkLayer { position:absolute; inset:0; pointer-events:none; }
+  .noteLayer { position:absolute; inset:0; pointer-events:none; }
+  .noteLayer .noteHotspot { position:absolute; pointer-events:auto; cursor:pointer; border-radius:3px; }
+  .noteLayer .noteHotspot:hover { outline:1px solid rgba(179,154,0,0.7); }
+  .stickyNote { position:absolute; width:220px; z-index:20; background:#fff8b0; color:#000;
+                border:1px solid #b39a00; box-shadow:2px 2px 6px rgba(0,0,0,0.35);
+                font:13px "Segoe UI", Helvetica, Arial, sans-serif; pointer-events:auto; }
+  .stickyNote.hidden { display:none; }
+  .stickyNoteHead { padding:2px 6px; background:#e6cf00; border-bottom:1px solid #b39a00;
+                    font-size:12px; display:flex; gap:0.4rem; align-items:baseline; }
+  .stickyNoteHead .meta { margin-left:auto; font-size:10px; color:#5a4d00; white-space:nowrap;
+                          overflow:hidden; text-overflow:ellipsis; max-width:60%; }
+  .stickyNoteBody { padding:4px 6px; white-space:pre-wrap; overflow-wrap:break-word;
+                    max-height:160px; overflow:auto; }
+  .stickyNote textarea { display:block; width:100%; height:80px; box-sizing:border-box; border:0;
+                         background:transparent; color:#000; font:inherit; padding:4px 6px; resize:vertical; }
   .linkLayer a { position:absolute; pointer-events:auto; display:block;
                  background: transparent; border: 0; cursor:pointer;
                  text-decoration:none; }

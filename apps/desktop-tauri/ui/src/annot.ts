@@ -7,6 +7,7 @@ import type {
 import { state, callbacks } from "./state";
 import { t } from "./i18n";
 import { dom, setStatus } from "./dom";
+import { refreshIcons } from "./icons";
 import { applyDocSnapshot } from "./doc";
 import { effectiveRotation, goToPage, navigateTo, rotateRectToSlot } from "./viewer";
 
@@ -370,37 +371,17 @@ function spawnTextNoteEditor(
   anchorPt: { x: number; y: number },
 ) {
   const wrap = document.createElement("div");
-  wrap.style.position = "absolute";
+  wrap.className = "stickyNote";
   wrap.style.left = `${anchorPx.x}px`;
   wrap.style.top = `${anchorPx.y}px`;
-  wrap.style.width = "220px";
-  wrap.style.zIndex = "20";
-  wrap.style.background = "#fff8b0";
-  wrap.style.color = "#000";
-  wrap.style.border = "1px solid #b39a00";
-  wrap.style.boxShadow = "2px 2px 6px rgba(0,0,0,0.35)";
-  wrap.style.font = "13px Helvetica, Arial, sans-serif";
 
   const head = document.createElement("div");
-  head.textContent = "📝 Sticky note";
-  head.style.padding = "2px 6px";
-  head.style.background = "#e6cf00";
-  head.style.borderBottom = "1px solid #b39a00";
-  head.style.fontSize = "12px";
+  head.className = "stickyNoteHead";
+  head.textContent = t("note.title");
   wrap.appendChild(head);
 
   const ed = document.createElement("textarea");
-  ed.placeholder = "Type comment, Enter to save, Esc to cancel";
-  ed.style.display = "block";
-  ed.style.width = "100%";
-  ed.style.height = "80px";
-  ed.style.boxSizing = "border-box";
-  ed.style.border = "0";
-  ed.style.background = "transparent";
-  ed.style.color = "#000";
-  ed.style.font = "inherit";
-  ed.style.padding = "4px 6px";
-  ed.style.resize = "vertical";
+  ed.placeholder = t("note.placeholder");
   wrap.appendChild(ed);
 
   slot.wrap.appendChild(wrap);
@@ -442,18 +423,19 @@ function spawnTextNoteEditor(
 
 // ---------- Comments ----------
 
+// Lucide icon names per annotation subtype (rendered via refreshIcons()).
 const SUBTYPE_ICON: Record<string, string> = {
-  Highlight: "🖍",
-  Underline: "U̲",
-  StrikeOut: "S̶",
-  Squiggly: "〰",
-  Square: "▭",
-  Circle: "◯",
-  Line: "／",
-  Ink: "✎",
-  FreeText: "T",
-  Stamp: "🔖",
-  Text: "📝",
+  Highlight: "highlighter",
+  Underline: "underline",
+  StrikeOut: "strikethrough",
+  Squiggly: "waves",
+  Square: "square",
+  Circle: "circle",
+  Line: "slash",
+  Ink: "pen-line",
+  FreeText: "type",
+  Stamp: "stamp",
+  Text: "sticky-note",
 };
 
 function formatPdfDate(s: string | null): string {
@@ -488,7 +470,7 @@ function renderComments() {
   for (const p of pages) {
     out.push(`<div class="commentGroup"><div class="commentGroupHead">Page ${p + 1}</div>`);
     for (const a of byPage.get(p)!) {
-      const icon = SUBTYPE_ICON[a.subtype] ?? "•";
+      const icon = `<i data-lucide="${SUBTYPE_ICON[a.subtype] ?? "dot"}"></i>`;
       const author = a.author ? `<span class="author">${escapeHtml(a.author)}</span>` : "";
       const date = a.modified ? `<span class="date">${escapeHtml(formatPdfDate(a.modified))}</span>` : "";
       const noprint = a.print ? "" : `<span class="nopaint">no-print</span>`;
@@ -503,6 +485,7 @@ function renderComments() {
     out.push(`</div>`);
   }
   dom.commentListEl.innerHTML = out.join("");
+  refreshIcons();
   dom.commentListEl.querySelectorAll<HTMLDivElement>(".commentItem").forEach((el) => {
     el.addEventListener("click", () => {
       const p = parseInt(el.dataset.page || "0", 10);
@@ -519,6 +502,7 @@ async function refreshComments() {
   if (!state.currentDoc) {
     state.cachedAnnotations = [];
     renderComments();
+    renderNotesAllSlots();
     return;
   }
   try {
@@ -528,6 +512,89 @@ async function refreshComments() {
     state.cachedAnnotations = [];
   }
   renderComments();
+  renderNotesAllSlots();
+}
+
+// ---------- Sticky-note popups on the page ----------
+//
+// Each /Text annotation gets an invisible hotspot over its icon (the icon
+// itself is part of the pdfium-rendered page bitmap). Hover previews the
+// note; a click pins it open, a second click closes it again.
+
+const pinnedNotes = new Set<string>();
+
+function buildNotePopup(a: AnnotationInfo): HTMLDivElement {
+  const popup = document.createElement("div");
+  popup.className = "stickyNote hidden";
+  const head = document.createElement("div");
+  head.className = "stickyNoteHead";
+  const title = document.createElement("span");
+  title.textContent = t("note.title");
+  head.appendChild(title);
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  meta.textContent = [a.author, formatPdfDate(a.modified)].filter(Boolean).join(" · ");
+  head.appendChild(meta);
+  popup.appendChild(head);
+  const body = document.createElement("div");
+  body.className = "stickyNoteBody";
+  body.textContent = a.contents ?? "";
+  popup.appendChild(body);
+  return popup;
+}
+
+export function renderNoteHotspotsFor(idx: number) {
+  const slot = state.slots[idx];
+  if (!slot || !slot.loaded) return;
+  const sz = state.pageSizes[idx];
+  if (!sz) return;
+  slot.noteLayer.innerHTML = "";
+  const rot = effectiveRotation(idx);
+  for (const a of state.cachedAnnotations) {
+    if (a.subtype !== "Text" || a.page !== idx) continue;
+    const box = rotateRectToSlot(a.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    if (box.width <= 0 || box.height <= 0) continue;
+
+    const popup = buildNotePopup(a);
+    // Open to the right of the icon; flip to the left near the page edge.
+    const popupW = 224;
+    const px = box.left + box.width + 6 + popupW > slot.img.width
+      ? Math.max(0, box.left - popupW - 6)
+      : box.left + box.width + 6;
+    popup.style.left = `${px}px`;
+    popup.style.top = `${Math.min(box.top, Math.max(0, slot.img.height - 120))}px`;
+
+    const hs = document.createElement("div");
+    hs.className = "noteHotspot";
+    hs.style.left = `${box.left}px`;
+    hs.style.top = `${box.top}px`;
+    hs.style.width = `${box.width}px`;
+    hs.style.height = `${box.height}px`;
+
+    const show = () => popup.classList.remove("hidden");
+    if (pinnedNotes.has(a.id)) show();
+    hs.addEventListener("mouseenter", show);
+    hs.addEventListener("mouseleave", () => {
+      if (!pinnedNotes.has(a.id)) popup.classList.add("hidden");
+    });
+    hs.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (pinnedNotes.has(a.id)) {
+        pinnedNotes.delete(a.id);
+        popup.classList.add("hidden");
+      } else {
+        pinnedNotes.add(a.id);
+        show();
+      }
+    });
+
+    slot.noteLayer.appendChild(hs);
+    slot.noteLayer.appendChild(popup);
+  }
+}
+
+function renderNotesAllSlots() {
+  for (let i = 0; i < state.slots.length; i++) renderNoteHotspotsFor(i);
 }
 
 function toggleCommentPanel() {
@@ -1209,10 +1276,18 @@ export function initAnnot() {
   // Register callbacks so other modules can trigger annot/form updates
   // without import cycles.
   callbacks.renderFormFor = renderFormFor;
+  callbacks.renderNotesFor = renderNoteHotspotsFor;
   callbacks.refreshFormFields = refreshFormFields;
   callbacks.refreshComments = refreshComments;
   callbacks.notifyAnnotationsChanged = async () => {
-    if (!dom.commentPanelEl.classList.contains("hidden")) await refreshComments();
+    // Always reload: the note hotspots on the page depend on the cache,
+    // not just the comment panel.
+    await refreshComments();
     await refreshFormFields();
   };
+  // Populate the annotation cache when a document is (re)opened.
+  document.addEventListener("rustpdf:doc-changed", () => {
+    pinnedNotes.clear();
+    void refreshComments();
+  });
 }

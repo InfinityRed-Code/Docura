@@ -77,6 +77,7 @@ export type Slot = {
   selectLayer: HTMLDivElement;
   highlightLayer: HTMLDivElement;
   linkLayer: HTMLDivElement;
+  noteLayer: HTMLDivElement;
   drawLayer: SVGSVGElement;
   formLayer: HTMLDivElement;
   placeholder: HTMLDivElement;
