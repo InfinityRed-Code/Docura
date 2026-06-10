@@ -120,7 +120,15 @@ export async function triggerSaveAs() {
         document: state.currentDoc,
         args: { path: dest, level },
       });
-      setStatus(`Saved as ${label}: ${dest}`);
+      // PDF/A forbids encryption — flag the dropped protection.
+      let suffix = "";
+      try {
+        const sec = await invoke<{ protected: boolean }>("get_pdf_security", {
+          document: state.currentDoc,
+        });
+        if (sec.protected) suffix = ` · ${t("st.pdfaNoProtection")}`;
+      } catch {}
+      setStatus(`Saved as ${label}: ${dest}${suffix}`);
     } catch (e) {
       setStatus(`PDF/A save error: ${e}`);
     }
@@ -458,8 +466,16 @@ async function runInsertPdf(where: InsertWhere) {
     applyDocSnapshot(snap);
     setStatus(`Inserted ${paths.length} file${paths.length === 1 ? "" : "s"} (${snap.page_count} pages total)`);
   } catch (err) {
-    setStatus(`Insert error: ${err}`);
+    setStatus(`Insert error: ${fmtMutationError(err)}`);
   }
+}
+
+/** Map backend error markers to localized messages. */
+export function fmtMutationError(err: unknown): string {
+  const s = String(err);
+  const m = s.match(/ENCRYPTED_INPUT:(.+)$/);
+  if (m) return t("st.encryptedInput", { file: m[1] });
+  return s;
 }
 
 // ---------- Popovers ----------
@@ -704,7 +720,7 @@ export function initEdit() {
       setRibbonTab("organize");
       setStatus(`Merged ${paths.length} files into ${res.page_count} pages (temp: ${tmp})`);
     } catch (err) {
-      setStatus(`Merge error: ${err}`);
+      setStatus(`Merge error: ${fmtMutationError(err)}`);
     }
   });
   dom.mergeList.addEventListener("click", (e) => {

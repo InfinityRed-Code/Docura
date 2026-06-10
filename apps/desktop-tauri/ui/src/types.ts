@@ -10,6 +10,8 @@ export type OpenedDocument = {
   page_count: number;
   page_sizes: PageSize[];
   outline: OutlineNode[];
+  /** Password/permission protection detected on open; re-applied on save. */
+  protected: boolean;
 };
 export type Rendered = { width: number; height: number; data_url: string };
 export type SearchHit = { page: number; rects_pt: RectPt[]; snippet: string };
@@ -41,7 +43,7 @@ export type DocPermissions = {
 
 export type FitMode = "custom" | "width" | "page" | "actual";
 export type ViewMode = "single" | "continuous" | "double";
-export type RibbonTab = "reader" | "edit" | "forms" | "sign" | "convert" | "organize";
+export type RibbonTab = "reader" | "edit" | "forms" | "sign" | "convert" | "organize" | "protect";
 export type EditMode = "select" | "delete";
 export type InsertWhere = "before" | "after" | "end";
 export type MergeFile = { path: string; name: string };

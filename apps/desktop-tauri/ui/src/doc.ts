@@ -6,12 +6,55 @@ import type {
 } from "./types";
 import { state, callbacks } from "./state";
 import { dom, setStatus } from "./dom";
+import { t } from "./i18n";
 import {
   applyViewMode, evictFarSlots, navigateTo, rebuildSlots, reflow,
   renderAllHighlights, rotatedSize, scheduleRender, updateChrome,
 } from "./viewer";
 
 const MAX_RENDER_DIST = 6;
+
+// ---------- Password prompt ----------
+//
+// window.prompt() is not supported inside the Tauri WebView, so password
+// entry runs through a promise-based modal (markup in template.ts).
+
+let pwResolve: ((value: string | null) => void) | null = null;
+
+function settlePw(value: string | null) {
+  document.getElementById("pwOverlay")!.classList.add("hidden");
+  const r = pwResolve;
+  pwResolve = null;
+  r?.(value);
+}
+
+/** Show the password modal. Resolves to the input or `null` on cancel. */
+export function promptPassword(message: string): Promise<string | null> {
+  const input = document.getElementById("pwInput") as HTMLInputElement;
+  // A pending prompt is cancelled by the new one.
+  if (pwResolve) settlePw(null);
+  document.getElementById("pwMessage")!.textContent = message;
+  input.value = "";
+  document.getElementById("pwOverlay")!.classList.remove("hidden");
+  input.focus();
+  return new Promise((resolve) => {
+    pwResolve = resolve;
+  });
+}
+
+function initPasswordModal() {
+  const pwInput = document.getElementById("pwInput") as HTMLInputElement;
+  document.getElementById("pwOk")!.addEventListener("click", () => settlePw(pwInput.value));
+  document.getElementById("pwCancel")!.addEventListener("click", () => settlePw(null));
+  document.getElementById("pwClose")!.addEventListener("click", () => settlePw(null));
+  pwInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") settlePw(pwInput.value);
+    else if (e.key === "Escape") settlePw(null);
+  });
+  document.getElementById("pwOverlay")!.addEventListener("click", (e) => {
+    if (e.target === document.getElementById("pwOverlay")) settlePw(null);
+  });
+}
 
 // ---------- Open ----------
 
@@ -38,13 +81,13 @@ export async function openFromBytes(bytes: Uint8Array, label: string) {
       const kind = typeof err === "object" ? err.kind : "Other";
       if (kind === "PasswordRequired" || kind === "PasswordIncorrect") {
         if (attempts >= 3) {
-          setStatus("Too many password attempts");
+          setStatus(t("pw.tooMany"));
           return;
         }
-        const prompt = kind === "PasswordIncorrect" ? "Password incorrect. Try again:" : "Password required:";
-        const input = window.prompt(prompt);
+        const prompt = kind === "PasswordIncorrect" ? t("pw.incorrect") : t("pw.required");
+        const input = await promptPassword(prompt);
         if (input === null) {
-          setStatus("Open cancelled");
+          setStatus(t("pw.cancelled"));
           return;
         }
         password = input;
@@ -87,10 +130,15 @@ export function applyOpenedDoc(doc: OpenedDocument, label: string) {
     else scheduleRender(0);
     renderThumbsShell();
     void loadAttachments();
-    setStatus(`${label} — ${state.pageCount} pages`);
+    setStatus(
+      doc.protected
+        ? `${label} — ${state.pageCount} pages · ${t("st.protectedSuffix")}`
+        : `${label} — ${state.pageCount} pages`,
+    );
     updateChrome();
     void refreshUndoUi();
     void callbacks.refreshFormFields();
+    document.dispatchEvent(new CustomEvent("rustpdf:doc-changed"));
   } catch (e) {
     setStatus(`Error: ${e}`);
   }
@@ -109,10 +157,10 @@ export async function openByPath(path: string) {
       const err = e as OpenErr | string;
       const kind = typeof err === "object" ? err.kind : "Other";
       if (kind === "PasswordRequired" || kind === "PasswordIncorrect") {
-        if (attempts >= 3) { setStatus("Too many password attempts"); return; }
-        const prompt = kind === "PasswordIncorrect" ? "Password incorrect. Try again:" : "Password required:";
-        const input = window.prompt(prompt);
-        if (input === null) { setStatus("Open cancelled"); return; }
+        if (attempts >= 3) { setStatus(t("pw.tooMany")); return; }
+        const prompt = kind === "PasswordIncorrect" ? t("pw.incorrect") : t("pw.required");
+        const input = await promptPassword(prompt);
+        if (input === null) { setStatus(t("pw.cancelled")); return; }
         password = input; attempts += 1; continue;
       }
       const msg = typeof err === "string" ? err : err.value ?? "unknown error";
@@ -536,6 +584,8 @@ export function handleThumbSelect(i: number, ev: MouseEvent | PointerEvent) {
 // ---------- Init ----------
 
 export function initDoc() {
+  initPasswordModal();
+
   // Open button
   document.getElementById("open")!.addEventListener("click", async () => {
     const path = await open({

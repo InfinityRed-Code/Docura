@@ -354,7 +354,11 @@ async function runDigitalSign() {
     setStatus(t("st.signed"));
     await runVerify();
   } catch (e) {
-    setStatus(t("st.signError", { e: String(e) }));
+    if (String(e).includes("PROTECTED_DOC")) {
+      setStatus(t("st.signProtected"));
+    } else {
+      setStatus(t("st.signError", { e: String(e) }));
+    }
   }
 }
 

@@ -9,6 +9,53 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.7.1] — 2026-06-10
+
+Start of milestone v0.8 — "Sicherheit & Redaktion": password protection
+(open, protect, permissions). Redaction and sanitization follow in a later
+release.
+
+### Added
+- **Open password-protected PDFs.** PDFium opens the file with the user or
+  owner password; a proper password modal replaces the previous
+  `window.prompt()` call, which WebView2 does not support — password entry
+  was effectively broken before. Up to 3 attempts, localized messages.
+- **Protect tab.** New ribbon tab with a protect dialog: open password
+  (user), permissions password (owner), and permission switches for
+  printing, modification, copying and annotating. AES-256 (V5/R6) via a new
+  `pdf_mutate::encryption` module; protection is applied when the file is
+  saved (the dialog chains straight into Save As). "Remove protection"
+  un-sets it the same way.
+- **Decrypt-at-open / re-encrypt-at-save architecture.** Protected documents
+  are flattened to a plaintext working copy on open (raw `FPDF_SaveAsCopy`
+  with `FPDF_REMOVE_SECURITY`; pdfium-render's safe wrapper hardcodes
+  `flags = 0`), so rendering, all lopdf mutations, undo/redo and forms work
+  unchanged; `save_pdf_as` re-applies the tracked protection settings
+  (`AppState.doc_crypto`). Permissions of the original file are preserved.
+- **Encrypted-input guard.** Merge and insert-pages reject password-protected
+  input files with a clear localized message instead of silently producing a
+  broken document (lopdf cannot parse encrypted files).
+- E2E test `pdf_pdfium/tests/encryption_roundtrip.rs`: lopdf-encrypt →
+  pdfium-open (wrong/user/owner password) → flatten → text extraction +
+  lopdf mutation on the plaintext copy.
+
+### Changed
+- Document properties of a protected document now report the tracked
+  protection settings ("AES-256 (applied on save)") instead of pdfium's view
+  of the decrypted in-memory copy, which would claim "Unprotected".
+- Opening a protected document shows a 🔒 status note; PDF/A export notes
+  that PDF/A forbids encryption (protection is not applied there).
+- Digital signing is blocked while password protection is active
+  (re-encrypting on save would invalidate the signature's `/ByteRange`);
+  the UI points to the Protect tab.
+
+### Known limitations
+- Signature verification on documents that were signed *and* encrypted
+  reports invalid — the flattened working copy no longer matches the signed
+  bytes.
+- Owner-only-restricted files (no open password) are re-encrypted on save
+  with an empty user password and their original permission bits.
+
 ## [0.7.0] — 2026-06-09
 
 Milestone v0.7 — "Fill & Sign". Visual filling/signing plus cryptographic

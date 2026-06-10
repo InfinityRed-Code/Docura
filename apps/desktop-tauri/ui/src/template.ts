@@ -11,6 +11,7 @@ export function buildHtml(): string {
       <button class="ribbonTab" data-ribbon-tab="sign">${t("tab.sign")}</button>
       <button class="ribbonTab" data-ribbon-tab="convert">${t("tab.convert")}</button>
       <button class="ribbonTab" data-ribbon-tab="organize">${t("tab.organize")}</button>
+      <button class="ribbonTab" data-ribbon-tab="protect">${t("tab.protect")}</button>
       <button id="settingsBtnTop" class="ribbonTab settingsTab" title="${t("tip.settings")}">⚙</button>
     </div>
     <div class="ribbonBody" data-active="reader">
@@ -218,6 +219,14 @@ export function buildHtml(): string {
         <div class="groupLabel">${t("grp.conversion")}</div>
       </div>
       <span data-ribbon="convert" class="modeHint">${t("hint.convert")}</span>
+      <div data-ribbon="protect" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="protectBtn" title="${t("tip.protect")}">🔒 ${t("btn.protect")}</button>
+          <button id="unprotectBtn" title="${t("tip.unprotect")}" disabled>🔓 ${t("btn.unprotect")}</button>
+        </div>
+        <div class="groupLabel">${t("grp.password")}</div>
+      </div>
+      <span data-ribbon="protect" id="protectHint" class="modeHint"></span>
       <span data-ribbon="both" id="status" class="status"></span>
     </div>
   </header>
@@ -495,6 +504,35 @@ export function buildHtml(): string {
       <div id="dverifyBody" class="propsPanel"></div>
     </div>
   </div>
+  <div id="pwOverlay" class="propsOverlay hidden">
+    <div class="propsModal" style="width:24rem;">
+      <div class="propsHeader"><strong>${t("pw.title")}</strong><button id="pwClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <span id="pwMessage" class="sigHint"></span>
+        <label>${t("lbl.password")}<input id="pwInput" type="password" autocomplete="off" /></label>
+        <div class="wmActions"><button id="pwOk">OK</button><button id="pwCancel">${t("tip.cancel")}</button></div>
+      </div>
+    </div>
+  </div>
+  <div id="protectOverlay" class="propsOverlay hidden">
+    <div class="propsModal" style="width:26rem;">
+      <div class="propsHeader"><strong>${t("protect.title")}</strong><button id="protectClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <label>${t("protect.userPw")}<input id="protectUserPw" type="password" autocomplete="off" placeholder="${t("ph.openPw")}" /></label>
+        <label>${t("protect.ownerPw")}<input id="protectOwnerPw" type="password" autocomplete="off" placeholder="${t("ph.ownerPw")}" /></label>
+        <span class="sigHint">${t("protect.hint")}</span>
+        <strong style="font-size:0.85rem;">${t("protect.permsTitle")}</strong>
+        <label class="commentChk"><input type="checkbox" id="permPrint" checked /> ${t("perm.print")}</label>
+        <label class="commentChk"><input type="checkbox" id="permModify" checked /> ${t("perm.modify")}</label>
+        <label class="commentChk"><input type="checkbox" id="permCopy" checked /> ${t("perm.copy")}</label>
+        <label class="commentChk"><input type="checkbox" id="permAnnotate" checked /> ${t("perm.annotate")}</label>
+        <div class="wmActions">
+          <button id="protectCommit">${t("btn.protectSave")}</button>
+          <button id="protectCancel">${t("tip.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </main>
 `;
 }
@@ -562,33 +600,45 @@ export const CSS = `
   .ribbonBody[data-active="reader"] > [data-ribbon="forms"],
   .ribbonBody[data-active="reader"] > [data-ribbon="sign"],
   .ribbonBody[data-active="reader"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="reader"] > [data-ribbon="protect"],
   .ribbonBody[data-active="reader"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="edit"] > [data-ribbon="reader"],
   .ribbonBody[data-active="edit"] > [data-ribbon="forms"],
   .ribbonBody[data-active="edit"] > [data-ribbon="sign"],
   .ribbonBody[data-active="edit"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="edit"] > [data-ribbon="protect"],
   .ribbonBody[data-active="edit"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="forms"] > [data-ribbon="reader"],
   .ribbonBody[data-active="forms"] > [data-ribbon="edit"],
   .ribbonBody[data-active="forms"] > [data-ribbon="sign"],
   .ribbonBody[data-active="forms"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="forms"] > [data-ribbon="protect"],
   .ribbonBody[data-active="forms"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="sign"] > [data-ribbon="reader"],
   .ribbonBody[data-active="sign"] > [data-ribbon="edit"],
   .ribbonBody[data-active="sign"] > [data-ribbon="forms"],
   .ribbonBody[data-active="sign"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="sign"] > [data-ribbon="protect"],
   .ribbonBody[data-active="sign"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="organize"] > [data-ribbon="reader"],
   .ribbonBody[data-active="organize"] > [data-ribbon="edit"],
   .ribbonBody[data-active="organize"] > [data-ribbon="forms"],
   .ribbonBody[data-active="organize"] > [data-ribbon="sign"],
+  .ribbonBody[data-active="organize"] > [data-ribbon="protect"],
   .ribbonBody[data-active="organize"] > [data-ribbon="convert"] { display:none; }
   .ribbonBody[data-active="convert"] > [data-ribbon="reader"],
   .ribbonBody[data-active="convert"] > [data-ribbon="edit"],
   .ribbonBody[data-active="convert"] > [data-ribbon="forms"],
   .ribbonBody[data-active="convert"] > [data-ribbon="sign"],
   .ribbonBody[data-active="convert"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="convert"] > [data-ribbon="protect"],
   .ribbonBody[data-active="convert"] > [data-ribbon="both"] { display:none; }
+  .ribbonBody[data-active="protect"] > [data-ribbon="reader"],
+  .ribbonBody[data-active="protect"] > [data-ribbon="edit"],
+  .ribbonBody[data-active="protect"] > [data-ribbon="forms"],
+  .ribbonBody[data-active="protect"] > [data-ribbon="sign"],
+  .ribbonBody[data-active="protect"] > [data-ribbon="organize"],
+  .ribbonBody[data-active="protect"] > [data-ribbon="convert"] { display:none; }
   .ribbonLabel { color:var(--text-3); font-size:0.85rem; margin-left:0.2rem; }
   .ribbonGroup { display:inline-flex; flex-direction:column; align-items:stretch; align-self:stretch;
                  padding: 0 0.55rem; border-right:1px solid var(--border); gap: 0.15rem; }

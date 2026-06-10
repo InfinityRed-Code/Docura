@@ -8,6 +8,7 @@ import { initDoc, openByPath } from "./doc";
 import { initEdit, addMergePaths } from "./edit";
 import { initAnnot } from "./annot";
 import { initSign } from "./sign";
+import { initProtect } from "./protect";
 import { initChrome } from "./chrome";
 import { dom } from "./dom";
 
@@ -25,6 +26,7 @@ initAnnot();
 initSign();
 initDoc();
 initEdit();
+initProtect();
 initChrome();
 
 // 3. Thumb-click goto bridge — edit.ts dispatches this when a thumb is clicked

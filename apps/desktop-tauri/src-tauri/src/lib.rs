@@ -74,11 +74,24 @@ impl UndoStacks {
     }
 }
 
+/// Protection settings of an open document. The resident engine copy is
+/// always plaintext (decrypted on open); these settings are re-applied by
+/// `save_pdf_as` when the file is written to disk.
+#[derive(Clone)]
+struct DocCrypto {
+    /// User password (empty = open without prompt, restrictions only).
+    user_password: String,
+    /// Owner password; falls back to the user password when empty.
+    owner_password: String,
+    permissions: pdf_mutate::PermissionOptions,
+}
+
 struct AppState {
     engine: Arc<dyn PdfEngine>,
     cache: Mutex<RenderCache>,
     settings_path: Mutex<Option<PathBuf>>,
     undo: Mutex<UndoStacks>,
+    doc_crypto: Mutex<HashMap<DocumentId, DocCrypto>>,
 }
 
 #[derive(Serialize)]
@@ -87,6 +100,9 @@ struct OpenedDocument {
     page_count: u32,
     page_sizes: Vec<PageSize>,
     outline: Vec<OutlineNode>,
+    /// True when the document was password-protected / permission-restricted.
+    /// The protection is re-applied on save.
+    protected: bool,
 }
 
 #[derive(Serialize)]
@@ -115,6 +131,7 @@ async fn close_pdf(
     let engine = state.engine.clone();
     state.cache.lock().remove_document(document);
     state.undo.lock().clear_doc(document);
+    state.doc_crypto.lock().remove(&document);
     tokio::task::spawn_blocking(move || engine.close(document).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())?
@@ -150,9 +167,42 @@ async fn open_pdf_inner(
 ) -> Result<OpenedDocument, OpenError> {
     let engine = state.engine.clone();
     let size_mb = bytes.len() as f64 / 1024.0 / 1024.0;
-    tokio::task::spawn_blocking(move || -> Result<OpenedDocument, OpenError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<(OpenedDocument, Option<DocCrypto>), OpenError> {
         let t0 = std::time::Instant::now();
-        let id = engine.open_bytes_with_password(bytes, password)?;
+        let id = engine.open_bytes_with_password(bytes, password.clone())?;
+        // Protected document: flatten to a plaintext working copy so the
+        // lopdf mutation pipeline and save work on readable bytes. The
+        // protection settings are re-applied on save.
+        let mut crypto: Option<DocCrypto> = None;
+        if engine.is_protected(id).unwrap_or(false) {
+            let perms = engine
+                .document_permissions(id)
+                .map(|p| pdf_mutate::PermissionOptions {
+                    print: p.can_print_high_quality || p.can_print_low_quality,
+                    modify: p.can_modify_content,
+                    copy: p.can_extract_text_and_graphics,
+                    annotate: p.can_annotate,
+                })
+                .unwrap_or_default();
+            match engine
+                .save_copy_bytes(id)
+                .and_then(|flat| engine.reload_bytes(id, flat))
+            {
+                Ok(()) => {
+                    crypto = Some(DocCrypto {
+                        user_password: password.unwrap_or_default(),
+                        owner_password: String::new(),
+                        permissions: perms,
+                    });
+                    tracing::info!("open_pdf: flattened protected document, perms={perms:?}");
+                }
+                Err(e) => {
+                    // Keep the password-opened original; saving keeps the
+                    // original encrypted bytes, mutations are unavailable.
+                    tracing::warn!("open_pdf: could not flatten protected document: {e}");
+                }
+            }
+        }
         let t_parse = t0.elapsed();
         let t_pc0 = std::time::Instant::now();
         let page_count = engine
@@ -181,15 +231,27 @@ async fn open_pdf_inner(
             t_outline,
             t0.elapsed()
         );
-        Ok(OpenedDocument {
-            id,
-            page_count,
-            page_sizes,
-            outline,
-        })
+        // `crypto` is set when the document was flattened; if flattening
+        // failed the resident copy still reports as protected itself.
+        let protected = crypto.is_some() || engine.is_protected(id).unwrap_or(false);
+        Ok((
+            OpenedDocument {
+                id,
+                page_count,
+                page_sizes,
+                outline,
+                protected,
+            },
+            crypto,
+        ))
     })
     .await
-    .map_err(|e| OpenError::Other(e.to_string()))?
+    .map_err(|e| OpenError::Other(e.to_string()))?;
+    let (doc, crypto) = result?;
+    if let Some(c) = crypto {
+        state.doc_crypto.lock().insert(doc.id, c);
+    }
+    Ok(doc)
 }
 
 #[derive(Serialize)]
@@ -373,8 +435,25 @@ async fn save_pdf_as(
     path: String,
 ) -> Result<(), String> {
     let engine = state.engine.clone();
-    let bytes = tokio::task::spawn_blocking(move || {
-        engine.document_bytes(document).map_err(|e| e.to_string())
+    let crypto = state.doc_crypto.lock().get(&document).cloned();
+    let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        match crypto {
+            // Re-apply password protection unless the resident bytes are
+            // still the original encrypted file (flatten failed on open).
+            Some(c) if !pdf_mutate::probably_encrypted(&bytes) => {
+                let enc = pdf_mutate::encrypt_pdf(
+                    &bytes,
+                    &c.user_password,
+                    &c.owner_password,
+                    c.permissions,
+                )
+                .map_err(|e| format!("encrypt: {e}"))?;
+                tracing::info!("save_pdf_as: re-encrypted ({} -> {} bytes)", bytes.len(), enc.len());
+                Ok(enc)
+            }
+            _ => Ok(bytes),
+        }
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -383,6 +462,69 @@ async fn save_pdf_as(
         .map_err(|e| format!("write {path}: {e}"))?;
     tracing::info!("save_pdf_as: wrote {} bytes to {}", bytes.len(), path);
     Ok(())
+}
+
+#[derive(Serialize)]
+struct PdfSecurityInfo {
+    protected: bool,
+    has_user_password: bool,
+    permissions: pdf_mutate::PermissionOptions,
+}
+
+#[tauri::command]
+fn get_pdf_security(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> PdfSecurityInfo {
+    match state.doc_crypto.lock().get(&document) {
+        Some(c) => PdfSecurityInfo {
+            protected: true,
+            has_user_password: !c.user_password.is_empty(),
+            permissions: c.permissions,
+        },
+        None => PdfSecurityInfo {
+            protected: false,
+            has_user_password: false,
+            permissions: pdf_mutate::PermissionOptions::default(),
+        },
+    }
+}
+
+#[tauri::command]
+async fn set_pdf_protection(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    user_password: String,
+    owner_password: String,
+    permissions: pdf_mutate::PermissionOptions,
+) -> Result<(), String> {
+    if user_password.is_empty() && owner_password.is_empty() {
+        return Err("a user or owner password is required".into());
+    }
+    // If flattening failed on open, the resident bytes are still encrypted;
+    // `save_pdf_as` would silently keep the original protection and drop
+    // these settings. Refuse instead of pretending it worked.
+    let engine = state.engine.clone();
+    let still_encrypted =
+        tokio::task::spawn_blocking(move || engine.is_protected(document).unwrap_or(false))
+            .await
+            .map_err(|e| e.to_string())?;
+    if still_encrypted {
+        return Err(
+            "the document could not be converted to an editable copy; its existing protection cannot be changed"
+                .into(),
+        );
+    }
+    state.doc_crypto.lock().insert(
+        document,
+        DocCrypto { user_password, owner_password, permissions },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_pdf_protection(state: tauri::State<'_, AppState>, document: DocumentId) {
+    state.doc_crypto.lock().remove(&document);
 }
 
 #[derive(Serialize)]
@@ -620,6 +762,11 @@ async fn insert_pdf_files(
         let bytes = tokio::fs::read(p)
             .await
             .map_err(|e| format!("read {p}: {e}"))?;
+        // lopdf cannot parse encrypted inputs — the merge would silently
+        // produce a broken document.
+        if pdf_mutate::is_encrypted_pdf(&bytes) {
+            return Err(format!("ENCRYPTED_INPUT:{p}"));
+        }
         sources.push(bytes);
     }
     let engine = state.engine.clone();
@@ -748,6 +895,7 @@ struct MergeOpenedDocument {
     page_count: u32,
     page_sizes: Vec<PageSize>,
     outline: Vec<OutlineNode>,
+    protected: bool,
     temp_path: String,
 }
 
@@ -761,11 +909,13 @@ async fn merge_files_and_open(
     }
     let mut sources: Vec<Vec<u8>> = Vec::with_capacity(paths.len());
     for p in &paths {
-        sources.push(
-            tokio::fs::read(p)
-                .await
-                .map_err(|e| format!("read {p}: {e}"))?,
-        );
+        let bytes = tokio::fs::read(p)
+            .await
+            .map_err(|e| format!("read {p}: {e}"))?;
+        if pdf_mutate::is_encrypted_pdf(&bytes) {
+            return Err(format!("ENCRYPTED_INPUT:{p}"));
+        }
+        sources.push(bytes);
     }
     let merged_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let t = std::time::Instant::now();
@@ -811,6 +961,7 @@ async fn merge_files_and_open(
         page_count: opened.page_count,
         page_sizes: opened.page_sizes,
         outline: opened.outline,
+        protected: false,
         temp_path: tmp_str,
     })
 }
@@ -1892,6 +2043,23 @@ async fn document_permissions_cmd(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
 ) -> Result<DocPermissions, String> {
+    // The resident engine copy of a protected document is plaintext
+    // (decrypted on open), so pdfium would report "Unprotected" with all
+    // permissions granted. Report the tracked protection settings instead —
+    // they are what ends up in the saved file.
+    if let Some(c) = state.doc_crypto.lock().get(&document) {
+        let p = c.permissions;
+        return Ok(DocPermissions {
+            security_handler: "AES-256 (applied on save)".to_string(),
+            can_print_high_quality: p.print,
+            can_print_low_quality: p.print,
+            can_modify_content: p.modify,
+            can_extract_text_and_graphics: p.copy,
+            can_annotate: p.annotate,
+            can_fill_forms: p.annotate,
+            can_assemble: p.modify,
+        });
+    }
     let engine = state.engine.clone();
     tokio::task::spawn_blocking(move || {
         engine.document_permissions(document).map_err(|e| e.to_string())
@@ -2080,6 +2248,9 @@ async fn sign_pdf_pkcs12(
     password: String,
     meta: DigitalSignMeta,
 ) -> Result<DocSnapshot, String> {
+    if state.doc_crypto.lock().contains_key(&document) {
+        return Err("PROTECTED_DOC".into());
+    }
     let pfx = tokio::fs::read(&pfx_path)
         .await
         .map_err(|e| format!("read {pfx_path}: {e}"))?;
@@ -2138,6 +2309,9 @@ async fn sign_pdf_windows_cert(
     thumbprint: String,
     meta: DigitalSignMeta,
 ) -> Result<DocSnapshot, String> {
+    if state.doc_crypto.lock().contains_key(&document) {
+        return Err("PROTECTED_DOC".into());
+    }
     let engine = state.engine.clone();
     let epoch = now_epoch();
     let (pre, new) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
@@ -2348,6 +2522,7 @@ pub fn run() {
             cache: Mutex::new(cache),
             settings_path: Mutex::new(None),
             undo: Mutex::new(UndoStacks::default()),
+            doc_crypto: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             open_pdf,
@@ -2365,6 +2540,9 @@ pub fn run() {
             document_permissions_cmd,
             print_document,
             save_pdf_as,
+            get_pdf_security,
+            set_pdf_protection,
+            remove_pdf_protection,
             delete_page,
             delete_pages,
             rotate_pages,

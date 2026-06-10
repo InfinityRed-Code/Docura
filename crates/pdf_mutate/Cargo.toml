@@ -9,6 +9,8 @@ publish.workspace = true
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+getrandom = "0.3"
 lopdf = { workspace = true }
 image = { workspace = true }
 pdf_types = { workspace = true }

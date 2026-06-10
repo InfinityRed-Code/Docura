@@ -511,6 +511,70 @@ impl PdfEngine for PdfiumEngine {
         Ok(())
     }
 
+    fn is_protected(&self, doc: DocumentId) -> CoreResult<bool> {
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        Ok(match document.permissions().security_handler_revision() {
+            Ok(PdfSecurityHandlerRevision::Unprotected) => false,
+            // Revisions 2–4 (RC4 / AES-128). Revisions 5/6 (AES-256) are
+            // unknown to pdfium-render's enum and surface as Err — the
+            // document is protected either way.
+            Ok(_) => true,
+            Err(_) => true,
+        })
+    }
+
+    fn save_copy_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>> {
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+
+        // pdfium-render's `save_to_bytes` hardcodes flags = 0, which keeps
+        // the security handler — the saved copy would still require the
+        // password. Drop down to the raw binding with FPDF_REMOVE_SECURITY
+        // so the copy is plaintext.
+        const FPDF_REMOVE_SECURITY: FPDF_DWORD = 3;
+
+        #[repr(C)]
+        struct BufWriter {
+            fw: FPDF_FILEWRITE,
+            buf: Vec<u8>,
+        }
+        unsafe extern "C" fn write_block(
+            pthis: *mut FPDF_FILEWRITE,
+            data: *const std::os::raw::c_void,
+            size: std::os::raw::c_ulong,
+        ) -> std::os::raw::c_int {
+            // SAFETY: `pthis` points at the `fw` field of a `BufWriter`
+            // (repr(C), `fw` first), so the cast recovers the full struct.
+            let w = pthis as *mut BufWriter;
+            let slice = std::slice::from_raw_parts(data as *const u8, size as usize);
+            (*w).buf.extend_from_slice(slice);
+            1
+        }
+
+        let mut writer = BufWriter {
+            fw: FPDF_FILEWRITE {
+                version: 1,
+                WriteBlock: Some(write_block),
+            },
+            buf: Vec::new(),
+        };
+        let bindings = document.bindings();
+        let handle = bindings.get_handle_from_document(document);
+        let ok = bindings.FPDF_SaveAsCopy(
+            handle,
+            &mut writer.fw as *mut FPDF_FILEWRITE,
+            FPDF_REMOVE_SECURITY,
+        );
+        if bindings.is_true(ok) {
+            Ok(writer.buf)
+        } else {
+            Err(CoreError::Engine("save_copy: FPDF_SaveAsCopy failed".into()))
+        }
+    }
+
     fn document_permissions(&self, doc: DocumentId) -> CoreResult<DocPermissions> {
         let inner = self.inner.lock();
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;

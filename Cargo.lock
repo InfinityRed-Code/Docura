@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-tauri"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3158,7 +3158,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_cache"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "lru",
  "pdf_types",
@@ -3166,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "pdf_types",
@@ -3177,23 +3177,27 @@ dependencies = [
 
 [[package]]
 name = "pdf_mutate"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
+ "getrandom 0.3.4",
  "image",
  "lopdf",
  "pdf_types",
+ "serde",
  "thiserror 2.0.18",
  "tracing",
 ]
 
 [[package]]
 name = "pdf_pdfium"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
+ "lopdf",
  "parking_lot",
  "pdf_core",
+ "pdf_mutate",
  "pdf_types",
  "pdfium-render",
  "thiserror 2.0.18",
@@ -3203,7 +3207,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_services"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "pdf_types",
@@ -3213,7 +3217,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_sign"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cms",
  "der",
@@ -3236,7 +3240,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_types"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "serde",
  "uuid",

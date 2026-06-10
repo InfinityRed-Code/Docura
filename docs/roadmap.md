@@ -148,14 +148,31 @@ Unterschreiben — Adobe-Kernfeature.
 ## Meilenstein v0.8 — "Sicherheit & Redaktion"
 
 Anforderung aus Legal/Compliance. Foxit/Adobe-Parität.
+Passwortschutz-Block (erste drei Items) ausgeliefert mit **v0.7.1**.
 
-- [ ] Passwort-geschützte PDFs öffnen (User + Owner Password) [E]
-- [ ] PDF mit Passwort schützen [X: lopdf + aes/rc4]
-- [ ] Berechtigungen setzen (Drucken, Kopieren, Ändern) [X: lopdf]
+- [x] Passwort-geschützte PDFs öffnen (User + Owner Password) [E] — eigenes Passwort-Modal (window.prompt geht in WebView2 nicht), max. 3 Versuche *(v0.7.1)*
+- [x] PDF mit Passwort schützen [X: lopdf, AES-256 V5/R6] — Schützen-Tab, Schutz wird beim Speichern angewendet *(v0.7.1)*
+- [x] Berechtigungen setzen (Drucken, Kopieren, Ändern, Kommentieren) [X: lopdf /P-Bits] *(v0.7.1)*
 - [ ] Redaktion: Text dauerhaft schwärzen (Inhalt entfernt, nicht nur überdeckt) [X: lopdf + pdfium-text]
 - [ ] Metadaten bereinigen (Sanitize) [X: lopdf]
 - [ ] Versteckte Inhalte finden (Layers, Kommentare, unsichtbarer Text)
 - [ ] Pattern-Redaktion (E-Mails, Telefonnummern per Regex) [C][U]
+
+> Architektur Passwortschutz: lopdf 0.38 kann passwortgeschützte PDFs nicht
+> laden (Reader parst nur das Encrypt-Dict). Deshalb: **PDFium entschlüsselt**
+> beim Öffnen (`FPDF_SaveAsCopy` mit `FPDF_REMOVE_SECURITY`-Flag, raw binding —
+> pdfium-render hardcodet flags=0) → Engine arbeitet immer auf Klartext-Bytes
+> (Mutationen/Render unverändert) → **lopdf re-encryptet beim Speichern**
+> (AES-256, `encrypt_pdf` in `pdf_mutate`; XRef-/ObjStm-Reste vorher strippen,
+> sonst korrupte Ausgabe). Einstellungen pro Doc in `AppState.doc_crypto`.
+> Einschränkungen: Digitales Signieren bei aktivem Schutz blockiert
+> (Re-Encrypt würde ByteRange brechen); Signaturprüfung zeigt bei
+> verschlüsselt signierten PDFs „ungültig“ (Bytes wurden geflattet);
+> Owner-only-PDFs werden beim Speichern mit leerem User-Passwort + alten
+> /P-Bits re-encryptet. Merge/Insert lehnen verschlüsselte Eingabedateien ab
+> (`ENCRYPTED_INPUT`-Marker → lokalisierte Meldung); Dokument-Eigenschaften
+> zeigen bei geschützten Docs die getrackten Einstellungen statt der
+> Klartext-Engine-Sicht. E2E-Test: `pdf_pdfium/tests/encryption_roundtrip.rs`.
 
 ---
 

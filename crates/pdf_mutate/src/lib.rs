@@ -13,6 +13,7 @@ use lopdf::{Document, Object, ObjectId};
 use pdf_types::RectPt;
 
 mod annotations;
+mod encryption;
 mod form;
 mod overlay;
 mod read;
@@ -22,6 +23,7 @@ pub use annotations::{
     FreeTextAnnotation, InkAnnotation, LineEnding, MarkupAnnotation, MarkupKind,
     ShapeAnnotation, ShapeKind, StampAnnotation, TextNoteAnnotation,
 };
+pub use encryption::{encrypt_pdf, is_encrypted_pdf, probably_encrypted, PermissionOptions};
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
 pub type MutateResult<T> = Result<T, MutateError>;
@@ -36,6 +38,8 @@ pub enum MutateError {
     PageOutOfRange(u32, u32),
     #[error("cannot delete the only remaining page")]
     LastPage,
+    #[error("crypt: {0}")]
+    Crypt(String),
 }
 
 pub struct MutableDoc {

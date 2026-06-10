@@ -47,6 +47,19 @@ pub trait PdfEngine: Send + Sync {
     /// The `DocumentId` is preserved so callers (UI, cache) don't need to
     /// re-key. Used after structural mutations (delete/insert/reorder pages).
     fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()>;
+    /// True when the document carries a standard security handler
+    /// (password protection / permission restrictions).
+    fn is_protected(&self, _doc: DocumentId) -> CoreResult<bool> {
+        Ok(false)
+    }
+    /// Re-serialise the resident document via the backend's own writer
+    /// (pdfium `FPDF_SaveAsCopy`). Strips encryption — used to flatten a
+    /// password-protected document to a plaintext working copy.
+    fn save_copy_bytes(&self, _doc: DocumentId) -> CoreResult<Vec<u8>> {
+        Err(crate::error::CoreError::Engine(
+            "save_copy_bytes is not supported by this engine".into(),
+        ))
+    }
     /// Enumerate AcroForm fields. Returns empty Vec for documents without forms.
     fn list_form_fields(&self, doc: DocumentId) -> CoreResult<Vec<FormFieldInfo>>;
     /// Show the native OS print dialog and print the document. Returns `true`
