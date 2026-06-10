@@ -515,14 +515,11 @@ impl PdfEngine for PdfiumEngine {
         let inner = self.inner.lock();
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
-        Ok(match document.permissions().security_handler_revision() {
-            Ok(PdfSecurityHandlerRevision::Unprotected) => false,
-            // Revisions 2–4 (RC4 / AES-128). Revisions 5/6 (AES-256) are
-            // unknown to pdfium-render's enum and surface as Err — the
-            // document is protected either way.
-            Ok(_) => true,
-            Err(_) => true,
-        })
+        // Raw binding: pdfium-render's PdfSecurityHandlerRevision enum lacks
+        // revisions 5/6 (AES-256). -1 = no security handler.
+        let bindings = document.bindings();
+        let handle = bindings.get_handle_from_document(document);
+        Ok(bindings.FPDF_GetSecurityHandlerRevision(handle) != -1)
     }
 
     fn save_copy_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>> {
@@ -579,27 +576,35 @@ impl PdfEngine for PdfiumEngine {
         let inner = self.inner.lock();
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
-        let perms = document.permissions();
-        let handler = perms
-            .security_handler_revision()
-            .map(|r| match r {
-                PdfSecurityHandlerRevision::Unprotected => "Unprotected".to_string(),
-                PdfSecurityHandlerRevision::Revision2 => "Standard (rev 2)".to_string(),
-                PdfSecurityHandlerRevision::Revision3 => "Standard (rev 3)".to_string(),
-                PdfSecurityHandlerRevision::Revision4 => "Standard (rev 4)".to_string(),
-            })
-            .unwrap_or_else(|_| "Unknown".to_string());
+        // Raw bindings instead of pdfium-render's permission helpers: those
+        // all go through a revision enum that lacks 5/6 (AES-256) and
+        // therefore error out, which would read as "everything denied".
+        let bindings = document.bindings();
+        let handle = bindings.get_handle_from_document(document);
+        let rev = bindings.FPDF_GetSecurityHandlerRevision(handle);
+        let handler = match rev {
+            -1 => "Unprotected".to_string(),
+            2 => "Standard (rev 2)".to_string(),
+            3 => "Standard (rev 3)".to_string(),
+            4 => "Standard (rev 4)".to_string(),
+            5 => "Standard (rev 5, AES-256)".to_string(),
+            6 => "Standard (rev 6, AES-256)".to_string(),
+            r => format!("Unknown (rev {r})"),
+        };
+        // /P bitfield, 1-based bit positions per PDF spec table 22.
+        // Unprotected documents report 0xFFFF_FFFF (all allowed).
+        let p = bindings.FPDF_GetDocPermissions(handle) as u64;
+        let bit = |n: u32| p & (1u64 << (n - 1)) != 0;
+        let legacy = rev <= 2; // rev 2: bits 9-12 unused, bit 3 covers all printing
         Ok(DocPermissions {
             security_handler: handler,
-            can_print_high_quality: perms.can_print_high_quality().unwrap_or(false),
-            can_print_low_quality: perms.can_print_only_low_quality().unwrap_or(false),
-            can_modify_content: perms.can_modify_document_content().unwrap_or(false),
-            can_extract_text_and_graphics: perms.can_extract_text_and_graphics().unwrap_or(false),
-            can_annotate: perms.can_add_or_modify_text_annotations().unwrap_or(false),
-            can_fill_forms: perms
-                .can_fill_existing_interactive_form_fields()
-                .unwrap_or(false),
-            can_assemble: perms.can_assemble_document().unwrap_or(false),
+            can_print_high_quality: if legacy { bit(3) } else { bit(12) },
+            can_print_low_quality: bit(3),
+            can_modify_content: bit(4),
+            can_extract_text_and_graphics: bit(5),
+            can_annotate: bit(6),
+            can_fill_forms: if legacy { bit(6) } else { bit(9) },
+            can_assemble: if legacy { bit(4) } else { bit(11) },
         })
     }
 

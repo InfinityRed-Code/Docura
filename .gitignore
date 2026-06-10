@@ -26,3 +26,6 @@ vendor/pdfium/*.lib
 
 # Claude Code local state
 .claude/
+
+# Generated encrypted sample PDFs (cargo run -p pdf_mutate --example make_encrypted)
+/test-encrypted*.pdf

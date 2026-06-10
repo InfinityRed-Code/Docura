@@ -81,6 +81,15 @@ fn pdfium_opens_lopdf_encrypted_and_strips_security() {
     assert_eq!(engine.page_count(id).unwrap(), 1);
     assert!(engine.is_protected(id).unwrap());
 
+    // /P bits must be readable for AES-256 (R6) — pdfium-render's permission
+    // helpers fail there, the raw-binding path must not.
+    let p = engine.document_permissions(id).unwrap();
+    assert!(p.security_handler.contains("AES-256"), "handler: {}", p.security_handler);
+    assert!(p.can_print_high_quality, "print should be allowed");
+    assert!(!p.can_modify_content, "modify should be denied");
+    assert!(!p.can_extract_text_and_graphics, "copy should be denied");
+    assert!(p.can_annotate, "annotate should be allowed");
+
     // Flatten to plaintext working copy.
     let flat = engine.save_copy_bytes(id).unwrap();
     engine.reload_bytes(id, flat.clone()).unwrap();
@@ -88,6 +97,20 @@ fn pdfium_opens_lopdf_encrypted_and_strips_security() {
     assert_eq!(engine.page_count(id).unwrap(), 1);
     let text = engine.extract_text(id, pdf_types::PageIndex(0)).unwrap();
     assert!(text.contains("hello secret"), "text was: {text:?}");
+
+    // Rendering must work on the flattened copy — both full-page and
+    // thumbnail-sized (the UI thumbnail path uses small zoom factors).
+    for zoom in [1.0f32, 0.28] {
+        let rendered = engine
+            .render(pdf_core::RenderRequest {
+                document: id,
+                page: pdf_types::PageIndex(0),
+                zoom: pdf_types::ZoomLevel(zoom),
+                rotation: pdf_types::Rotation::R0,
+            })
+            .unwrap_or_else(|e| panic!("render at zoom {zoom} failed: {e}"));
+        assert!(rendered.width_px > 0 && rendered.height_px > 0);
+    }
 
     // The plaintext copy is mutable again with lopdf.
     let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&flat).unwrap();

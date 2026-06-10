@@ -42,3 +42,4 @@ dirs = "5"
 
 [target.'cfg(windows)'.dependencies]
 pdf_sign = { workspace = true, features = ["win-store"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }

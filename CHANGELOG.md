@@ -9,6 +9,24 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.7.2] — 2026-06-10
+
+### Added
+- **Themed Windows title bar.** The native title bar follows the app theme
+  (DWM caption/text color + dark-mode hint, Windows 11+); applied on startup
+  and on every theme switch.
+- Dev utility `cargo run -p pdf_mutate --example make_encrypted` — generates
+  AES-256-protected sample PDFs (password, optional owner password, page
+  count) for manual testing.
+
+### Fixed
+- **Permissions of AES-256-protected PDFs read as "all denied".**
+  pdfium-render's permission helpers fail for security handler revisions 5/6,
+  so every flag read as `false` — and a save would have re-encrypted the file
+  with everything denied. Permissions are now read from the raw `/P` bits via
+  `FPDF_GetDocPermissions`; the document properties dialog also shows the
+  correct handler revision ("Standard (rev 6, AES-256)").
+
 ## [0.7.1] — 2026-06-10
 
 Start of milestone v0.8 — "Sicherheit & Redaktion": password protection

@@ -2068,6 +2068,57 @@ async fn document_permissions_cmd(
     .map_err(|e| e.to_string())?
 }
 
+/// Color the native Windows title bar to match the app theme (Windows 11+,
+/// DWM caption attributes; silently ignored on older Windows).
+#[cfg(windows)]
+#[tauri::command]
+fn set_titlebar_theme(window: tauri::WebviewWindow, dark: bool) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+    let hwnd = HWND(window.hwnd().map_err(|e| e.to_string())?.0);
+    // COLORREF is 0x00BBGGRR. Values mirror the CSS vars in template.ts:
+    // dark --bg #2b2b2c / --text #e4e4e4, light --bg #ffffff / --text #2c2e33.
+    let (caption, text): (u32, u32) = if dark {
+        (0x002C2B2B, 0x00E4E4E4)
+    } else {
+        (0x00FFFFFF, 0x00332E2C)
+    };
+    let dark_flag: i32 = if dark { 1 } else { 0 };
+    unsafe {
+        // Dark-mode hint first so hover/inactive states follow suit; the
+        // explicit caption color is what actually matches the ribbon.
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark_flag as *const i32 as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR,
+            &caption as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        )
+        .map_err(|e| format!("caption color: {e}"))?;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR,
+            &text as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn set_titlebar_theme(_window: tauri::WebviewWindow, _dark: bool) -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let trimmed = url.trim();
@@ -2543,6 +2594,7 @@ pub fn run() {
             get_pdf_security,
             set_pdf_protection,
             remove_pdf_protection,
+            set_titlebar_theme,
             delete_page,
             delete_pages,
             rotate_pages,
