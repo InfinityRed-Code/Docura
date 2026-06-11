@@ -159,10 +159,10 @@ function ensureDrawLayerViewBox(slot: Slot) {
 
 function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
   const ns = "http://www.w3.org/2000/svg";
-  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region") {
+  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region" || kind === "redact") {
     const el = document.createElementNS(ns, "rect");
-    el.setAttribute("fill", kind === "region" ? "rgba(74,140,255,0.12)" : "none");
-    el.setAttribute("stroke", kind === "region" ? "#4a8cff" : color);
+    el.setAttribute("fill", kind === "region" ? "rgba(74,140,255,0.12)" : kind === "redact" ? "rgba(0,0,0,0.55)" : "none");
+    el.setAttribute("stroke", kind === "region" ? "#4a8cff" : kind === "redact" ? "#d23b3b" : color);
     el.setAttribute("stroke-width", "2");
     if (kind !== "rect") el.setAttribute("stroke-dasharray", "5 4");
     return el;
@@ -202,7 +202,7 @@ function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
 }
 
 function updatePreview(kind: ShapeKindUi, el: SVGElement, s: { x: number; y: number }, c: { x: number; y: number }) {
-  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region") {
+  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region" || kind === "redact") {
     const r = el as SVGRectElement;
     const x = Math.min(s.x, c.x), y = Math.min(s.y, c.y);
     const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
@@ -1097,6 +1097,20 @@ export function initAnnot() {
 
     if (tool === "note") {
       spawnTextNoteEditor(ds.slot, ds.pageIdx, sx, start);
+      return;
+    }
+
+    if (tool === "redact") {
+      const rect: RectPt = {
+        x0: Math.min(start.x, end.x),
+        y0: Math.min(start.y, end.y),
+        x1: Math.max(start.x, end.x),
+        y1: Math.max(start.y, end.y),
+      };
+      if (rect.x1 - rect.x0 < 2 || rect.y1 - rect.y0 < 2) return;
+      state.pendingRedactions.push({ page: ds.pageIdx, rect });
+      callbacks.renderRedactsFor(ds.pageIdx);
+      document.dispatchEvent(new CustomEvent("rustpdf:redactions-changed"));
       return;
     }
 

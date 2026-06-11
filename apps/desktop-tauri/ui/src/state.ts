@@ -1,7 +1,7 @@
 import type {
   AnnotationInfo, DrawState, FitMode, FormFieldInfo, GhostscriptInfo,
   MDrag, MarkupKind, MergeFile, OutlineNode, PDrag, PageLink, PageSize,
-  PanState, RibbonTab, EditMode, SearchHit, ShapeKindUi, SignTool,
+  PanState, RectPt, RibbonTab, EditMode, SearchHit, ShapeKindUi, SignTool,
   SignatureEntry, Slot, TextRun, ViewMode,
 } from "./types";
 
@@ -68,6 +68,9 @@ export const state = {
   // Settings
   gsInfo: { available: false, path: null, version: null } as GhostscriptInfo,
 
+  // Redaction (pending marks, applied via the Protect tab)
+  pendingRedactions: [] as { page: number; rect: RectPt }[],
+
   // Annotations
   annotTool: null as MarkupKind | null,
   shapeTool: null as ShapeKindUi | null,
@@ -104,6 +107,7 @@ export function makePdrag(): PDrag {
 export const callbacks = {
   renderFormFor: (_idx: number) => {},
   renderNotesFor: (_idx: number) => {},
+  renderRedactsFor: (_idx: number) => {},
   notifyAnnotationsChanged: async () => {},
   refreshFormFields: async () => {},
   refreshComments: async () => {},

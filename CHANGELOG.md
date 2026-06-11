@@ -9,6 +9,41 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.8.0] — 2026-06-11
+
+Completes milestone v0.8 "Sicherheit & Redaktion": redaction, metadata
+sanitising, hidden-content discovery and pattern redaction (the password
+protection block shipped earlier with 0.7.1).
+
+### Added
+- **Redaction (Schwärzen).** New tool in the Protect tab: drag boxes over
+  content, review/remove the pending marks (✕ on each box), then apply with
+  a confirmation. Affected pages are rasterised at ~200 DPI with the regions
+  blacked out in pixel data and the page content replaced by that bitmap —
+  original text, vectors, images and the page's annotations are removed from
+  the file, not merely covered (verified end-to-end: the secret string is
+  absent from the raw bytes and from text extraction). Trade-off: redacted
+  pages become images (no selectable text); byte-level undo still works
+  until the file is saved.
+- **Clean metadata.** One click in the Protect tab strips the /Info
+  dictionary, XMP /Metadata streams (catalog and pages) and private
+  /PieceInfo data.
+- **Find hidden content.** New scan in the Protect tab reports content a
+  reader doesn't (obviously) see: optional-content layers with their
+  default visibility (hidden layers ship content that isn't displayed),
+  all comments/annotations (links, popups and form widgets excluded), and
+  invisible text — characters drawn with text rendering mode 3, detected
+  via PDFium's per-character render mode and grouped into snippets.
+  Read-only report dialog; nothing is modified.
+- **Pattern redaction.** Regex search over the page text marks every match
+  as a pending redaction box (one per matched line, mapped via per-character
+  bounding boxes). Presets for e-mail addresses and phone numbers plus a
+  custom-regex field; matches feed into the normal redaction flow —
+  review the marks, then apply.
+- Dev utilities: `cargo run -p pdf_mutate --example make_big` (generate a
+  many-page text PDF) and `cargo run -p pdf_pdfium --example bench_text`
+  (time open/render/text-layout per page).
+
 ## [0.7.3] — 2026-06-10
 
 ### Added

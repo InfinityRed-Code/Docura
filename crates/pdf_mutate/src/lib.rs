@@ -15,8 +15,10 @@ use pdf_types::RectPt;
 mod annotations;
 mod encryption;
 mod form;
+mod inspect;
 mod overlay;
 mod read;
+mod redact;
 mod xfdf;
 
 pub use annotations::{
@@ -47,10 +49,68 @@ pub struct MutableDoc {
 }
 
 pub(crate) fn resolve_media_box(doc: &Document, page_id: ObjectId) -> Option<[f32; 4]> {
+    resolve_page_box(doc, page_id, b"MediaBox")
+}
+
+/// The page region viewers display and pdfium renders: CropBox ∩ MediaBox,
+/// falling back to the MediaBox. All top-origin UI coordinates are relative
+/// to this box — pages with print marks / scan offsets have a non-zero
+/// origin here.
+pub(crate) fn resolve_view_box(doc: &Document, page_id: ObjectId) -> [f32; 4] {
+    let media = resolve_media_box(doc, page_id).unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    match resolve_page_box(doc, page_id, b"CropBox") {
+        Some(c) => {
+            let b = [
+                c[0].max(media[0]),
+                c[1].max(media[1]),
+                c[2].min(media[2]),
+                c[3].min(media[3]),
+            ];
+            if b[2] > b[0] && b[3] > b[1] { b } else { media }
+        }
+        None => media,
+    }
+}
+
+/// Persistent /Rotate of the page (inherited), normalised to 0/90/180/270.
+pub(crate) fn page_rotation(doc: &Document, page_id: ObjectId) -> i32 {
     let mut cur = page_id;
     loop {
         if let Ok(d) = doc.get_dictionary(cur) {
-            if let Ok(mb) = d.get(b"MediaBox") {
+            if let Ok(r) = d.get(b"Rotate").and_then(|o| o.as_i64()) {
+                return ((r % 360 + 360) % 360) as i32;
+            }
+            if let Ok(parent) = d.get(b"Parent").and_then(|o| o.as_reference()) {
+                cur = parent;
+                continue;
+            }
+        }
+        break;
+    }
+    0
+}
+
+/// Map a point from displayed top-origin space (UI / pdfium bitmap, rotation
+/// applied) into PDF user space (unrotated, view-box offset added).
+pub(crate) fn point_to_pdf_space(x: f32, y: f32, vb: [f32; 4], rot: i32) -> (f32, f32) {
+    let w = vb[2] - vb[0];
+    let h = vb[3] - vb[1];
+    // Invert the display rotation first (top-origin, unrotated)…
+    let (xu, yu) = match rot {
+        90 => (y, h - x),
+        180 => (w - x, h - y),
+        270 => (w - y, x),
+        _ => (x, y),
+    };
+    // …then convert top-origin → PDF bottom-origin with the box offset.
+    (vb[0] + xu, vb[3] - yu)
+}
+
+pub(crate) fn resolve_page_box(doc: &Document, page_id: ObjectId, key: &[u8]) -> Option<[f32; 4]> {
+    let mut cur = page_id;
+    loop {
+        if let Ok(d) = doc.get_dictionary(cur) {
+            if let Ok(mb) = d.get(key) {
                 if let Ok(arr) = mb.as_array() {
                     if arr.len() == 4 {
                         let to_f = |o: &Object| {
@@ -301,8 +361,8 @@ impl MutableDoc {
             .page_iter()
             .next()
             .ok_or_else(|| MutateError::Parse("region: no page after extract".into()))?;
-        let mb = resolve_media_box(&copy, page_id)
-            .unwrap_or([0.0, 0.0, 612.0, 792.0]);
+        // UI rects are relative to the displayed region (CropBox ∩ MediaBox).
+        let mb = resolve_view_box(&copy, page_id);
         let mb_left = mb[0];
         let mb_bottom = mb[1];
         let mb_right = mb[2];
@@ -609,6 +669,38 @@ impl MutableDoc {
     /// convention.
     pub fn list_annotations(&self) -> Vec<pdf_types::AnnotationInfo> {
         read::list_annotations(&self.inner)
+    }
+
+    /// Redaction: replace a page's whole content with a pre-rendered JPEG
+    /// (regions already blacked out in pixel data). Removes the original
+    /// content streams and annotations from the file.
+    pub fn replace_page_with_jpeg(
+        &mut self,
+        page_index: u32,
+        jpeg: Vec<u8>,
+        px_w: u32,
+        px_h: u32,
+        page_w_pt: f32,
+        page_h_pt: f32,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        redact::replace_page_with_jpeg(
+            &mut self.inner, page_index, jpeg, px_w, px_h, page_w_pt, page_h_pt,
+        )?;
+        tracing::info!("pdf_mutate::replace_page_with_jpeg page={} in {:?}", page_index, t.elapsed());
+        Ok(())
+    }
+
+    /// Strip /Info, XMP /Metadata and /PieceInfo. Returns removed count.
+    pub fn sanitize_metadata(&mut self) -> MutateResult<u32> {
+        redact::sanitize_metadata(&mut self.inner)
+    }
+
+    /// List every optional-content group (layer) with its default-config
+    /// visibility. Hidden layers carry content that is in the file but not
+    /// displayed.
+    pub fn list_layers(&self) -> Vec<pdf_types::LayerInfo> {
+        inspect::list_layers(&self.inner)
     }
 
     /// Serialize all annotations to an XFDF (XML) document, suitable for

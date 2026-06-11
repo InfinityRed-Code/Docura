@@ -5,7 +5,6 @@
 use lopdf::{Document, Object, ObjectId};
 use pdf_types::{AnnotationInfo, RectPt};
 
-use crate::resolve_media_box;
 
 fn resolve_obj<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Object> {
     match obj {
@@ -28,7 +27,7 @@ fn obj_to_f32(obj: &Object) -> Option<f32> {
 /// Decode a PDF text string. Hex strings starting with `FE FF` are UTF-16BE;
 /// everything else is treated as Latin-1 (good enough for PDFDocEncoding's
 /// ASCII-compatible region — non-ASCII custom glyphs degrade to ?).
-fn decode_pdf_string(bytes: &[u8]) -> String {
+pub(crate) fn decode_pdf_string(bytes: &[u8]) -> String {
     if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
         let mut units: Vec<u16> = Vec::with_capacity((bytes.len() - 2) / 2);
         let mut i = 2;
@@ -92,7 +91,7 @@ fn read_color(doc: &Document, dict: &lopdf::Dictionary) -> Option<[f32; 3]> {
     }
 }
 
-fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, page_h: f32) -> Option<RectPt> {
+fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4]) -> Option<RectPt> {
     let obj = dict.get(b"Rect").ok()?;
     let arr = obj_as_array(doc, obj)?;
     if arr.len() != 4 {
@@ -103,19 +102,15 @@ fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, page_h: f32) -> Optio
     let urx = obj_to_f32(&arr[2])?;
     let ury = obj_to_f32(&arr[3])?;
     Some(RectPt {
-        x0: llx.min(urx),
-        y0: page_h - lly.max(ury),
-        x1: llx.max(urx),
-        y1: page_h - lly.min(ury),
+        x0: llx.min(urx) - vb[0],
+        y0: vb[3] - lly.max(ury),
+        x1: llx.max(urx) - vb[0],
+        y1: vb[3] - lly.min(ury),
     })
 }
 
-fn page_height_pt(doc: &Document, page_id: ObjectId) -> f32 {
-    if let Some(mb) = resolve_media_box(doc, page_id) {
-        (mb[3] - mb[1]).abs()
-    } else {
-        842.0
-    }
+fn page_view_box(doc: &Document, page_id: ObjectId) -> [f32; 4] {
+    crate::resolve_view_box(doc, page_id)
 }
 
 fn fallback_id(oid: ObjectId) -> String {
@@ -134,7 +129,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
         let Some(annots) = obj_as_array(doc, annots_obj) else {
             continue;
         };
-        let page_h = page_height_pt(doc, page_id);
+        let vb = page_view_box(doc, page_id);
         for entry in annots {
             let (annot_oid, dict) = match entry {
                 Object::Reference(r) => match doc.get_dictionary(*r) {
@@ -148,7 +143,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
                 Some(name) => String::from_utf8_lossy(name).to_string(),
                 None => continue,
             };
-            let rect_pt = match read_rect_top(doc, dict, page_h) {
+            let rect_pt = match read_rect_top(doc, dict, vb) {
                 Some(r) => r,
                 None => continue,
             };

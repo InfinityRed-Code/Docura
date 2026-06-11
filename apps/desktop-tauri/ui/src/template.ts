@@ -226,6 +226,29 @@ export function buildHtml(): string {
         </div>
         <div class="groupLabel">${t("grp.password")}</div>
       </div>
+      <div data-ribbon="protect" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="modeGroup" role="radiogroup">
+            <button class="modeBtn shapeTool" data-shape="redact" title="${t("tip.redactTool")}"><i data-lucide="box-select"></i></button>
+          </div>
+          <button id="redactPatternBtn" title="${t("tip.redactPattern")}"><i data-lucide="regex"></i></button>
+          <button id="redactApplyBtn" disabled title="${t("tip.redactApply")}"><i data-lucide="check"></i> <span>${t("redact.apply")}</span></button>
+          <button id="redactDiscardBtn" disabled title="${t("tip.redactDiscard")}"><i data-lucide="x"></i></button>
+        </div>
+        <div class="groupLabel">${t("grp.redact")}</div>
+      </div>
+      <div data-ribbon="protect" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="sanitizeBtn" title="${t("tip.sanitize")}"><i data-lucide="eraser"></i> ${t("btn.sanitize")}</button>
+        </div>
+        <div class="groupLabel">${t("grp.metadata")}</div>
+      </div>
+      <div data-ribbon="protect" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="findHiddenBtn" title="${t("tip.findHidden")}"><i data-lucide="eye-off"></i> ${t("btn.findHidden")}</button>
+        </div>
+        <div class="groupLabel">${t("grp.inspect")}</div>
+      </div>
       <span data-ribbon="protect" id="protectHint" class="modeHint"></span>
       <span data-ribbon="both" id="status" class="status"></span>
     </div>
@@ -533,6 +556,27 @@ export function buildHtml(): string {
       </div>
     </div>
   </div>
+  <div id="patternOverlay" class="propsOverlay hidden">
+    <div class="propsModal" style="width:26rem;">
+      <div class="propsHeader"><strong>${t("pattern.title")}</strong><button id="patternClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <label class="commentChk"><input type="checkbox" id="patternEmail" checked /> ${t("pattern.email")}</label>
+        <label class="commentChk"><input type="checkbox" id="patternPhone" /> ${t("pattern.phone")}</label>
+        <label>${t("pattern.custom")}<input id="patternCustom" type="text" autocomplete="off" spellcheck="false" placeholder="${t("ph.pattern")}" /></label>
+        <span class="sigHint">${t("pattern.hint")}</span>
+        <div class="wmActions">
+          <button id="patternCommit">${t("pattern.search")}</button>
+          <button id="patternCancel">${t("tip.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="hiddenOverlay" class="propsOverlay hidden">
+    <div class="propsModal" style="width:30rem;">
+      <div class="propsHeader"><strong>${t("hidden.title")}</strong><button id="hiddenClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel" id="hiddenBody" style="max-height:60vh;overflow:auto;"></div>
+    </div>
+  </div>
 </main>
 `;
 }
@@ -766,6 +810,14 @@ export const CSS = `
   .highlightLayer .hit.current { background: rgba(255,140,0,0.6); outline:1px solid orange; }
   .linkLayer { position:absolute; inset:0; pointer-events:none; }
   .noteLayer { position:absolute; inset:0; pointer-events:none; }
+  .redactLayer { position:absolute; inset:0; pointer-events:none; }
+  .redactLayer .redactMark { position:absolute; z-index:5; background:rgba(0,0,0,0.55);
+    border:1.5px solid var(--danger); box-sizing:border-box; }
+  .redactLayer .redactMark button { position:absolute; top:-9px; right:-9px; width:18px; height:18px;
+    padding:0; border-radius:50%; background:var(--danger); color:#fff; border:none; cursor:pointer;
+    font-size:10px; line-height:18px; pointer-events:auto; }
+  .hiddenList { display:flex; flex-direction:column; gap:2px; font-size:0.85rem; color:var(--text-2); }
+  .hiddenList div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .noteLayer .noteHotspot { position:absolute; pointer-events:auto; cursor:pointer; border-radius:3px; }
   .noteLayer .noteHotspot:hover { outline:1px solid rgba(179,154,0,0.7); }
   .stickyNote { position:absolute; width:220px; z-index:20; background:#fff8b0; color:#000;

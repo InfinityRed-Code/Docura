@@ -86,6 +86,8 @@ export function makeSlot(pageIdx: number): Slot {
   drawLayer.dataset.page = String(pageIdx);
   const noteLayer = document.createElement("div");
   noteLayer.className = "noteLayer";
+  const redactLayer = document.createElement("div");
+  redactLayer.className = "redactLayer";
   const formLayer = document.createElement("div");
   formLayer.className = "formLayer";
   formLayer.dataset.page = String(pageIdx);
@@ -98,10 +100,11 @@ export function makeSlot(pageIdx: number): Slot {
   wrap.appendChild(highlightLayer);
   wrap.appendChild(linkLayer);
   wrap.appendChild(noteLayer);
+  wrap.appendChild(redactLayer);
   wrap.appendChild(drawLayer);
   wrap.appendChild(formLayer);
   return {
-    wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, drawLayer, formLayer, placeholder,
+    wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, redactLayer, drawLayer, formLayer, placeholder,
     loaded: false, renderingZoom: null, lastZoom: null,
   };
 }
@@ -271,6 +274,7 @@ async function renderSlot(idx: number) {
     renderHighlightsFor(idx);
     await ensureLinkLayer(idx);
     callbacks.renderNotesFor(idx);
+    callbacks.renderRedactsFor(idx);
     callbacks.renderFormFor(idx);
   } catch (e) {
     setStatus(`Render error p${idx + 1}: ${e}`);

@@ -165,31 +165,16 @@ fn register_alias(
 }
 
 fn get_page_box(doc: &Document, page_id: ObjectId) -> (f32, f32) {
-    // Returns (width, height) in points. Walks up the Pages tree for inherited
-    // MediaBox. Default A4 if missing.
-    let mut cur = page_id;
-    loop {
-        if let Ok(d) = doc.get_dictionary(cur) {
-            if let Ok(mb) = d.get(b"MediaBox") {
-                if let Ok(arr) = mb.as_array() {
-                    if arr.len() == 4 {
-                        let f = |o: &Object| o.as_float().ok().or_else(|| o.as_i64().ok().map(|i| i as f32));
-                        let llx = f(&arr[0]).unwrap_or(0.0);
-                        let lly = f(&arr[1]).unwrap_or(0.0);
-                        let urx = f(&arr[2]).unwrap_or(595.0);
-                        let ury = f(&arr[3]).unwrap_or(842.0);
-                        return ((urx - llx).abs(), (ury - lly).abs());
-                    }
-                }
-            }
-            if let Ok(parent) = d.get(b"Parent").and_then(|o| o.as_reference()) {
-                cur = parent;
-                continue;
-            }
-        }
-        break;
-    }
-    (595.0, 842.0)
+    // Returns (width, height) of the displayed page region in points.
+    let vb = crate::resolve_view_box(doc, page_id);
+    ((vb[2] - vb[0]).abs(), (vb[3] - vb[1]).abs())
+}
+
+/// Origin (lower-left) of the displayed page region in PDF user space.
+/// Overlay content placed relative to the visible page must add this.
+fn get_page_origin(doc: &Document, page_id: ObjectId) -> (f32, f32) {
+    let vb = crate::resolve_view_box(doc, page_id);
+    (vb[0], vb[1])
 }
 
 fn page_rotation(doc: &Document, page_id: ObjectId) -> i32 {
@@ -407,10 +392,11 @@ pub fn add_text_watermark(
     let pages: Vec<ObjectId> = doc.page_iter().collect();
     for page_id in pages {
         let (w, h) = get_page_box(doc, page_id);
+        let (ox, oy) = get_page_origin(doc, page_id);
         let item = TextItem {
             text,
-            x: w / 2.0,
-            y: h / 2.0,
+            x: ox + w / 2.0,
+            y: oy + h / 2.0,
             angle_deg: opts.rotation_deg,
             font_size: opts.font_size,
             align: HAlign::Center,
@@ -449,21 +435,22 @@ pub fn add_header_footer(
     let fs = if opts.font_size > 0.0 { opts.font_size } else { 10.0 };
     for (idx, page_id) in pages.into_iter().enumerate() {
         let (w, h) = get_page_box(doc, page_id);
+        let (ox, oy) = get_page_origin(doc, page_id);
         let rot = page_rotation(doc, page_id);
         // Place overlay in the page's unrotated coordinate space (MediaBox);
         // rotation is applied by viewers to the full page contents.
         let _ = rot;
         let page_num = first_num + idx as u32;
         let mut items_owned: Vec<(String, HAlign, f32, f32)> = Vec::new();
-        let hy = h - margin;
-        let fy = margin;
+        let hy = oy + h - margin;
+        let fy = oy + margin;
         let slots: [(&str, HAlign, f32, f32); 6] = [
-            (&opts.header_left, HAlign::Left, margin, hy),
-            (&opts.header_center, HAlign::Center, w / 2.0, hy),
-            (&opts.header_right, HAlign::Right, w - margin, hy),
-            (&opts.footer_left, HAlign::Left, margin, fy),
-            (&opts.footer_center, HAlign::Center, w / 2.0, fy),
-            (&opts.footer_right, HAlign::Right, w - margin, fy),
+            (&opts.header_left, HAlign::Left, ox + margin, hy),
+            (&opts.header_center, HAlign::Center, ox + w / 2.0, hy),
+            (&opts.header_right, HAlign::Right, ox + w - margin, hy),
+            (&opts.footer_left, HAlign::Left, ox + margin, fy),
+            (&opts.footer_center, HAlign::Center, ox + w / 2.0, fy),
+            (&opts.footer_right, HAlign::Right, ox + w - margin, fy),
         ];
         for (tpl, align, x, y) in slots {
             if tpl.is_empty() {
@@ -578,15 +565,16 @@ pub fn add_image_watermark(
     let pages: Vec<ObjectId> = doc.page_iter().collect();
     for page_id in pages {
         let (pw, ph) = get_page_box(doc, page_id);
+        let (ox, oy) = get_page_origin(doc, page_id);
         let target_w = pw * scale;
         let target_h = target_w * (ih as f32) / (iw as f32);
 
         let (cx, cy) = match opts.anchor {
-            ImageAnchor::Center => (pw / 2.0, ph / 2.0),
-            ImageAnchor::TopLeft => (margin + target_w / 2.0, ph - margin - target_h / 2.0),
-            ImageAnchor::TopRight => (pw - margin - target_w / 2.0, ph - margin - target_h / 2.0),
-            ImageAnchor::BottomLeft => (margin + target_w / 2.0, margin + target_h / 2.0),
-            ImageAnchor::BottomRight => (pw - margin - target_w / 2.0, margin + target_h / 2.0),
+            ImageAnchor::Center => (ox + pw / 2.0, oy + ph / 2.0),
+            ImageAnchor::TopLeft => (ox + margin + target_w / 2.0, oy + ph - margin - target_h / 2.0),
+            ImageAnchor::TopRight => (ox + pw - margin - target_w / 2.0, oy + ph - margin - target_h / 2.0),
+            ImageAnchor::BottomLeft => (ox + margin + target_w / 2.0, oy + margin + target_h / 2.0),
+            ImageAnchor::BottomRight => (ox + pw - margin - target_w / 2.0, oy + margin + target_h / 2.0),
         };
 
         let theta = opts.rotation_deg.to_radians();

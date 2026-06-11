@@ -464,6 +464,251 @@ async fn save_pdf_as(
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct RedactRegion {
+    page: u32,
+    rect: RectPt,
+}
+
+/// Permanently redact regions: affected pages are rasterised at ~200 DPI
+/// with the regions blacked out in pixel data, then the page content is
+/// replaced by that bitmap. Original text/vector/image data and the page's
+/// annotations are removed from the file.
+#[tauri::command]
+async fn redact_regions(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    regions: Vec<RedactRegion>,
+) -> Result<DocSnapshot, String> {
+    if regions.is_empty() {
+        return Err("redact_regions: no regions".into());
+    }
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        // ~200 DPI: enough for crisp print/zoom, keeps file sizes sane.
+        const REDACT_ZOOM: f32 = 200.0 / 72.0;
+        let mut by_page: HashMap<u32, Vec<RectPt>> = HashMap::new();
+        for r in regions {
+            by_page.entry(r.page).or_default().push(r.rect);
+        }
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        for (page, rects) in by_page {
+            let sz = engine
+                .page_size(document, PageIndex(page))
+                .map_err(|e| e.to_string())?;
+            let mut rendered = engine
+                .render(RenderRequest {
+                    document,
+                    page: PageIndex(page),
+                    zoom: ZoomLevel(REDACT_ZOOM),
+                    rotation: Rotation::R0,
+                })
+                .map_err(|e| e.to_string())?;
+            let (w, h) = (rendered.width_px, rendered.height_px);
+            let sx = w as f32 / sz.width_pt;
+            let sy = h as f32 / sz.height_pt;
+            for r in rects {
+                let x0 = ((r.x0.min(r.x1) * sx).floor() as i64).clamp(0, w as i64) as u32;
+                let x1 = ((r.x0.max(r.x1) * sx).ceil() as i64).clamp(0, w as i64) as u32;
+                let y0 = ((r.y0.min(r.y1) * sy).floor() as i64).clamp(0, h as i64) as u32;
+                let y1 = ((r.y0.max(r.y1) * sy).ceil() as i64).clamp(0, h as i64) as u32;
+                for y in y0..y1 {
+                    let row = (y * w + x0) as usize * 4;
+                    let end = (y * w + x1) as usize * 4;
+                    for px in rendered.rgba[row..end].chunks_exact_mut(4) {
+                        px[0] = 0;
+                        px[1] = 0;
+                        px[2] = 0;
+                        px[3] = 255;
+                    }
+                }
+            }
+            let jpeg = encode_jpeg(w, h, &rendered.rgba, 90)?;
+            mdoc.replace_page_with_jpeg(page, jpeg, w, h, sz.width_pt, sz.height_pt)
+                .map_err(|e| e.to_string())?;
+        }
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        tracing::info!("redact_regions: {:?}", t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
+/// Strip /Info, XMP metadata and /PieceInfo from the document.
+#[tauri::command]
+async fn sanitize_metadata_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<u32, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes, removed) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>, u32), String> {
+            let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+            let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            let removed = mdoc.sanitize_metadata().map_err(|e| e.to_string())?;
+            let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+            Ok((bytes, out, removed))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    Ok(removed)
+}
+
+/// Group the chars of one regex match into per-line rects (chars whose
+/// vertical extents overlap merge into one box), padded by 1 pt so the
+/// redaction fully covers glyph edges.
+fn match_line_rects(chars: &[pdf_types::CharBox]) -> Vec<RectPt> {
+    let mut out: Vec<RectPt> = Vec::new();
+    for cb in chars {
+        let r = cb.rect_pt;
+        if r.x1 <= r.x0 || r.y1 <= r.y0 {
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            let overlaps = r.y0 < last.y1 && last.y0 < r.y1;
+            if overlaps {
+                last.x0 = last.x0.min(r.x0);
+                last.x1 = last.x1.max(r.x1);
+                last.y0 = last.y0.min(r.y0);
+                last.y1 = last.y1.max(r.y1);
+                continue;
+            }
+        }
+        out.push(r);
+    }
+    for r in &mut out {
+        r.x0 = (r.x0 - 1.0).max(0.0);
+        r.y0 = (r.y0 - 1.0).max(0.0);
+        r.x1 += 1.0;
+        r.y1 += 1.0;
+    }
+    out
+}
+
+#[derive(Serialize)]
+struct PatternRegion {
+    page: u32,
+    rect: RectPt,
+}
+
+/// Find regex matches in the page text and return their regions (one rect
+/// per matched line). The UI adds them as pending redaction marks — the
+/// user reviews and applies them through the normal redaction flow.
+#[tauri::command]
+async fn find_pattern_regions(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pattern: String,
+) -> Result<Vec<PatternRegion>, String> {
+    let re = regex::Regex::new(&pattern).map_err(|e| format!("regex: {e}"))?;
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<PatternRegion>, String> {
+        let n = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for p in 0..n {
+            let chars = engine
+                .page_char_boxes(document, PageIndex(p))
+                .map_err(|e| e.to_string())?;
+            let mut text = String::with_capacity(chars.len());
+            let mut offsets = Vec::with_capacity(chars.len());
+            for cb in &chars {
+                offsets.push(text.len());
+                text.push(cb.ch);
+            }
+            for m in re.find_iter(&text) {
+                let start = offsets.partition_point(|&o| o < m.start());
+                let end = offsets.partition_point(|&o| o < m.end());
+                for rect in match_line_rects(&chars[start..end]) {
+                    out.push(PatternRegion { page: p, rect });
+                }
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct HiddenAnnotInfo {
+    page: u32,
+    subtype: String,
+}
+
+#[derive(Serialize)]
+struct HiddenTextInfo {
+    page: u32,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct HiddenContentReport {
+    layers: Vec<pdf_types::LayerInfo>,
+    annotations: Vec<HiddenAnnotInfo>,
+    invisible_text: Vec<HiddenTextInfo>,
+}
+
+/// Scan the document for content a reader doesn't (obviously) see:
+/// optional-content layers (with their visibility), comments/annotations,
+/// and text drawn with the invisible rendering mode.
+#[tauri::command]
+async fn find_hidden_content(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+) -> Result<HiddenContentReport, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<HiddenContentReport, String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let layers = mdoc.list_layers();
+        // Links, popups and form widgets aren't "hidden" content — skip them.
+        let annotations = mdoc
+            .list_annotations()
+            .into_iter()
+            .filter(|a| !matches!(a.subtype.as_str(), "Link" | "Popup" | "Widget"))
+            .map(|a| HiddenAnnotInfo {
+                page: a.page,
+                subtype: a.subtype,
+            })
+            .collect();
+        let n = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut invisible_text = Vec::new();
+        for p in 0..n {
+            for text in engine
+                .page_hidden_text(document, PageIndex(p))
+                .map_err(|e| e.to_string())?
+            {
+                invisible_text.push(HiddenTextInfo { page: p, text });
+            }
+        }
+        Ok(HiddenContentReport {
+            layers,
+            annotations,
+            invisible_text,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 struct PdfSecurityInfo {
     protected: bool,
@@ -2594,6 +2839,10 @@ pub fn run() {
             get_pdf_security,
             set_pdf_protection,
             remove_pdf_protection,
+            redact_regions,
+            sanitize_metadata_cmd,
+            find_hidden_content,
+            find_pattern_regions,
             set_titlebar_theme,
             delete_page,
             delete_pages,
@@ -2706,5 +2955,45 @@ impl PdfEngine for NullEngine {
         _: DocumentId,
     ) -> pdf_core::CoreResult<Vec<pdf_types::FormFieldInfo>> {
         Err(pdf_core::CoreError::Engine("pdfium not loaded".into()))
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    fn cb(ch: char, x0: f32, y0: f32, x1: f32, y1: f32) -> pdf_types::CharBox {
+        pdf_types::CharBox {
+            ch,
+            rect_pt: RectPt { x0, y0, x1, y1 },
+        }
+    }
+
+    #[test]
+    fn match_rects_merge_per_line() {
+        // "ab" on line 1, "cd" on line 2 — expect two padded boxes.
+        let chars = vec![
+            cb('a', 10.0, 100.0, 16.0, 112.0),
+            cb('b', 16.0, 100.0, 22.0, 112.0),
+            cb('c', 10.0, 120.0, 16.0, 132.0),
+            cb('d', 16.0, 120.0, 22.0, 132.0),
+        ];
+        let rects = match_line_rects(&chars);
+        assert_eq!(rects.len(), 2);
+        assert!((rects[0].x0 - 9.0).abs() < 0.01);
+        assert!((rects[0].x1 - 23.0).abs() < 0.01);
+        assert!((rects[1].y0 - 119.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn empty_char_boxes_are_skipped() {
+        let chars = vec![
+            cb('a', 10.0, 100.0, 16.0, 112.0),
+            cb(' ', 16.0, 100.0, 16.0, 100.0), // degenerate box
+            cb('b', 18.0, 100.0, 24.0, 112.0),
+        ];
+        let rects = match_line_rects(&chars);
+        assert_eq!(rects.len(), 1);
+        assert!((rects[0].x1 - 25.0).abs() < 0.01);
     }
 }

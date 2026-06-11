@@ -153,10 +153,10 @@ Passwortschutz-Block (erste drei Items) ausgeliefert mit **v0.7.1**.
 - [x] Passwort-geschützte PDFs öffnen (User + Owner Password) [E] — eigenes Passwort-Modal (window.prompt geht in WebView2 nicht), max. 3 Versuche *(v0.7.1)*
 - [x] PDF mit Passwort schützen [X: lopdf, AES-256 V5/R6] — Schützen-Tab, Schutz wird beim Speichern angewendet *(v0.7.1)*
 - [x] Berechtigungen setzen (Drucken, Kopieren, Ändern, Kommentieren) [X: lopdf /P-Bits] *(v0.7.1)*
-- [ ] Redaktion: Text dauerhaft schwärzen (Inhalt entfernt, nicht nur überdeckt) [X: lopdf + pdfium-text]
-- [ ] Metadaten bereinigen (Sanitize) [X: lopdf]
-- [ ] Versteckte Inhalte finden (Layers, Kommentare, unsichtbarer Text)
-- [ ] Pattern-Redaktion (E-Mails, Telefonnummern per Regex) [C][U]
+- [x] Redaktion: Text dauerhaft schwärzen (Inhalt entfernt, nicht nur überdeckt) [X: lopdf + pdfium-Raster] — Schwärzen-Tool im Schützen-Tab; betroffene Seiten werden mit ~200 DPI gerastert und der Inhalt komplett ersetzt (inkl. Annotationen); E2E-Test prüft, dass der Text aus den Datei-Bytes verschwindet
+- [x] Metadaten bereinigen (Sanitize) [X: lopdf] — entfernt /Info, XMP /Metadata (Catalog + Seiten) und /PieceInfo
+- [x] Versteckte Inhalte finden (Layers, Kommentare, unsichtbarer Text) [X: lopdf-OCG + pdfium-RenderMode] — Scan im Schützen-Tab mit Report-Dialog: Ebenen inkl. Sichtbarkeit (/OCProperties /OFF), Kommentare/Anmerkungen (ohne Link/Popup/Widget), unsichtbarer Text per Zeichen-Rendermodus 3
+- [x] Pattern-Redaktion (E-Mails, Telefonnummern per Regex) [X: pdfium-CharBoxes + regex] — Dialog im Schwärzen-Block (Presets E-Mail/Telefon + eigene Regex); Treffer werden zeilenweise als Schwärzungs-Markierungen vorgemerkt und über den normalen Anwenden-Flow entfernt
 
 > Architektur Passwortschutz: lopdf 0.38 kann passwortgeschützte PDFs nicht
 > laden (Reader parst nur das Encrypt-Dict). Deshalb: **PDFium entschlüsselt**

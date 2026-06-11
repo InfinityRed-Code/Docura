@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use parking_lot::Mutex;
 use pdf_core::{CoreError, CoreResult, PdfEngine, RenderRequest, RenderedPage};
 use pdf_types::{
-    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, FormFieldKind,
+    AttachmentInfo, CharBox, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, FormFieldKind,
     LinkTarget, OutlineNode, PageIndex, PageLink, PageSize, RectPt, Rotation, SearchHit,
     SearchQuery, TextRun,
 };
@@ -138,16 +138,58 @@ impl PdfiumEngine {
     }
 }
 
-fn rect_to_top_origin(rect: PdfRect, page_height_pt: f32) -> RectPt {
-    let left = rect.left().value;
-    let right = rect.right().value;
-    let top_bl = rect.top().value;
-    let bottom_bl = rect.bottom().value;
-    RectPt {
-        x0: left,
-        y0: page_height_pt - top_bl,
-        x1: right,
-        y1: page_height_pt - bottom_bl,
+/// How to map raw PDF user-space coordinates (what PDFium reports for text,
+/// links and widgets) into the *displayed* top-origin space (what PDFium
+/// renders and the UI works in). Two effects are folded in:
+///  - the page bounding box (CropBox ∩ MediaBox) may not start at (0,0)
+///    — print marks, scans;
+///  - a persistent /Rotate turns the rendered bitmap while the reported
+///    coordinates stay in the unrotated page space.
+#[derive(Clone, Copy, Debug)]
+struct PageView {
+    left: f32,
+    top: f32,
+    /// Unrotated view-box size.
+    w: f32,
+    h: f32,
+    /// Page /Rotate in degrees (0/90/180/270).
+    rot: i32,
+}
+
+fn page_view(page: &PdfPage) -> PageView {
+    let (left, top, w, h) = page
+        .boundaries()
+        .bounding()
+        .map(|b| {
+            (
+                b.bounds.left().value,
+                b.bounds.top().value,
+                b.bounds.right().value - b.bounds.left().value,
+                b.bounds.top().value - b.bounds.bottom().value,
+            )
+        })
+        .unwrap_or((0.0, page.height().value, page.width().value, page.height().value));
+    let rot = match page.rotation() {
+        Ok(PdfPageRenderRotation::Degrees90) => 90,
+        Ok(PdfPageRenderRotation::Degrees180) => 180,
+        Ok(PdfPageRenderRotation::Degrees270) => 270,
+        _ => 0,
+    };
+    PageView { left, top, w, h, rot }
+}
+
+fn rect_to_top_origin(rect: PdfRect, pv: &PageView) -> RectPt {
+    // Unrotated top-origin coordinates relative to the view box…
+    let x0 = rect.left().value - pv.left;
+    let x1 = rect.right().value - pv.left;
+    let y0 = pv.top - rect.top().value;
+    let y1 = pv.top - rect.bottom().value;
+    // …then rotate into display orientation.
+    match pv.rot {
+        90 => RectPt { x0: pv.h - y1, y0: x0, x1: pv.h - y0, y1: x1 },
+        180 => RectPt { x0: pv.w - x1, y0: pv.h - y1, x1: pv.w - x0, y1: pv.h - y0 },
+        270 => RectPt { x0: y0, y0: pv.w - x1, x1: y1, y1: pv.w - x0 },
+        _ => RectPt { x0, y0, x1, y1 },
     }
 }
 
@@ -315,7 +357,7 @@ impl PdfEngine for PdfiumEngine {
             .pages()
             .get(page.0 as u16)
             .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
-        let page_h = p.height().value;
+        let pv = page_view(&p);
         let text = p
             .text()
             .map_err(|e| CoreError::Engine(format!("text: {e}")))?;
@@ -326,7 +368,7 @@ impl PdfEngine for PdfiumEngine {
                 continue;
             }
             let Ok(rect) = ch.loose_bounds() else { continue };
-            let rect = rect_to_top_origin(rect, page_h);
+            let rect = rect_to_top_origin(rect, &pv);
             if let Some(last) = runs.last_mut() {
                 let same_line = (last.rect_pt.y0 - rect.y0).abs() < 1.5
                     && (last.rect_pt.y1 - rect.y1).abs() < 1.5;
@@ -348,6 +390,69 @@ impl PdfEngine for PdfiumEngine {
             });
         }
         Ok(runs)
+    }
+
+    fn page_hidden_text(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<String>> {
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let p = document
+            .pages()
+            .get(page.0 as u16)
+            .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+        let text = p
+            .text()
+            .map_err(|e| CoreError::Engine(format!("text: {e}")))?;
+        let mut snippets: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for ch in text.chars().iter() {
+            let invisible = matches!(
+                ch.render_mode(),
+                Ok(PdfPageTextRenderMode::Invisible)
+                    | Ok(PdfPageTextRenderMode::InvisibleClipping)
+            );
+            let c = ch.unicode_char().filter(|&c| c != '\0');
+            if invisible {
+                if let Some(c) = c {
+                    current.push(c);
+                }
+            } else if !current.trim().is_empty() {
+                snippets.push(std::mem::take(&mut current).trim().to_string());
+            } else {
+                current.clear();
+            }
+        }
+        if !current.trim().is_empty() {
+            snippets.push(current.trim().to_string());
+        }
+        Ok(snippets)
+    }
+
+    fn page_char_boxes(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<CharBox>> {
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let p = document
+            .pages()
+            .get(page.0 as u16)
+            .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+        let pv = page_view(&p);
+        let text = p
+            .text()
+            .map_err(|e| CoreError::Engine(format!("text: {e}")))?;
+        let mut out = Vec::new();
+        for ch in text.chars().iter() {
+            let Some(c) = ch.unicode_char() else { continue };
+            if c == '\0' {
+                continue;
+            }
+            let Ok(rect) = ch.loose_bounds() else { continue };
+            out.push(CharBox {
+                ch: c,
+                rect_pt: rect_to_top_origin(rect, &pv),
+            });
+        }
+        Ok(out)
     }
 
     fn outline(&self, doc: DocumentId) -> CoreResult<Vec<OutlineNode>> {
@@ -442,17 +547,12 @@ impl PdfEngine for PdfiumEngine {
         }
         let mut out: Vec<FormFieldInfo> = Vec::new();
         for (page_idx, page) in document.pages().iter().enumerate() {
-            let page_h = page.height().value;
+            let pv = page_view(&page);
             for annot in page.annotations().iter() {
                 let Some(widget) = annot.as_widget_annotation() else { continue };
                 let Some(field) = widget.form_field() else { continue };
                 let Ok(bounds) = widget.bounds() else { continue };
-                let rect_pt = RectPt {
-                    x0: bounds.left().value,
-                    y0: page_h - bounds.top().value,
-                    x1: bounds.right().value,
-                    y1: page_h - bounds.bottom().value,
-                };
+                let rect_pt = rect_to_top_origin(bounds, &pv);
                 let id = field.name().unwrap_or_default();
                 if id.is_empty() {
                     continue;
@@ -616,11 +716,11 @@ impl PdfEngine for PdfiumEngine {
             .pages()
             .get(page.0 as u16)
             .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
-        let page_h = p.height().value;
+        let pv = page_view(&p);
         let mut out: Vec<PageLink> = Vec::new();
         for link in p.links().iter() {
             let Ok(rect) = link.rect() else { continue };
-            let rect_pt = rect_to_top_origin(rect, page_h);
+            let rect_pt = rect_to_top_origin(rect, &pv);
             let target = match link.action() {
                 Some(PdfAction::LocalDestination(a)) => a
                     .destination()
@@ -655,7 +755,7 @@ impl PdfEngine for PdfiumEngine {
 
         let mut hits: Vec<SearchHit> = Vec::new();
         for (page_idx, p) in document.pages().iter().enumerate() {
-            let page_h = p.height().value;
+            let pv = page_view(&p);
             let Ok(text) = p.text() else { continue };
             let mut chars: Vec<(char, RectPt)> = Vec::new();
             for ch in text.chars().iter() {
@@ -664,7 +764,7 @@ impl PdfEngine for PdfiumEngine {
                     continue;
                 }
                 let Ok(r) = ch.loose_bounds() else { continue };
-                chars.push((c, rect_to_top_origin(r, page_h)));
+                chars.push((c, rect_to_top_origin(r, &pv)));
             }
             let haystack: String = chars
                 .iter()

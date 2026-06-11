@@ -133,6 +133,25 @@ pub struct AttachmentInfo {
     pub size: u64,
 }
 
+/// One character with its loose bounding box in our top-origin pt
+/// convention. Used for pattern matching that needs to map text matches
+/// back to page regions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharBox {
+    pub ch: char,
+    pub rect_pt: RectPt,
+}
+
+/// One optional-content group (layer) declared in the catalog's
+/// /OCProperties.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerInfo {
+    pub name: String,
+    /// True when the default viewing configuration lists the OCG in /OFF —
+    /// i.e. the layer's content exists in the file but is not displayed.
+    pub hidden: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DocMetadata {
     pub title: Option<String>,

@@ -50,7 +50,7 @@ export type MergeFile = { path: string; name: string };
 export type MarkupKind = "highlight" | "underline" | "strikeout";
 export type ShapeKindUi =
   | "rect" | "circle" | "line" | "arrow"
-  | "freetext" | "ink" | "stamp" | "region" | "note";
+  | "freetext" | "ink" | "stamp" | "region" | "note" | "redact";
 // Click-to-place Fill & Sign marks (signature/initials reuse the stamp tool).
 export type SignTool = "check" | "cross" | "dot" | "date" | "text";
 export type SignatureEntry = { kind: string; path: string };
@@ -78,6 +78,7 @@ export type Slot = {
   highlightLayer: HTMLDivElement;
   linkLayer: HTMLDivElement;
   noteLayer: HTMLDivElement;
+  redactLayer: HTMLDivElement;
   drawLayer: SVGSVGElement;
   formLayer: HTMLDivElement;
   placeholder: HTMLDivElement;

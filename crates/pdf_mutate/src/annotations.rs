@@ -55,32 +55,8 @@ fn annot_flags(print: bool) -> i64 {
     if print { 4 } else { 0 }
 }
 
-fn page_height_pt(doc: &Document, page_id: ObjectId) -> f32 {
-    let mut cur = page_id;
-    loop {
-        if let Ok(d) = doc.get_dictionary(cur) {
-            if let Ok(mb) = d.get(b"MediaBox") {
-                if let Ok(arr) = mb.as_array() {
-                    if arr.len() == 4 {
-                        let to_f = |o: &Object| {
-                            o.as_float()
-                                .ok()
-                                .or_else(|| o.as_i64().ok().map(|i| i as f32))
-                        };
-                        let lly = to_f(&arr[1]).unwrap_or(0.0);
-                        let ury = to_f(&arr[3]).unwrap_or(842.0);
-                        return (ury - lly).abs();
-                    }
-                }
-            }
-            if let Ok(parent) = d.get(b"Parent").and_then(|o| o.as_reference()) {
-                cur = parent;
-                continue;
-            }
-        }
-        break;
-    }
-    842.0
+fn page_view(doc: &Document, page_id: ObjectId) -> ([f32; 4], i32) {
+    (crate::resolve_view_box(doc, page_id), crate::page_rotation(doc, page_id))
 }
 
 fn pdf_string_utf16be(s: &str) -> Object {
@@ -147,12 +123,17 @@ fn random_nm() -> String {
     format!("rustpdf-{nanos:x}")
 }
 
-fn rect_native(r: &RectPt, page_h: f32) -> (f32, f32, f32, f32) {
-    // Top-origin → PDF bottom-origin. Returns (llx, lly, urx, ury).
-    let llx = r.x0.min(r.x1);
-    let urx = r.x0.max(r.x1);
-    let lly = page_h - r.y1.max(r.y0);
-    let ury = page_h - r.y0.min(r.y1);
+fn rect_native(r: &RectPt, view: ([f32; 4], i32)) -> (f32, f32, f32, f32) {
+    // Top-origin view space -> PDF user space. Returns (llx, lly, urx, ury).
+    // The view box (CropBox intersect MediaBox) may not start at (0,0).
+    let (a, b) = (
+        crate::point_to_pdf_space(r.x0, r.y0, view.0, view.1),
+        crate::point_to_pdf_space(r.x1, r.y1, view.0, view.1),
+    );
+    let llx = a.0.min(b.0);
+    let urx = a.0.max(b.0);
+    let lly = a.1.min(b.1);
+    let ury = a.1.max(b.1);
     (llx, lly, urx, ury)
 }
 
@@ -171,13 +152,13 @@ pub fn add_markup_annotation(
     let page_id = *pages
         .get(&(page_index + 1))
         .ok_or(MutateError::PageOutOfRange(page_index, total))?;
-    let page_h = page_height_pt(doc, page_id);
+    let view = page_view(doc, page_id);
 
     // Collect quadpoints + bounding rect.
     let mut quad: Vec<Object> = Vec::with_capacity(annot.rects.len() * 8);
     let mut bbox: Option<(f32, f32, f32, f32)> = None;
     for r in &annot.rects {
-        let (llx, lly, urx, ury) = rect_native(r, page_h);
+        let (llx, lly, urx, ury) = rect_native(r, view);
         // PDF spec QuadPoints order for highlight (PDF 1.7 §12.5.6.10):
         // [x1 y1 x2 y2 x3 y3 x4 y4] = top-left, top-right, bottom-left, bottom-right.
         // Acrobat interprets in that order; some viewers expect bottom-first,
@@ -429,25 +410,23 @@ pub fn add_shape_annotation(
     annot: &ShapeAnnotation,
 ) -> MutateResult<ObjectId> {
     let page_id = page_id_for(doc, page_index)?;
-    let page_h = page_height_pt(doc, page_id);
+    let view = page_view(doc, page_id);
     let bw = annot.border_width.max(0.0);
 
     let (subtype, rect_native, line_endpoints) = match annot.kind {
         ShapeKind::Square => {
-            let (llx, lly, urx, ury) = rect_native(&annot.rect, page_h);
+            let (llx, lly, urx, ury) = rect_native(&annot.rect, view);
             ("Square", (llx, lly, urx, ury), None)
         }
         ShapeKind::Circle => {
-            let (llx, lly, urx, ury) = rect_native(&annot.rect, page_h);
+            let (llx, lly, urx, ury) = rect_native(&annot.rect, view);
             ("Circle", (llx, lly, urx, ury), None)
         }
         ShapeKind::Line { .. } => {
             // Endpoints in PDF native coords.
-            let p0x = annot.rect.x0;
-            let p0y = page_h - annot.rect.y0;
-            let p1x = annot.rect.x1;
-            let p1y = page_h - annot.rect.y1;
-            // /Rect must enclose the annotation including arrow heads. Pad by border width.
+            let (p0x, p0y) = crate::point_to_pdf_space(annot.rect.x0, annot.rect.y0, view.0, view.1);
+                        let (p1x, p1y) = crate::point_to_pdf_space(annot.rect.x1, annot.rect.y1, view.0, view.1);
+                        // /Rect must enclose the annotation including arrow heads. Pad by border width.
             let pad = bw.max(8.0) + 4.0;
             let llx = p0x.min(p1x) - pad;
             let lly = p0y.min(p1y) - pad;
@@ -695,10 +674,10 @@ pub fn add_freetext_annotation(
     annot: &FreeTextAnnotation,
 ) -> MutateResult<ObjectId> {
     let page_id = page_id_for(doc, page_index)?;
-    let page_h = page_height_pt(doc, page_id);
+    let view = page_view(doc, page_id);
     let helv_id = ensure_helv_font(doc)?;
 
-    let (llx, lly, urx, ury) = rect_native(&annot.rect, page_h);
+    let (llx, lly, urx, ury) = rect_native(&annot.rect, view);
     let mut d = base_annot_dict(
         page_id,
         "FreeText",
@@ -887,7 +866,7 @@ pub fn add_ink_annotation(
         return Err(MutateError::Parse("ink: no usable strokes".into()));
     }
     let page_id = page_id_for(doc, page_index)?;
-    let page_h = page_height_pt(doc, page_id);
+    let view = page_view(doc, page_id);
 
     let mut ink_list: Vec<Object> = Vec::with_capacity(annot.strokes.len());
     let mut bbox: Option<(f32, f32, f32, f32)> = None;
@@ -897,9 +876,8 @@ pub fn add_ink_annotation(
         }
         let mut pts: Vec<Object> = Vec::with_capacity(stroke.len() * 2);
         for &(x, y) in stroke {
-            let nx = x;
-            let ny = page_h - y;
-            pts.push(Object::Real(nx));
+            let (nx, ny) = crate::point_to_pdf_space(x, y, view.0, view.1);
+                        pts.push(Object::Real(nx));
             pts.push(Object::Real(ny));
             let bb = bbox.get_or_insert((nx, ny, nx, ny));
             bb.0 = bb.0.min(nx);
@@ -956,7 +934,7 @@ pub fn add_stamp_annotation(
     use lopdf::Stream;
     use std::io::Write;
     let page_id = page_id_for(doc, page_index)?;
-    let page_h = page_height_pt(doc, page_id);
+    let view = page_view(doc, page_id);
 
     // Decode image. Images with an alpha channel (e.g. drawn signatures on a
     // transparent background) keep their transparency via an /SMask soft mask
@@ -1019,7 +997,7 @@ pub fn add_stamp_annotation(
         doc.add_object(Object::Stream(Stream::new(image_dict, jpeg)))
     };
 
-    let (llx, lly, urx, ury) = rect_native(&annot.rect, page_h);
+    let (llx, lly, urx, ury) = rect_native(&annot.rect, view);
     let w = (urx - llx).max(1.0);
     let h = (ury - lly).max(1.0);
 
@@ -1098,10 +1076,9 @@ pub fn add_text_note_annotation(
         return Err(MutateError::Parse("text note: empty contents".into()));
     }
     let page_id = page_id_for(doc, page_index)?;
-    let page_h = page_height_pt(doc, page_id);
-    let llx = annot.x_pt;
-    let ury = page_h - annot.y_pt;
-    let urx = llx + TEXT_NOTE_ICON_SIZE_PT;
+    let view = page_view(doc, page_id);
+    let (llx, ury) = crate::point_to_pdf_space(annot.x_pt, annot.y_pt, view.0, view.1);
+        let urx = llx + TEXT_NOTE_ICON_SIZE_PT;
     let lly = ury - TEXT_NOTE_ICON_SIZE_PT;
 
     let mut d = base_annot_dict(

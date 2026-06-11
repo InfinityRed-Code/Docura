@@ -1,7 +1,7 @@
 use crate::error::CoreResult;
 use pdf_types::{
-    AttachmentInfo, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, OutlineNode, PageIndex,
-    PageLink, PageSize, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
+    AttachmentInfo, CharBox, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, OutlineNode,
+    PageIndex, PageLink, PageSize, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +62,18 @@ pub trait PdfEngine: Send + Sync {
     }
     /// Enumerate AcroForm fields. Returns empty Vec for documents without forms.
     fn list_form_fields(&self, doc: DocumentId) -> CoreResult<Vec<FormFieldInfo>>;
+    /// Snippets of invisible text on a page — characters drawn with text
+    /// rendering mode 3 (or invisible-with-clipping). Consecutive invisible
+    /// characters are grouped into one snippet. Default: none found.
+    fn page_hidden_text(&self, _doc: DocumentId, _page: PageIndex) -> CoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+    /// Every character on the page with its loose bounding box, in page
+    /// order. Used to map regex matches over the page text back to regions.
+    /// Default: none.
+    fn page_char_boxes(&self, _doc: DocumentId, _page: PageIndex) -> CoreResult<Vec<CharBox>> {
+        Ok(Vec::new())
+    }
     /// Show the native OS print dialog and print the document. Returns `true`
     /// if the user printed, `false` if they cancelled. Default: unsupported.
     fn print_with_dialog(&self, _doc: DocumentId) -> CoreResult<bool> {
