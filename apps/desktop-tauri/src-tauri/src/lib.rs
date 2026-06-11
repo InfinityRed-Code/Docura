@@ -3167,6 +3167,35 @@ fn push_recent(state: tauri::State<'_, AppState>, path: String) -> Result<(), St
     save_settings(cfg, &s).map_err(|e| e.to_string())
 }
 
+/// One-time migration from the pre-rebrand identifier (com.rustpdf.app):
+/// copy settings.json and the saved signatures into the new config dir so
+/// recents, preferences and signatures survive the rename to Docura PDF.
+fn migrate_legacy_config(new_settings: &Path) {
+    if new_settings.exists() {
+        return;
+    }
+    let Some(new_dir) = new_settings.parent() else { return };
+    let Some(base) = new_dir.parent() else { return };
+    let old_dir = base.join("com.rustpdf.app");
+    let old_settings = old_dir.join("settings.json");
+    if !old_settings.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(new_dir);
+    let _ = std::fs::copy(&old_settings, new_settings);
+    let old_sigs = old_dir.join("signatures");
+    if old_sigs.is_dir() {
+        let new_sigs = new_dir.join("signatures");
+        let _ = std::fs::create_dir_all(&new_sigs);
+        if let Ok(rd) = std::fs::read_dir(&old_sigs) {
+            for e in rd.flatten() {
+                let _ = std::fs::copy(e.path(), new_sigs.join(e.file_name()));
+            }
+        }
+    }
+    tracing::info!("migrated legacy rustpdf config from {}", old_dir.display());
+}
+
 pub fn run() {
     // Default to INFO so open_pdf / render timings show. Override via RUST_LOG.
     use tracing_subscriber::EnvFilter;
@@ -3199,6 +3228,7 @@ pub fn run() {
                 .ok()
                 .map(|d| d.join("settings.json"));
             if let Some(path) = settings_path.as_ref() {
+                migrate_legacy_config(path);
                 let s = load_settings(path);
                 vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
             }

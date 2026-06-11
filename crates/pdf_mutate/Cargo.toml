@@ -14,3 +14,7 @@ getrandom = "0.3"
 lopdf = { workspace = true }
 image = { workspace = true }
 pdf_types = { workspace = true }
+
+[dev-dependencies]
+# Only for the brand_icons icon-generator example (SVG rasterizing).
+resvg = "0.47"

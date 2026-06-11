@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-pub const PRINTER_NAME: &str = "rustpdf";
+pub const PRINTER_NAME: &str = "Docura PDF";
 
 static PDFA_LEVEL: Mutex<Option<String>> = Mutex::new(None);
 
@@ -23,12 +23,12 @@ pub fn spool_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         if let Ok(pd) = std::env::var("ProgramData") {
-            return PathBuf::from(pd).join("rustpdf").join("spool");
+            return PathBuf::from(pd).join("DocuraPDF").join("spool");
         }
     }
     dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("rustpdf")
+        .join("DocuraPDF")
         .join("spool")
 }
 
@@ -36,11 +36,11 @@ pub fn output_dir() -> PathBuf {
     dirs::document_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("rustpdf")
+        .join("Docura PDF")
 }
 
 pub fn port_path() -> PathBuf {
-    spool_dir().join("rustpdf-spool.ps")
+    spool_dir().join("docura-spool.ps")
 }
 
 #[derive(Serialize)]
@@ -131,7 +131,7 @@ fn scan_and_process(app: &AppHandle) {
             continue;
         }
         let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if !name.starts_with("rustpdf-spool") && !name.starts_with("job-") {
+        if !name.starts_with("docura-spool") && !name.starts_with("rustpdf-spool") && !name.starts_with("job-") {
             continue;
         }
         if !is_stable(&p) {
@@ -269,7 +269,7 @@ pub async fn install_virtual_printer() -> Result<(), String> {
         );
         run_powershell_elevated(&script).await?;
         if !is_printer_installed().await.unwrap_or(false) {
-            return Err("Printer install ran but 'rustpdf' printer is not present. \
+            return Err("Printer install ran but the 'Docura PDF' printer is not present. \
                         Likely cause: 'Microsoft PS Class Driver' could not be registered. \
                         Check Windows Event Log → System for PrintService errors.".to_string());
         }

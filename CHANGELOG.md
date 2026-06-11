@@ -9,6 +9,27 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.9.5] — 2026-06-11
+
+Rebrand: the app is now **Docura PDF**.
+
+### Changed
+- **Name.** Product, window/taskbar title, installer, uninstall entry,
+  Start-menu shortcut, file-association ProgID (`DocuraPDF.pdf`) and the
+  virtual printer (now "Docura PDF", output folder `Dokumente\Docura
+  PDF`) all use the new name. App identifier changed to `com.docura.pdf`
+  — settings, recents and saved signatures are migrated automatically
+  from the old `com.rustpdf.app` config dir on first start.
+- **Logo.** New violet Docura logo everywhere: exe/installer/file icons
+  (rasterized from `CI/Logo.svg`, background stripped, multi-size .ico),
+  title-bar glyph and the logo-with-wordmark as the viewer's empty state
+  — both shipped as cropped vector SVGs. Generator:
+  `cargo run -p pdf_mutate --example brand_icons`.
+
+### Added
+- **Docura theme.** Third theme in the logo's violet palette (alongside
+  light and dark), selectable in the settings.
+
 ## [0.9.4] — 2026-06-11
 
 ### Fixed

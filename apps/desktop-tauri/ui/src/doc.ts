@@ -126,6 +126,7 @@ export function applyOpenedDoc(doc: OpenedDocument, label: string) {
     state.formFieldsByPage.clear();
     dom.searchCount.textContent = "";
     renderOutline();
+    document.getElementById("emptyState")?.classList.add("hidden");
     rebuildSlots();
     if (state.viewMode === "single") navigateTo(0, { recordHistory: false });
     else scheduleRender(0);

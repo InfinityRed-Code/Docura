@@ -1,5 +1,6 @@
 import { t } from "./i18n";
-import appIcon from "./assets/icon.png";
+import appIcon from "./assets/logo.svg";
+import logoText from "./assets/logo-text.svg";
 
 export function buildHtml(): string {
   return `
@@ -14,7 +15,7 @@ export function buildHtml(): string {
       <button class="ribbonTab" data-ribbon-tab="convert">${t("tab.convert")}</button>
       <button class="ribbonTab" data-ribbon-tab="organize">${t("tab.organize")}</button>
       <button class="ribbonTab" data-ribbon-tab="protect">${t("tab.protect")}</button>
-      <div class="titleDrag" data-tauri-drag-region><span id="titlebarTitle">rustpdf</span></div>
+      <div class="titleDrag" data-tauri-drag-region><span id="titlebarTitle">Docura PDF</span></div>
       <button id="settingsBtnTop" class="ribbonTab settingsTab" title="${t("tip.settings")}"><i data-lucide="settings"></i></button>
       <div class="winControls">
         <button id="winMin" title="${t("tip.winMin")}" tabindex="-1"><i data-lucide="minus"></i></button>
@@ -290,6 +291,7 @@ export function buildHtml(): string {
       <div id="attachmentsPanel" class="panel hidden"></div>
     </aside>
     <div id="viewer" class="viewer">
+      <div id="emptyState"><img src="${logoText}" alt="Docura PDF" draggable="false" /></div>
       <div id="pageList" class="pageList"></div>
     </div>
     <aside id="commentPanel" class="commentPanel hidden">
@@ -384,6 +386,7 @@ export function buildHtml(): string {
           <select id="themeSelect">
             <option value="light">${t("theme.light")}</option>
             <option value="dark">${t("theme.dark")}</option>
+            <option value="docura">${t("theme.docura")}</option>
           </select>
         </label>
         <label>${t("set.language")}
@@ -643,6 +646,14 @@ export const CSS = `
     --text:#e4e4e4; --text-2:#b0b4ba; --text-3:#888d95;
     --canvas:#2b2b2b; --danger:#e06060;
   }
+  /* Brand theme in the logo's violet palette. */
+  body.theme-docura {
+    --accent:#7c3aed; --accent-strong:#6d28d9; --accent-tint:#ede9fe;
+    --bg:#ffffff; --bg-2:#f5f3ff; --bg-3:#ece6fc; --hover:#f1ecfd;
+    --border:#e4dcf8; --border-2:#d2c6f0;
+    --text:#241e3a; --text-2:#5b5374; --text-3:#8d86a3;
+    --canvas:#3f3955; --danger:#d23b3b;
+  }
   /* Dark-theme tweaks for the few light-pastel accents. */
   body.theme-dark .deleteAction { background:#3a2a2a !important; color:#e09f9f !important; border-color:#5a3a3a !important; }
   body.theme-dark #mergeCommitBtn:not(:disabled) { background:#234023; color:#9fe09f; border-color:#3d6d3d; }
@@ -881,6 +892,11 @@ export const CSS = `
   .redactLayer .redactMark button { position:absolute; top:-9px; right:-9px; width:18px; height:18px;
     padding:0; border-radius:50%; background:var(--danger); color:#fff; border:none; cursor:pointer;
     font-size:10px; line-height:18px; pointer-events:auto; }
+  .viewer { position:relative; }
+  #emptyState { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                pointer-events:none; }
+  #emptyState img { width:200px; opacity:0.85; filter:drop-shadow(0 4px 14px rgba(0,0,0,0.25)); }
+  #emptyState.hidden { display:none; }
   .hiddenList { display:flex; flex-direction:column; gap:2px; font-size:0.85rem; color:var(--text-2); }
   .hiddenList div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .noteLayer .noteHotspot { position:absolute; pointer-events:auto; cursor:pointer; border-radius:3px; }

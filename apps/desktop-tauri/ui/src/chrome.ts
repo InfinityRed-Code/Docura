@@ -296,6 +296,7 @@ export function initChrome() {
   const themeSelect = document.getElementById("themeSelect") as HTMLSelectElement;
   const applyTheme = (theme: string) => {
     document.body.classList.toggle("theme-dark", theme === "dark");
+    document.body.classList.toggle("theme-docura", theme === "docura");
     // Color the native Windows title bar along with the app (Windows 11+).
     invoke("set_titlebar_theme", { dark: theme === "dark" }).catch(() => {});
   };

@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 lopdf = "0.38"
 pdfium-render = "0.8"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "webp", "ico"] }
 
 pdf_types = { path = "crates/pdf_types" }
 pdf_core = { path = "crates/pdf_core" }

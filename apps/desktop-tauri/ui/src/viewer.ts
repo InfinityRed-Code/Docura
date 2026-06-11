@@ -21,7 +21,7 @@ export function syncZoomUi() {
  * window title (taskbar / alt-tab) in sync. */
 export function setWindowTitle(label: string | null) {
   const span = document.getElementById("titlebarTitle");
-  const text = label ? `${label} — rustpdf` : "rustpdf";
+  const text = label ? `${label} — Docura PDF` : "Docura PDF";
   if (span) span.textContent = text;
   getCurrentWindow().setTitle(text).catch(() => {});
 }
