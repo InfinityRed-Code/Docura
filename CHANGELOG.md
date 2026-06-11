@@ -9,6 +9,26 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.8.2] — 2026-06-11
+
+v0.9 milestone started: export & conversion (first block).
+
+### Added
+- **Export pages as PNG/JPG.** Convert-tab dialog with format, resolution
+  (96–600 DPI) and page scope (all / current / range); pages render via
+  PDFium and land as `name_pNNN.png|jpg` in a chosen folder.
+- **Export as plain text.** All pages via PDFium text extraction, blank
+  line between pages, saved as UTF-8 `.txt`.
+- **Export as simple HTML.** One paragraph per text line, pages as
+  `<section>` separated by `<hr>` — meant for copy-paste, not layout
+  fidelity.
+- **Images → PDF.** Pick multiple PNG/JPG/BMP/WebP files and get a new
+  PDF with one page per image (page size = pixel size at 72 dpi). JPEGs
+  are embedded as-is (no recompression), other formats as lossless
+  Flate-compressed RGB. The result opens directly in the app, like a
+  merge result. E2E-tested: opens in PDFium, page sizes and rendered
+  pixel colors match the inputs.
+
 ## [0.8.1] — 2026-06-11
 
 ### Changed

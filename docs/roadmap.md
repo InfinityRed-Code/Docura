@@ -180,13 +180,13 @@ Passwortschutz-Block (erste drei Items) ausgeliefert mit **v0.7.1**.
 
 Ohne Konvertierung kein PDF24-Ersatz.
 
-- [ ] PDF → PNG / JPG (pro Seite oder Bereich) [E]
-- [ ] PDF → Plain Text [E]
-- [ ] PDF → HTML (einfach, für Copy-Paste) [E]
+- [x] PDF → PNG / JPG (pro Seite oder Bereich) [E] — Export-Dialog im Konvertieren-Tab (Format, 96–600 DPI, alle/aktuelle/Bereich), Dateien `name_pNNN.ext` in Zielordner
+- [x] PDF → Plain Text [E] — alle Seiten, Leerzeile als Seitentrenner
+- [x] PDF → HTML (einfach, für Copy-Paste) [E] — ein `<p>` pro Zeile, Seiten als `<section>` mit `<hr>`
 - [ ] PDF → Word (.docx) — Textfluss-rekonstruiert [X: docx-rs + heuristics]
 - [ ] PDF → Excel (.xlsx) — Tabellen-Heuristik [X: rust_xlsxwriter + table-detection]
 - [ ] PDF → PowerPoint — optional, niedrige Prio
-- [ ] Bilder → PDF (Multi-Page aus PNG/JPG) [X: lopdf + image]
+- [x] Bilder → PDF (Multi-Page aus PNG/JPG) [X: lopdf + image] — Multi-Auswahl im Konvertieren-Tab, eine Seite pro Bild (JPEG verlustfrei eingebettet, Rest Flate-RGB), öffnet wie ein Merge-Ergebnis; E2E-Test `pdf_pdfium/tests/images_pdf.rs`
 - [ ] Office-Dateien → PDF (über System-Drucker-API oder LibreOffice-Headless) [S]
 
 ---

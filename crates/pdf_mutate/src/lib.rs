@@ -15,6 +15,7 @@ use pdf_types::RectPt;
 mod annotations;
 mod encryption;
 mod form;
+mod images;
 mod inspect;
 mod overlay;
 mod read;
@@ -26,6 +27,7 @@ pub use annotations::{
     ShapeAnnotation, ShapeKind, StampAnnotation, TextNoteAnnotation,
 };
 pub use encryption::{encrypt_pdf, is_encrypted_pdf, probably_encrypted, PermissionOptions};
+pub use images::images_to_pdf;
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
 pub type MutateResult<T> = Result<T, MutateError>;

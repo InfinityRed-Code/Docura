@@ -226,6 +226,20 @@ export function buildHtml(): string {
         </div>
         <div class="groupLabel">${t("grp.conversion")}</div>
       </div>
+      <div data-ribbon="convert" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="exportImagesBtn" title="${t("tip.expImages")}"><i data-lucide="image"></i> PNG/JPG</button>
+          <button id="exportTextBtn" title="${t("tip.expText")}"><i data-lucide="file-text"></i> ${t("btn.expText")}</button>
+          <button id="exportHtmlBtn" title="${t("tip.expHtml")}"><i data-lucide="file-code-2"></i> HTML</button>
+        </div>
+        <div class="groupLabel">${t("grp.export")}</div>
+      </div>
+      <div data-ribbon="convert" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="imagesToPdfBtn" title="${t("tip.imagesToPdf")}"><i data-lucide="images"></i> ${t("btn.imagesToPdf")}</button>
+        </div>
+        <div class="groupLabel">${t("grp.import")}</div>
+      </div>
       <span data-ribbon="convert" class="modeHint">${t("hint.convert")}</span>
       <div data-ribbon="protect" class="ribbonGroup">
         <div class="groupBody">
@@ -575,6 +589,28 @@ export function buildHtml(): string {
         <div class="wmActions">
           <button id="patternCommit">${t("pattern.search")}</button>
           <button id="patternCancel">${t("tip.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="exportImgOverlay" class="propsOverlay hidden">
+    <div class="propsModal" style="width:24rem;">
+      <div class="propsHeader"><strong>${t("export.title")}</strong><button id="exportImgClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <label>${t("export.format")}<select id="expImgFormat"><option value="png">PNG</option><option value="jpg">JPG</option></select></label>
+        <label>${t("export.dpi")}<select id="expImgDpi"><option>96</option><option selected>150</option><option>300</option><option>600</option></select></label>
+        <label>${t("export.scope")}<select id="expImgScope">
+          <option value="all">${t("export.scopeAll")}</option>
+          <option value="current">${t("export.scopeCurrent")}</option>
+          <option value="range">${t("export.scopeRange")}</option>
+        </select></label>
+        <div id="expImgRange" style="display:none;gap:0.5rem;">
+          <label style="flex:1">${t("export.from")}<input id="expImgFrom" type="number" min="1" /></label>
+          <label style="flex:1">${t("export.to")}<input id="expImgTo" type="number" min="1" /></label>
+        </div>
+        <div class="wmActions">
+          <button id="exportImgCommit">${t("btn.export")}</button>
+          <button id="exportImgCancel">${t("tip.cancel")}</button>
         </div>
       </div>
     </div>

@@ -464,6 +464,208 @@ async fn save_pdf_as(
     Ok(())
 }
 
+// ---------- Export (v0.9: images / text / HTML) ----------
+
+#[derive(Deserialize)]
+struct ExportImagesArgs {
+    /// "png" | "jpg"
+    format: String,
+    dpi: u32,
+    /// 0-based page indices.
+    pages: Vec<u32>,
+    dir: String,
+    /// Filename stem; pages are written as `<base>_pNNN.<ext>`.
+    base: String,
+}
+
+/// Render the given pages at `dpi` and write one image file per page.
+/// Returns the number of files written.
+#[tauri::command]
+async fn export_pages_as_images(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    args: ExportImagesArgs,
+) -> Result<u32, String> {
+    if args.pages.is_empty() {
+        return Err("export_pages_as_images: no pages".into());
+    }
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let t = std::time::Instant::now();
+        let zoom = (args.dpi.clamp(36, 1200)) as f32 / 72.0;
+        let ext = if args.format == "png" { "png" } else { "jpg" };
+        let dir = std::path::Path::new(&args.dir);
+        let mut written = 0u32;
+        for &p in &args.pages {
+            let r = engine
+                .render(RenderRequest {
+                    document,
+                    page: PageIndex(p),
+                    zoom: ZoomLevel(zoom),
+                    rotation: Rotation::R0,
+                })
+                .map_err(|e| e.to_string())?;
+            let path = dir.join(format!("{}_p{:03}.{}", args.base, p + 1, ext));
+            if ext == "jpg" {
+                let jpeg = encode_jpeg(r.width_px, r.height_px, &r.rgba, 90)?;
+                std::fs::write(&path, jpeg).map_err(|e| format!("write {}: {e}", path.display()))?;
+            } else {
+                image::save_buffer(
+                    &path,
+                    &r.rgba,
+                    r.width_px,
+                    r.height_px,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| format!("write {}: {e}", path.display()))?;
+            }
+            written += 1;
+        }
+        tracing::info!(
+            "export_pages_as_images: {} pages as {} @{}dpi in {:?}",
+            written, ext, args.dpi, t.elapsed()
+        );
+        Ok(written)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Extract the text of every page and write it as UTF-8 plain text
+/// (pages separated by a blank line). Returns the page count.
+#[tauri::command]
+async fn export_text_file(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+) -> Result<u32, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let n = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut out = String::new();
+        for p in 0..n {
+            let text = engine
+                .extract_text(document, PageIndex(p))
+                .map_err(|e| e.to_string())?;
+            out.push_str(text.trim_end());
+            out.push_str("\n\n");
+        }
+        std::fs::write(&path, out).map_err(|e| format!("write {path}: {e}"))?;
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Write a simple flowed-HTML version of the document (one paragraph per
+/// text line, pages separated by <hr>). Meant for copy-paste, not layout
+/// fidelity. Returns the page count.
+#[tauri::command]
+async fn export_html_file(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+    title: String,
+) -> Result<u32, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let n = engine.page_count(document).map_err(|e| e.to_string())?;
+        let mut html = String::with_capacity(64 * 1024);
+        html.push_str("<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n");
+        html.push_str(&format!("<title>{}</title>\n", html_escape(&title)));
+        html.push_str(
+            "<style>body{font-family:system-ui,sans-serif;max-width:50rem;margin:2rem auto;\
+             padding:0 1rem;line-height:1.5}p{margin:0 0 0.4em}hr{margin:2em 0;border:none;\
+             border-top:1px solid #ccc}</style>\n</head>\n<body>\n",
+        );
+        for p in 0..n {
+            if p > 0 {
+                html.push_str("<hr>\n");
+            }
+            html.push_str(&format!("<section data-page=\"{}\">\n", p + 1));
+            let text = engine
+                .extract_text(document, PageIndex(p))
+                .map_err(|e| e.to_string())?;
+            for line in text.lines() {
+                let line = line.trim_end();
+                if line.is_empty() {
+                    continue;
+                }
+                html.push_str(&format!("<p>{}</p>\n", html_escape(line)));
+            }
+            html.push_str("</section>\n");
+        }
+        html.push_str("</body>\n</html>\n");
+        std::fs::write(&path, html).map_err(|e| format!("write {path}: {e}"))?;
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Build a PDF from image files (one page per image) and open it like a
+/// merge result: written to a temp file, loaded into the engine.
+#[tauri::command]
+async fn images_to_pdf_and_open(
+    state: tauri::State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<MergeOpenedDocument, String> {
+    if paths.is_empty() {
+        return Err("images_to_pdf_and_open: no images".into());
+    }
+    let mut sources: Vec<Vec<u8>> = Vec::with_capacity(paths.len());
+    for p in &paths {
+        sources.push(
+            tokio::fs::read(p)
+                .await
+                .map_err(|e| format!("read {p}: {e}"))?,
+        );
+    }
+    let pdf_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let t = std::time::Instant::now();
+        let out = pdf_mutate::images_to_pdf(&sources).map_err(|e| e.to_string())?;
+        tracing::info!(
+            "images_to_pdf: {} images -> {:.1}KB in {:?}",
+            sources.len(),
+            out.len() as f64 / 1024.0,
+            t.elapsed()
+        );
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("rustpdf-images-{ts}.pdf"));
+    tokio::fs::write(&tmp, &pdf_bytes)
+        .await
+        .map_err(|e| format!("write temp {}: {e}", tmp.display()))?;
+    let tmp_str = tmp.to_string_lossy().to_string();
+
+    let opened = open_pdf_inner(state, pdf_bytes, None)
+        .await
+        .map_err(|e| match e {
+            OpenError::Other(s) => s,
+            OpenError::PasswordRequired => "PasswordRequired".into(),
+            OpenError::PasswordIncorrect => "PasswordIncorrect".into(),
+        })?;
+    Ok(MergeOpenedDocument {
+        id: opened.id,
+        page_count: opened.page_count,
+        page_sizes: opened.page_sizes,
+        outline: opened.outline,
+        protected: opened.protected,
+        temp_path: tmp_str,
+    })
+}
+
 #[derive(Deserialize)]
 struct RedactRegion {
     page: u32,
@@ -2843,6 +3045,10 @@ pub fn run() {
             sanitize_metadata_cmd,
             find_hidden_content,
             find_pattern_regions,
+            export_pages_as_images,
+            export_text_file,
+            export_html_file,
+            images_to_pdf_and_open,
             set_titlebar_theme,
             delete_page,
             delete_pages,
