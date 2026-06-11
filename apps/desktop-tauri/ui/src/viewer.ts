@@ -447,8 +447,10 @@ export function invalidateRenders() {
   for (const s of state.slots) {
     s.loaded = false;
     s.lastZoom = null;
-    s.placeholder.style.display = "";
-    s.img.removeAttribute("src");
+    // Keep the stale bitmap as a scaled preview while the re-render is
+    // pending — dropping it would flash the hatched placeholder on every
+    // zoom/rotate. The placeholder only shows for never-rendered slots.
+    if (!s.img.getAttribute("src")) s.placeholder.style.display = "";
     s.linkLayer.innerHTML = "";
   }
   state.renderQueue.clear();

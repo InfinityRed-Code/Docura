@@ -9,6 +9,15 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.9.4] — 2026-06-11
+
+### Fixed
+- **Hatched placeholder flashing on zoom.** Changing zoom (or rotation)
+  dropped every page bitmap and showed the diagonal-striped placeholder
+  until the re-render landed. The stale bitmap now stays visible as a
+  scaled preview (briefly soft, then sharp); the placeholder only appears
+  for pages that were never rendered.
+
 ## [0.9.3] — 2026-06-11
 
 ### Fixed
