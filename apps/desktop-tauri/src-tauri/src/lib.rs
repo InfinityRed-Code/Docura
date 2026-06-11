@@ -3105,6 +3105,19 @@ fn set_default_pdfa(state: tauri::State<'_, AppState>, level: String) -> Result<
     Ok(())
 }
 
+/// PDF path the app was launched with (file association / "open with" /
+/// drag onto the exe). Consumed once by the frontend on startup.
+#[tauri::command]
+fn take_startup_file() -> Option<String> {
+    let arg = std::env::args().nth(1)?;
+    let p = std::path::PathBuf::from(&arg);
+    if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) && p.exists() {
+        Some(arg)
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 fn recent_files(state: tauri::State<'_, AppState>) -> Vec<RecentFile> {
     let guard = state.settings_path.lock();
@@ -3257,6 +3270,7 @@ pub fn run() {
             undo_doc,
             redo_doc,
             undo_status,
+            take_startup_file,
             recent_files,
             push_recent,
             get_default_pdfa,

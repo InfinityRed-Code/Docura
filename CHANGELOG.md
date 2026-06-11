@@ -9,6 +9,18 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.9.2] — 2026-06-11
+
+### Added
+- **PDF file association.** The installer now registers rustpdf as a PDF
+  handler (ProgID + "open with" entry), so it can be picked under
+  Windows' "Öffnen mit" and as the default app for .pdf. Double-clicking
+  a PDF (or dragging one onto the exe) opens it directly: the CLI path
+  argument is consumed by the frontend on startup.
+
+### Changed
+- Installer/window icon now ships the multi-resolution `icon.ico`.
+
 ## [0.9.1] — 2026-06-11
 
 Milestone v0.9 completed (PDF → PowerPoint deliberately deferred).

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "rustpdf",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "identifier": "com.rustpdf.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -27,7 +27,15 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "name": "rustpdf.pdf",
+        "description": "PDF-Dokument",
+        "mimeType": "application/pdf"
+      }
+    ],
     "resources": ["resources/pdfium.dll"],
     "windows": {
       "nsis": {

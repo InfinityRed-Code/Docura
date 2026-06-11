@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { initI18n } from "./i18n";
 import { applyTemplate } from "./template";
@@ -66,3 +67,11 @@ getCurrentWebview()
 
 // 5. Initial chrome paint.
 updateChrome();
+
+// 6. Opened via file association / "open with" / drag onto the exe?
+// The backend holds the CLI path argument; consume it once.
+void invoke<string | null>("take_startup_file")
+  .then((p) => {
+    if (p) return openByPath(p);
+  })
+  .catch(() => {});

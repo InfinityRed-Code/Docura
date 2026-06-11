@@ -27,10 +27,6 @@ pub struct Line {
     pub x0: f32,
 }
 
-fn run_height(r: &TextRun) -> f32 {
-    (r.rect_pt.y1 - r.rect_pt.y0).max(0.1)
-}
-
 /// Strip characters that XML 1.0 forbids — C0 controls except tab/LF/CR,
 /// plus the non-characters U+FFFE/U+FFFF. Word and Excel refuse files
 /// containing them. Defense in depth: the engine filters these too, but
