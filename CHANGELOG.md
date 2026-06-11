@@ -9,9 +9,10 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
-## [0.8.2] — 2026-06-11
+## [0.9.0] — 2026-06-11
 
-v0.9 milestone started: export & conversion (first block).
+Milestone v0.9 "Export & Konvertierung", first block. (Supersedes the
+0.8.2 tag — same content, renumbered to match the roadmap milestone.)
 
 ### Added
 - **Export pages as PNG/JPG.** Convert-tab dialog with format, resolution
