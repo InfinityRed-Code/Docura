@@ -86,6 +86,22 @@ struct DocCrypto {
     permissions: pdf_mutate::PermissionOptions,
 }
 
+/// Mark a child process as windowless (CREATE_NO_WINDOW). Without this,
+/// every console helper we spawn (Ghostscript, soffice, powershell)
+/// flashes a terminal window — very visible when the app starts via the
+/// PDF file association.
+#[cfg(windows)]
+pub(crate) fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000);
+    cmd
+}
+
+#[cfg(not(windows))]
+pub(crate) fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    cmd
+}
+
 struct AppState {
     engine: Arc<dyn PdfEngine>,
     cache: Mutex<RenderCache>,
@@ -738,8 +754,7 @@ fn find_libreoffice() -> Option<String> {
         }
     }
     // PATH fallback (covers portable installs and non-Windows).
-    let ok = std::process::Command::new("soffice")
-        .arg("--version")
+    let ok = no_window(std::process::Command::new("soffice").arg("--version"))
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -775,12 +790,14 @@ async fn office_to_pdf_and_open(
     let out = outdir.clone();
     let produced = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
         let t = std::time::Instant::now();
-        let output = std::process::Command::new(&soffice)
-            .args(["--headless", "--norestore", "--convert-to", "pdf", "--outdir"])
-            .arg(&out)
-            .arg(&src)
-            .output()
-            .map_err(|e| format!("soffice: {e}"))?;
+        let output = no_window(
+            std::process::Command::new(&soffice)
+                .args(["--headless", "--norestore", "--convert-to", "pdf", "--outdir"])
+                .arg(&out)
+                .arg(&src),
+        )
+        .output()
+        .map_err(|e| format!("soffice: {e}"))?;
         if !output.status.success() {
             return Err(format!(
                 "soffice exited with {}: {}",
@@ -2359,7 +2376,7 @@ fn ghostscript_candidates() -> Vec<std::path::PathBuf> {
 
 fn probe_ghostscript(path: &Path) -> Option<(String, String)> {
     use std::process::Command;
-    let out = Command::new(path).arg("--version").output().ok()?;
+    let out = no_window(Command::new(path).arg("--version")).output().ok()?;
     if !out.status.success() { return None; }
     let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if ver.is_empty() { return None; }
@@ -2462,7 +2479,7 @@ async fn save_as_pdfa(
         cmd.arg(format!("-sOutputFile={out_path}"));
         cmd.arg(&src);
 
-        let output = cmd.output().map_err(|e| format!("gs spawn: {e}"))?;
+        let output = no_window(&mut cmd).output().map_err(|e| format!("gs spawn: {e}"))?;
         let _ = std::fs::remove_file(&src);
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2523,7 +2540,7 @@ async fn convert_files_to_pdfa(
             cmd.arg("-sProcessColorModel=DeviceRGB");
             cmd.arg(format!("-sOutputFile={}", out.display()));
             cmd.arg(&src);
-            match cmd.output() {
+            match no_window(&mut cmd).output() {
                 Ok(o) if o.status.success() => {
                     written.push(out.to_string_lossy().to_string());
                 }

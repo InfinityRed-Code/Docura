@@ -181,7 +181,7 @@ fn process_one(app: &AppHandle, ps: &Path) {
     }
     cmd.arg(format!("-sOutputFile={}", out_pdf.display()));
     cmd.arg(&work);
-    let status = cmd.status();
+    let status = crate::no_window(&mut cmd).status();
     match status {
         Ok(s) if s.success() => {
             let _ = std::fs::remove_file(&work);
@@ -326,17 +326,16 @@ async fn run_powershell_capture(script: &str) -> Result<String, String> {
     let script = script.to_string();
     tokio::task::spawn_blocking(move || {
         let enc = encode_ps(&script);
-        let out = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-                &enc,
-            ])
-            .output()
-            .map_err(|e| e.to_string())?;
+        let out = crate::no_window(std::process::Command::new("powershell.exe").args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            &enc,
+        ]))
+        .output()
+        .map_err(|e| e.to_string())?;
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).to_string());
         }
@@ -356,17 +355,16 @@ async fn run_powershell_elevated(script: &str) -> Result<(), String> {
     );
     tokio::task::spawn_blocking(move || {
         let enc = encode_ps(&launcher);
-        let out = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-                &enc,
-            ])
-            .output()
-            .map_err(|e| e.to_string())?;
+        let out = crate::no_window(std::process::Command::new("powershell.exe").args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            &enc,
+        ]))
+        .output()
+        .map_err(|e| e.to_string())?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             return Err(if err.trim().is_empty() {

@@ -9,6 +9,15 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.9.3] — 2026-06-11
+
+### Fixed
+- **Console window flashing on startup.** Every spawned console helper
+  (the Ghostscript version probe runs on each app start; also soffice
+  and the PowerShell calls of the virtual-printer setup) briefly opened
+  a terminal window — very visible when opening a PDF via the file
+  association. All child processes now start with CREATE_NO_WINDOW.
+
 ## [0.9.2] — 2026-06-11
 
 ### Added
