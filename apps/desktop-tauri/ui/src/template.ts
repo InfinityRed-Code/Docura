@@ -1,10 +1,12 @@
 import { t } from "./i18n";
+import appIcon from "./assets/icon.png";
 
 export function buildHtml(): string {
   return `
 <main class="root">
   <header class="ribbon">
-    <div class="ribbonTabs">
+    <div class="ribbonTabs" data-tauri-drag-region>
+      <span class="appGlyph" data-tauri-drag-region><img src="${appIcon}" alt="" draggable="false" /></span>
       <button class="ribbonTab active" data-ribbon-tab="reader">${t("tab.reader")}</button>
       <button class="ribbonTab" data-ribbon-tab="edit">${t("tab.edit")}</button>
       <button class="ribbonTab" data-ribbon-tab="forms">${t("tab.forms")}</button>
@@ -12,7 +14,13 @@ export function buildHtml(): string {
       <button class="ribbonTab" data-ribbon-tab="convert">${t("tab.convert")}</button>
       <button class="ribbonTab" data-ribbon-tab="organize">${t("tab.organize")}</button>
       <button class="ribbonTab" data-ribbon-tab="protect">${t("tab.protect")}</button>
+      <div class="titleDrag" data-tauri-drag-region><span id="titlebarTitle">rustpdf</span></div>
       <button id="settingsBtnTop" class="ribbonTab settingsTab" title="${t("tip.settings")}"><i data-lucide="settings"></i></button>
+      <div class="winControls">
+        <button id="winMin" title="${t("tip.winMin")}" tabindex="-1"><i data-lucide="minus"></i></button>
+        <button id="winMax" title="${t("tip.winMax")}" tabindex="-1"><i data-lucide="square"></i></button>
+        <button id="winClose" title="${t("tip.winClose")}" tabindex="-1"><i data-lucide="x"></i></button>
+      </div>
     </div>
     <div class="ribbonBody" data-active="reader">
       <button data-ribbon="both" id="sidebarBtn" title="${t("tip.sidebar")}"><i data-lucide="panel-left"></i></button>
@@ -609,9 +617,27 @@ export const CSS = `
   .root { display:flex; flex-direction:column; }
   .ribbon { border-bottom: 1px solid var(--border); background:var(--bg);
             position:relative; box-shadow: 0 1px 3px rgba(20,30,50,0.06); z-index:5; }
+  /* The tab row doubles as the window title bar (decorations are off):
+     tabs left, drag area with the document name in the middle, window
+     controls right. data-tauri-drag-region handles move + double-click
+     maximize; spans inside get pointer-events:none so hits land on the
+     element carrying the attribute. */
   .ribbonTabs { display:flex; gap:0.1rem; background:var(--bg-2);
-                border-bottom:1px solid var(--border); padding: 0 0.4rem; align-items:center; }
-  .ribbonTab.settingsTab { margin-left:auto; padding:0.25rem 0.6rem; font-size:1rem;
+                border-bottom:1px solid var(--border); padding: 0 0 0 0.2rem; align-items:stretch;
+                min-height:34px; user-select:none; -webkit-user-select:none; }
+  .appGlyph { display:inline-flex; align-items:center; padding:0 0.45rem 0 0.3rem; }
+  .appGlyph img { width:16px; height:16px; pointer-events:none; }
+  .titleDrag { flex:1; min-width:0; display:flex; align-items:center; justify-content:center; }
+  .titleDrag span { font-size:0.78rem; color:var(--text-3); white-space:nowrap; overflow:hidden;
+                    text-overflow:ellipsis; pointer-events:none; padding:0 0.6rem; }
+  .winControls { display:flex; align-items:stretch; }
+  .winControls button { width:44px; border:none; background:transparent; color:var(--text-2);
+                        padding:0; display:inline-flex; align-items:center; justify-content:center;
+                        border-radius:0; cursor:default; font:inherit; }
+  .winControls button:hover { background:var(--bg-3); color:var(--text); }
+  .winControls #winClose:hover { background:#e81123; color:#fff; }
+  .winControls svg.lucide { width:15px; height:15px; stroke-width:1.6; }
+  .ribbonTab.settingsTab { padding:0.25rem 0.6rem; font-size:1rem;
                            color:var(--text-2); cursor:pointer; }
   .ribbonTab.settingsTab:hover { color:var(--text); background:var(--bg-3); }
   .ribbonTab.settingsTab.active { border-bottom:none; color:var(--accent); }

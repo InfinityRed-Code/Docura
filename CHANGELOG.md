@@ -9,6 +9,17 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.8.1] — 2026-06-11
+
+### Changed
+- **Integrated title bar.** Native window decorations are off; the ribbon's
+  tab row now doubles as the title bar — app icon and tabs on the left, a
+  draggable area with the current document name in the middle, and themed
+  minimize/maximize/close buttons on the right (close hovers red, the
+  middle icon switches between maximize and restore). Drag to move,
+  double-click to maximize, taskbar/alt-tab title stays in sync. Saves a
+  full bar of vertical space and follows the light/dark theme.
+
 ## [0.8.0] — 2026-06-11
 
 Completes milestone v0.8 "Sicherheit & Redaktion": redaction, metadata

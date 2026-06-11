@@ -255,6 +255,10 @@ const en: Dict = {
   "hidden.invisibleText": "Invisible text",
   "hidden.page": "p. {n}",
   "hidden.more": "+ {n} more",
+  "tip.winMin": "Minimize",
+  "tip.winMax": "Maximize",
+  "tip.winRestore": "Restore",
+  "tip.winClose": "Close",
   "st.encryptedInput": "{file} is password-protected — open it separately and save it without protection first",
   "st.pdfaNoProtection": "note: PDF/A does not allow encryption, the password protection was not applied",
 };
@@ -487,6 +491,10 @@ const de: Dict = {
   "hidden.invisibleText": "Unsichtbarer Text",
   "hidden.page": "S. {n}",
   "hidden.more": "+ {n} weitere",
+  "tip.winMin": "Minimieren",
+  "tip.winMax": "Maximieren",
+  "tip.winRestore": "Wiederherstellen",
+  "tip.winClose": "Schließen",
   "st.encryptedInput": "{file} ist passwortgeschützt — zuerst separat öffnen und ohne Schutz speichern",
   "st.pdfaNoProtection": "Hinweis: PDF/A erlaubt keine Verschlüsselung, der Passwortschutz wurde nicht angewendet",
 };

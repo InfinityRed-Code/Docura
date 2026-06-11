@@ -6,7 +6,8 @@ import type {
   FitMode, GhostscriptInfo, SearchHit, VirtualPrinterInfo,
 } from "./types";
 import { state } from "./state";
-import { getLang, setLang, type Lang } from "./i18n";
+import { getLang, setLang, t, type Lang } from "./i18n";
+import { refreshIcons } from "./icons";
 import { dom, setStatus } from "./dom";
 import {
   applyViewMode, goToPage, reflow, renderAllHighlights,
@@ -15,6 +16,37 @@ import { openByPath, closeProperties, doRedo, doUndo } from "./doc";
 import {
   confirmFormsLostInPdfa, deleteSelectedPages, triggerPrint, triggerSaveAs,
 } from "./edit";
+
+// ---------- Window controls (custom title bar) ----------
+//
+// Native decorations are off (tauri.conf.json); the ribbon's tab row doubles
+// as the title bar. Dragging / double-click maximize is handled natively via
+// data-tauri-drag-region; the three buttons here cover minimize / maximize /
+// close, with the middle icon reflecting the current maximize state.
+
+async function syncMaximizeButton() {
+  const btn = document.getElementById("winMax");
+  if (!btn) return;
+  try {
+    const max = await getCurrentWindow().isMaximized();
+    btn.innerHTML = `<i data-lucide="${max ? "copy" : "square"}"></i>`;
+    btn.title = max ? t("tip.winRestore") : t("tip.winMax");
+    refreshIcons();
+  } catch {}
+}
+
+function initWindowControls() {
+  const win = getCurrentWindow();
+  document.getElementById("winMin")!.addEventListener("click", () => void win.minimize());
+  document.getElementById("winMax")!.addEventListener("click", async () => {
+    await win.toggleMaximize().catch(() => {});
+    void syncMaximizeButton();
+  });
+  document.getElementById("winClose")!.addEventListener("click", () => void win.close());
+  // Covers maximize via drag-region double-click, snap and Win+arrow keys.
+  void win.onResized(() => void syncMaximizeButton());
+  void syncMaximizeButton();
+}
 
 // ---------- Search ----------
 
@@ -220,6 +252,9 @@ async function refreshVirtualPrinter() {
 // ---------- Init ----------
 
 export function initChrome() {
+  // Window controls (custom title bar)
+  initWindowControls();
+
   // Search panel
   document.getElementById("searchBtn")!.addEventListener("click", openSearch);
   document.getElementById("searchClose")!.addEventListener("click", closeSearch);

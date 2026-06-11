@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   PageLink, PageSize, RectPt, Rendered, FitMode, Slot, TextRun, ViewMode,
 } from "./types";
@@ -14,6 +15,15 @@ export function syncZoomUi() {
   dom.zoomCustomOpt.textContent = `${pct}%`;
   const hit = ZOOM_PRESETS.find((v) => Math.abs(v - state.zoom) < 0.005);
   dom.zoomSelect.value = hit !== undefined ? String(hit) : "custom";
+}
+
+/** Show the document name in the custom title bar and keep the native
+ * window title (taskbar / alt-tab) in sync. */
+export function setWindowTitle(label: string | null) {
+  const span = document.getElementById("titlebarTitle");
+  const text = label ? `${label} — rustpdf` : "rustpdf";
+  if (span) span.textContent = text;
+  getCurrentWindow().setTitle(text).catch(() => {});
 }
 
 export function updateChrome() {

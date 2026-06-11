@@ -10,7 +10,7 @@ import { t } from "./i18n";
 import { refreshIcons } from "./icons";
 import {
   applyViewMode, evictFarSlots, navigateTo, rebuildSlots, reflow,
-  renderAllHighlights, rotatedSize, scheduleRender, updateChrome,
+  renderAllHighlights, rotatedSize, scheduleRender, setWindowTitle, updateChrome,
 } from "./viewer";
 
 const MAX_RENDER_DIST = 6;
@@ -137,6 +137,7 @@ export function applyOpenedDoc(doc: OpenedDocument, label: string) {
         : `${label} — ${state.pageCount} pages`,
     );
     updateChrome();
+    setWindowTitle(label.split(/[\\/]/).pop() ?? label);
     void refreshUndoUi();
     void callbacks.refreshFormFields();
     document.dispatchEvent(new CustomEvent("rustpdf:doc-changed"));
