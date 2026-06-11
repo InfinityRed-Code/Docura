@@ -231,12 +231,15 @@ export function buildHtml(): string {
           <button id="exportImagesBtn" title="${t("tip.expImages")}"><i data-lucide="image"></i> PNG/JPG</button>
           <button id="exportTextBtn" title="${t("tip.expText")}"><i data-lucide="file-text"></i> ${t("btn.expText")}</button>
           <button id="exportHtmlBtn" title="${t("tip.expHtml")}"><i data-lucide="file-code-2"></i> HTML</button>
+          <button id="exportDocxBtn" title="${t("tip.expDocx")}"><i data-lucide="book-text"></i> Word</button>
+          <button id="exportXlsxBtn" title="${t("tip.expXlsx")}"><i data-lucide="table"></i> Excel</button>
         </div>
         <div class="groupLabel">${t("grp.export")}</div>
       </div>
       <div data-ribbon="convert" class="ribbonGroup">
         <div class="groupBody">
           <button id="imagesToPdfBtn" title="${t("tip.imagesToPdf")}"><i data-lucide="images"></i> ${t("btn.imagesToPdf")}</button>
+          <button id="officeToPdfBtn" title="${t("tip.officeToPdf")}"><i data-lucide="briefcase"></i> ${t("btn.officeToPdf")}</button>
         </div>
         <div class="groupLabel">${t("grp.import")}</div>
       </div>

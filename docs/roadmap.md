@@ -183,11 +183,11 @@ Ohne Konvertierung kein PDF24-Ersatz.
 - [x] PDF → PNG / JPG (pro Seite oder Bereich) [E] — Export-Dialog im Konvertieren-Tab (Format, 96–600 DPI, alle/aktuelle/Bereich), Dateien `name_pNNN.ext` in Zielordner
 - [x] PDF → Plain Text [E] — alle Seiten, Leerzeile als Seitentrenner
 - [x] PDF → HTML (einfach, für Copy-Paste) [E] — ein `<p>` pro Zeile, Seiten als `<section>` mit `<hr>`
-- [ ] PDF → Word (.docx) — Textfluss-rekonstruiert [X: docx-rs + heuristics]
-- [ ] PDF → Excel (.xlsx) — Tabellen-Heuristik [X: rust_xlsxwriter + table-detection]
-- [ ] PDF → PowerPoint — optional, niedrige Prio
+- [x] PDF → Word (.docx) — Textfluss-rekonstruiert [X: docx-rs + heuristics] — neue Crate `pdf_export`: Zeilen/Absätze/Überschriften aus TextRun-Geometrie (flow.rs), Seitenumbrüche zwischen Seiten; E2E-Test `pdf_pdfium/tests/office_export.rs`
+- [x] PDF → Excel (.xlsx) — Tabellen-Heuristik [X: rust_xlsxwriter + table-detection] — ein Arbeitsblatt pro Seite, Spalten per x-Start-Clustering (~10 pt Toleranz), Zahlen als Zahlen
+- [ ] PDF → PowerPoint — optional, niedrige Prio (bewusst zurückgestellt)
 - [x] Bilder → PDF (Multi-Page aus PNG/JPG) [X: lopdf + image] — Multi-Auswahl im Konvertieren-Tab, eine Seite pro Bild (JPEG verlustfrei eingebettet, Rest Flate-RGB), öffnet wie ein Merge-Ergebnis; E2E-Test `pdf_pdfium/tests/images_pdf.rs`
-- [ ] Office-Dateien → PDF (über System-Drucker-API oder LibreOffice-Headless) [S]
+- [x] Office-Dateien → PDF (über System-Drucker-API oder LibreOffice-Headless) [S] — `soffice --headless --convert-to pdf` (Suche: Program Files + PATH), Ergebnis öffnet direkt in der App; ohne LibreOffice lokalisierter Hinweis
 
 ---
 

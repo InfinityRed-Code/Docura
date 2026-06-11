@@ -24,5 +24,6 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 pdf_mutate = { workspace = true }
+pdf_export = { workspace = true }
 lopdf = { workspace = true }
 image = { workspace = true }

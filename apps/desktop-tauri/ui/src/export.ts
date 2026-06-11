@@ -121,6 +121,75 @@ async function exportHtml() {
   }
 }
 
+// ---------- PDF → Word / Excel ----------
+
+async function exportDocx() {
+  if (!state.currentDoc) {
+    setStatus(t("st.openFirst"));
+    return;
+  }
+  const dest = await save({
+    defaultPath: `${docBase()}.docx`,
+    filters: [{ name: "Word", extensions: ["docx"] }],
+  });
+  if (!dest || typeof dest !== "string") return;
+  setStatus(t("export.working"));
+  try {
+    const n = await invoke<number>("export_docx_file", {
+      document: state.currentDoc,
+      path: dest,
+    });
+    setStatus(t("export.docxDone", { n }));
+  } catch (e) {
+    setStatus(`${t("export.error")}: ${e}`);
+  }
+}
+
+async function exportXlsx() {
+  if (!state.currentDoc) {
+    setStatus(t("st.openFirst"));
+    return;
+  }
+  const dest = await save({
+    defaultPath: `${docBase()}.xlsx`,
+    filters: [{ name: "Excel", extensions: ["xlsx"] }],
+  });
+  if (!dest || typeof dest !== "string") return;
+  setStatus(t("export.working"));
+  try {
+    const n = await invoke<number>("export_xlsx_file", {
+      document: state.currentDoc,
+      path: dest,
+    });
+    setStatus(t("export.xlsxDone", { n }));
+  } catch (e) {
+    setStatus(`${t("export.error")}: ${e}`);
+  }
+}
+
+// ---------- Office → PDF ----------
+
+async function officeToPdf() {
+  const sel = await open({
+    multiple: false,
+    filters: [{
+      name: "Office",
+      extensions: ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt"],
+    }],
+  });
+  if (!sel || typeof sel !== "string") return;
+  setStatus(t("export.officeWorking"));
+  try {
+    type Res = OpenedDocument & { temp_path: string };
+    const res = await invoke<Res>("office_to_pdf_and_open", { path: sel });
+    applyOpenedDoc(res, res.temp_path);
+    setStatus(t("export.officeDone"));
+  } catch (e) {
+    if (String(e).includes("LIBREOFFICE_MISSING")) setStatus(t("export.loMissing"));
+    else setStatus(`${t("export.error")}: ${e}`);
+  }
+}
+
 // ---------- Images → PDF ----------
 
 async function imagesToPdf() {
@@ -155,5 +224,8 @@ export function initExport() {
   });
   document.getElementById("exportTextBtn")!.addEventListener("click", () => void exportText());
   document.getElementById("exportHtmlBtn")!.addEventListener("click", () => void exportHtml());
+  document.getElementById("exportDocxBtn")!.addEventListener("click", () => void exportDocx());
+  document.getElementById("exportXlsxBtn")!.addEventListener("click", () => void exportXlsx());
   document.getElementById("imagesToPdfBtn")!.addEventListener("click", () => void imagesToPdf());
+  document.getElementById("officeToPdfBtn")!.addEventListener("click", () => void officeToPdf());
 }

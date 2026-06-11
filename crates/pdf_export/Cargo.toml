@@ -1,0 +1,12 @@
+[package]
+name = "pdf_export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+pdf_types = { workspace = true }
+docx-rs = "0.4"
+rust_xlsxwriter = "0.79"

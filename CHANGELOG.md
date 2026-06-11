@@ -9,6 +9,35 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [0.9.1] — 2026-06-11
+
+Milestone v0.9 completed (PDF → PowerPoint deliberately deferred).
+
+### Added
+- **Export as Word (.docx).** New `pdf_export` crate reconstructs text
+  flow from the page layout — lines from vertical overlap, paragraphs
+  from leading gaps, headings from size jumps — and writes a flowed
+  document (page breaks between PDF pages). Meant for further editing,
+  not layout fidelity.
+- **Export as Excel (.xlsx).** One worksheet per page; lines become rows
+  and columns are clustered from the x-start positions of the text runs
+  (~10 pt tolerance). Numeric cells are written as numbers. Works for
+  visually tabular PDFs; prose lands in column A.
+- **Office → PDF.** Converts Word/Excel/PowerPoint/OpenDocument files via
+  LibreOffice headless (`soffice --convert-to pdf`; found in Program
+  Files or PATH) and opens the result directly in the app. Shows a
+  localized hint when LibreOffice is not installed.
+
+### Fixed
+- **Word/Excel exports were rejected by Office for many real-world
+  PDFs.** PDFium emits C0 control characters (e.g. U+0002) for glyphs
+  without a Unicode mapping; they ended up unescaped in the OOXML and
+  Word/Excel refused the file. The engine now strips them from text
+  extraction, layout, char boxes and hidden-text scans (also cleaning up
+  text selection), and `pdf_export` additionally sanitizes all run text
+  (defense in depth). Verified via Word/Excel COM automation on a
+  previously failing sample.
+
 ## [0.9.0] — 2026-06-11
 
 Milestone v0.9 "Export & Konvertierung", first block. (Supersedes the

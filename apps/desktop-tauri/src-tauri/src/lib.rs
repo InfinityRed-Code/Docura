@@ -607,6 +607,66 @@ async fn export_html_file(
     .map_err(|e| e.to_string())?
 }
 
+/// Collect the positioned text runs of every page (input for the
+/// flow-reconstruction exporters).
+fn collect_page_runs(
+    engine: &std::sync::Arc<dyn PdfEngine>,
+    document: DocumentId,
+) -> Result<Vec<Vec<TextRun>>, String> {
+    let n = engine.page_count(document).map_err(|e| e.to_string())?;
+    let mut pages = Vec::with_capacity(n as usize);
+    for p in 0..n {
+        pages.push(
+            engine
+                .page_text_layout(document, PageIndex(p))
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(pages)
+}
+
+/// Export as Word document (.docx), text flow reconstructed from the page
+/// layout. Returns the page count.
+#[tauri::command]
+async fn export_docx_file(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+) -> Result<u32, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let t = std::time::Instant::now();
+        let pages = collect_page_runs(&engine, document)?;
+        let bytes = pdf_export::build_docx(&pages).map_err(|e| e.to_string())?;
+        std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))?;
+        tracing::info!("export_docx: {} pages in {:?}", pages.len(), t.elapsed());
+        Ok(pages.len() as u32)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Export as Excel workbook (.xlsx), one worksheet per page with a simple
+/// column-clustering table heuristic. Returns the page count.
+#[tauri::command]
+async fn export_xlsx_file(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    path: String,
+) -> Result<u32, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let t = std::time::Instant::now();
+        let pages = collect_page_runs(&engine, document)?;
+        let bytes = pdf_export::build_xlsx(&pages).map_err(|e| e.to_string())?;
+        std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))?;
+        tracing::info!("export_xlsx: {} pages in {:?}", pages.len(), t.elapsed());
+        Ok(pages.len() as u32)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Build a PDF from image files (one page per image) and open it like a
 /// merge result: written to a temp file, loaded into the engine.
 #[tauri::command]
@@ -648,6 +708,108 @@ async fn images_to_pdf_and_open(
         .await
         .map_err(|e| format!("write temp {}: {e}", tmp.display()))?;
     let tmp_str = tmp.to_string_lossy().to_string();
+
+    let opened = open_pdf_inner(state, pdf_bytes, None)
+        .await
+        .map_err(|e| match e {
+            OpenError::Other(s) => s,
+            OpenError::PasswordRequired => "PasswordRequired".into(),
+            OpenError::PasswordIncorrect => "PasswordIncorrect".into(),
+        })?;
+    Ok(MergeOpenedDocument {
+        id: opened.id,
+        page_count: opened.page_count,
+        page_sizes: opened.page_sizes,
+        outline: opened.outline,
+        protected: opened.protected,
+        temp_path: tmp_str,
+    })
+}
+
+// ---------- Office → PDF (LibreOffice headless) ----------
+
+fn find_libreoffice() -> Option<String> {
+    for env in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Ok(base) = std::env::var(env) {
+            let p = std::path::PathBuf::from(base).join("LibreOffice\\program\\soffice.exe");
+            if p.exists() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+    // PATH fallback (covers portable installs and non-Windows).
+    let ok = std::process::Command::new("soffice")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok {
+        return Some("soffice".into());
+    }
+    None
+}
+
+/// Convert an Office file (docx/xlsx/pptx/odt/…) to PDF via LibreOffice
+/// headless and open the result like a merge output. Fails with the
+/// `LIBREOFFICE_MISSING` marker when no LibreOffice install is found.
+#[tauri::command]
+async fn office_to_pdf_and_open(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<MergeOpenedDocument, String> {
+    let soffice = tokio::task::spawn_blocking(find_libreoffice)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("LIBREOFFICE_MISSING")?;
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let outdir = std::env::temp_dir().join(format!("rustpdf-office-{ts}"));
+    tokio::fs::create_dir_all(&outdir)
+        .await
+        .map_err(|e| format!("temp dir: {e}"))?;
+
+    let src = path.clone();
+    let out = outdir.clone();
+    let produced = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
+        let t = std::time::Instant::now();
+        let output = std::process::Command::new(&soffice)
+            .args(["--headless", "--norestore", "--convert-to", "pdf", "--outdir"])
+            .arg(&out)
+            .arg(&src)
+            .output()
+            .map_err(|e| format!("soffice: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "soffice exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        // LibreOffice writes <stem>.pdf into outdir; pick whatever PDF landed.
+        let pdf = std::fs::read_dir(&out)
+            .map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")))
+            .ok_or_else(|| {
+                format!(
+                    "no PDF produced: {}",
+                    String::from_utf8_lossy(&output.stdout).trim()
+                )
+            })?;
+        tracing::info!("office_to_pdf: {} in {:?}", pdf.display(), t.elapsed());
+        Ok(pdf)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let pdf_bytes = tokio::fs::read(&produced)
+        .await
+        .map_err(|e| format!("read {}: {e}", produced.display()))?;
+    let tmp_str = produced.to_string_lossy().to_string();
 
     let opened = open_pdf_inner(state, pdf_bytes, None)
         .await
@@ -3048,7 +3210,10 @@ pub fn run() {
             export_pages_as_images,
             export_text_file,
             export_html_file,
+            export_docx_file,
+            export_xlsx_file,
             images_to_pdf_and_open,
+            office_to_pdf_and_open,
             set_titlebar_theme,
             delete_page,
             delete_pages,

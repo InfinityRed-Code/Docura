@@ -34,6 +34,14 @@ use pdfium_render::prelude::*;
 #[cfg(windows)]
 mod print_win;
 
+/// Control characters PDFium emits for glyphs without a Unicode mapping
+/// (e.g. U+0002), plus the non-characters U+FFFE/U+FFFF. They are invalid
+/// in XML exports and useless for display/selection. Tab/CR/LF stay —
+/// they carry line structure in extracted text.
+fn is_garbage_char(c: char) -> bool {
+    (c < '\u{20}' && c != '\t' && c != '\r' && c != '\n') || c == '\u{FFFE}' || c == '\u{FFFF}'
+}
+
 struct SyncPdfium(Pdfium);
 
 // SAFETY: All calls into PDFium are serialised through `PdfiumEngine::inner`.
@@ -346,7 +354,9 @@ impl PdfEngine for PdfiumEngine {
         let text = page
             .text()
             .map_err(|e| CoreError::Engine(format!("text: {e}")))?;
-        Ok(text.all())
+        // PDFium maps glyphs without a Unicode entry to C0 control chars
+        // (e.g. U+0002) — strip them, keeping line structure.
+        Ok(text.all().chars().filter(|&c| !is_garbage_char(c)).collect())
     }
 
     fn page_text_layout(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<TextRun>> {
@@ -364,7 +374,7 @@ impl PdfEngine for PdfiumEngine {
         let mut runs: Vec<TextRun> = Vec::new();
         for ch in text.chars().iter() {
             let Some(c) = ch.unicode_char() else { continue };
-            if c == '\0' {
+            if c == '\0' || is_garbage_char(c) {
                 continue;
             }
             let Ok(rect) = ch.loose_bounds() else { continue };
@@ -411,7 +421,9 @@ impl PdfEngine for PdfiumEngine {
                 Ok(PdfPageTextRenderMode::Invisible)
                     | Ok(PdfPageTextRenderMode::InvisibleClipping)
             );
-            let c = ch.unicode_char().filter(|&c| c != '\0');
+            let c = ch
+                .unicode_char()
+                .filter(|&c| c != '\0' && !is_garbage_char(c));
             if invisible {
                 if let Some(c) = c {
                     current.push(c);
@@ -443,7 +455,7 @@ impl PdfEngine for PdfiumEngine {
         let mut out = Vec::new();
         for ch in text.chars().iter() {
             let Some(c) = ch.unicode_char() else { continue };
-            if c == '\0' {
+            if c == '\0' || is_garbage_char(c) {
                 continue;
             }
             let Ok(rect) = ch.loose_bounds() else { continue };
