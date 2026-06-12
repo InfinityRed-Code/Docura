@@ -17,6 +17,7 @@ mod encryption;
 mod form;
 mod images;
 mod inspect;
+mod ocr;
 mod overlay;
 mod read;
 mod redact;
@@ -28,6 +29,7 @@ pub use annotations::{
 };
 pub use encryption::{encrypt_pdf, is_encrypted_pdf, probably_encrypted, PermissionOptions};
 pub use images::images_to_pdf;
+pub use ocr::OcrWord;
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
 pub type MutateResult<T> = Result<T, MutateError>;
@@ -542,6 +544,26 @@ impl MutableDoc {
     }
 
     /// Stamp a text watermark on every page.
+    /// Append an invisible OCR text layer to a single 0-indexed page.
+    /// Word boxes are pixel coordinates on the rendered page bitmap.
+    pub fn add_ocr_text_layer(
+        &mut self,
+        page_index: u32,
+        words: &[OcrWord],
+        img_w: u32,
+        img_h: u32,
+    ) -> MutateResult<()> {
+        let t = std::time::Instant::now();
+        ocr::add_ocr_text_layer(&mut self.inner, page_index, words, img_w, img_h)?;
+        tracing::info!(
+            "pdf_mutate::add_ocr_text_layer page {} ({} words) in {:?}",
+            page_index,
+            words.len(),
+            t.elapsed()
+        );
+        Ok(())
+    }
+
     pub fn add_text_watermark(&mut self, text: &str, opts: &WatermarkOptions) -> MutateResult<()> {
         let t = std::time::Instant::now();
         overlay::add_text_watermark(&mut self.inner, text, opts)?;

@@ -244,6 +244,13 @@ export function buildHtml(): string {
         </div>
         <div class="groupLabel">${t("grp.import")}</div>
       </div>
+      <div data-ribbon="convert" class="ribbonGroup">
+        <div class="groupBody">
+          <button id="ocrBtn" title="${t("tip.ocr")}"><i data-lucide="scan-text"></i> ${t("btn.ocr")}</button>
+          <button id="ocrBatchBtn" title="${t("tip.ocrBatch")}"><i data-lucide="layers"></i> ${t("btn.ocrBatch")}</button>
+        </div>
+        <div class="groupLabel">${t("grp.ocr")}</div>
+      </div>
       <span data-ribbon="convert" class="modeHint">${t("hint.convert")}</span>
       <div data-ribbon="protect" class="ribbonGroup">
         <div class="groupBody">
@@ -291,6 +298,12 @@ export function buildHtml(): string {
       <div id="attachmentsPanel" class="panel hidden"></div>
     </aside>
     <div id="viewer" class="viewer">
+      <div id="ocrBanner" class="ocrBanner hidden">
+        <i data-lucide="scan-text"></i>
+        <span>${t("ocr.banner")}</span>
+        <button id="ocrBannerStart">${t("ocr.bannerStart")}</button>
+        <button id="ocrBannerClose" class="propsClose" title="${t("tip.close")}">✕</button>
+      </div>
       <div id="emptyState"><img src="${logoText}" alt="Docura PDF" draggable="false" /></div>
       <div id="pageList" class="pageList"></div>
     </div>
@@ -621,6 +634,29 @@ export function buildHtml(): string {
       </div>
     </div>
   </div>
+  <div id="ocrOverlay" class="propsOverlay hidden">
+    <div class="propsModal" style="width:26rem;">
+      <div class="propsHeader"><strong>${t("ocr.title")}</strong><button id="ocrDlgClose" class="propsClose">✕</button></div>
+      <div class="propsPanel wmPanel">
+        <label>${t("ocr.language")}<select id="ocrLang"></select></label>
+        <label>${t("export.scope")}<select id="ocrScope">
+          <option value="all">${t("export.scopeAll")}</option>
+          <option value="current">${t("export.scopeCurrent")}</option>
+          <option value="range">${t("export.scopeRange")}</option>
+        </select></label>
+        <div id="ocrRange" style="display:none;gap:0.5rem;">
+          <label style="flex:1">${t("export.from")}<input id="ocrFrom" type="number" min="1" /></label>
+          <label style="flex:1">${t("export.to")}<input id="ocrTo" type="number" min="1" /></label>
+        </div>
+        <label class="commentChk"><input type="checkbox" id="ocrPreprocess" checked /> ${t("ocr.preprocess")}</label>
+        <label class="commentChk"><input type="checkbox" id="ocrSkipText" checked /> ${t("ocr.skipText")}</label>
+        <div class="wmActions">
+          <button id="ocrCommit">${t("ocr.start")}</button>
+          <button id="ocrCancel">${t("tip.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="hiddenOverlay" class="propsOverlay hidden">
     <div class="propsModal" style="width:30rem;">
       <div class="propsHeader"><strong>${t("hidden.title")}</strong><button id="hiddenClose" class="propsClose">✕</button></div>
@@ -893,6 +929,15 @@ export const CSS = `
     padding:0; border-radius:50%; background:var(--danger); color:#fff; border:none; cursor:pointer;
     font-size:10px; line-height:18px; pointer-events:auto; }
   .viewer { position:relative; }
+  .ocrBanner { position:sticky; top:0; z-index:40; width:fit-content; max-width:92%;
+    margin:0 auto 0.8rem auto; display:flex; align-items:center; gap:0.6rem;
+    background:var(--bg); color:var(--text); border:1px solid var(--border-2);
+    border-radius:8px; padding:0.45rem 0.8rem; box-shadow:0 3px 14px rgba(0,0,0,0.25); }
+  .ocrBanner.hidden { display:none; }
+  .ocrBanner svg { width:18px; height:18px; color:var(--accent); flex:none; }
+  .ocrBanner button:not(.propsClose) { background:var(--accent); color:#fff; border:none;
+    border-radius:5px; padding:0.3rem 0.7rem; cursor:pointer; }
+  .ocrBanner button:not(.propsClose):hover { background:var(--accent-strong); }
   #emptyState { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
                 pointer-events:none; }
   #emptyState img { width:200px; opacity:0.85; filter:drop-shadow(0 4px 14px rgba(0,0,0,0.25)); }

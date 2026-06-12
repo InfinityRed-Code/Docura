@@ -191,16 +191,32 @@ Ohne Konvertierung kein PDF24-Ersatz.
 
 ---
 
-## Meilenstein v1.0 — "OCR & Scans"
+## Meilenstein v1.0 — "OCR & Scans" ✅
 
 Gescannte Dokumente. Ohne OCR bleibt die App für ca. 20 % der echten PDFs blind.
 
-- [ ] OCR-Integration über Tesseract [X: tesseract-rs oder leptess]
-- [ ] Sprachpakete nachladen (UI-gesteuert) [S]
-- [ ] OCR-Layer auf Seite (unsichtbarer Text über Bild) [X: lopdf]
-- [ ] Batch-OCR über mehrere Dokumente [S]
-- [ ] Bildqualität-Vorverarbeitung (Deskew, Despeckle, Kontrast) [X: image]
-- [ ] Auto-Erkennung: "Diese PDF enthält keinen Text, OCR starten?" [C][U]
+- [x] OCR-Integration über Tesseract [X: Tesseract-CLI] — externes CLI statt
+  leptess-Binding (kein vcpkg/nativer Build, gleiches Muster wie
+  Ghostscript/LibreOffice): Erkennung über `TESSERACT`-Env, PATH,
+  Program Files, `%LOCALAPPDATA%\Programs`; UB-Mannheim-Build empfohlen
+- [x] Sprachpakete nachladen (UI-gesteuert) [S] — Download aus
+  `tessdata_fast` in den App-Config-Ordner (`--tessdata-dir`), ⬇-Markierung
+  im Sprach-Dropdown, `deu+eng`-Kombis über System- und User-Packs hinweg
+- [x] OCR-Layer auf Seite (unsichtbarer Text über Bild) [X: lopdf] —
+  `pdf_mutate::add_ocr_text_layer`: Rendermodus 3, Helvetica/WinAnsi,
+  Tz-Breitenanpassung auf die Wortboxen, /Rotate 0/90/180/270
+- [x] Batch-OCR über mehrere Dokumente [S] — Multi-Auswahl + Zielordner,
+  Ausgabe `<name>_ocr.pdf`, Seiten mit Text und verschlüsselte Dateien
+  werden übersprungen
+- [x] Bildqualität-Vorverarbeitung (Deskew, Despeckle, Kontrast) [X: image] —
+  Kontrast-Stretch (1–99-Perzentil), 3×3-Median, Deskew ±5° per
+  Projektionsprofil auf Otsu-Binärbild; abschaltbar im Dialog
+- [x] Auto-Erkennung: "Diese PDF enthält keinen Text, OCR starten?" [C][U] —
+  Banner über dem Viewer nach dem Öffnen (erste 5 Seiten ohne Text)
+
+> E2E-Tests: `pdf_pdfium/tests/ocr_layer.rs` (Layer durchsuchbar/unsichtbar/
+> positionsgenau, Rotation) und `desktop-tauri` `ocr::tests::tesseract_roundtrip`
+> (gegen echtes Tesseract, übersprungen wenn nicht installiert).
 
 ---
 

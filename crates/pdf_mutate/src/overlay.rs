@@ -94,7 +94,7 @@ impl OverlayContext {
     }
 }
 
-fn ensure_own_resources(doc: &mut Document, page_id: ObjectId) -> MutateResult<ObjectId> {
+pub(crate) fn ensure_own_resources(doc: &mut Document, page_id: ObjectId) -> MutateResult<ObjectId> {
     // Returns the ObjectId of a Resources dictionary owned by this page.
     // If Resources is a direct dict on the page, promote to an indirect object
     // so we can share updates via object id.
@@ -125,7 +125,7 @@ fn ensure_own_resources(doc: &mut Document, page_id: ObjectId) -> MutateResult<O
     }
 }
 
-fn register_alias(
+pub(crate) fn register_alias(
     doc: &mut Document,
     resources_id: ObjectId,
     sub_key: &[u8],
@@ -231,12 +231,12 @@ fn helvetica_width(byte: u8) -> u16 {
     }
 }
 
-fn text_width_pt(bytes: &[u8], font_size: f32) -> f32 {
+pub(crate) fn text_width_pt(bytes: &[u8], font_size: f32) -> f32 {
     let sum: u32 = bytes.iter().map(|b| helvetica_width(*b) as u32).sum();
     (sum as f32) * font_size / 1000.0
 }
 
-fn to_winansi_bytes(text: &str) -> Vec<u8> {
+pub(crate) fn to_winansi_bytes(text: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len());
     for c in text.chars() {
         let cp = c as u32;
@@ -262,7 +262,7 @@ fn to_winansi_bytes(text: &str) -> Vec<u8> {
     out
 }
 
-fn escape_pdf_string(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn escape_pdf_string(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + 4);
     out.push(b'(');
     for &b in bytes {
@@ -335,7 +335,7 @@ fn build_page_stream(items: &[TextItem<'_>], ctx: &OverlayContext) -> Vec<u8> {
 // Use std::io::Write for format! on Vec<u8>.
 use std::io::Write;
 
-fn append_content_stream(
+pub(crate) fn append_content_stream(
     doc: &mut Document,
     page_id: ObjectId,
     content: Vec<u8>,

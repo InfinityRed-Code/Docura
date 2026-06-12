@@ -139,6 +139,8 @@ export function applyOpenedDoc(doc: OpenedDocument, label: string) {
     );
     updateChrome();
     setWindowTitle(label.split(/[\\/]/).pop() ?? label);
+    // Decoupled listeners (e.g. the OCR "scanned document?" banner).
+    document.dispatchEvent(new CustomEvent("docura:doc-opened"));
     void refreshUndoUi();
     void callbacks.refreshFormFields();
     document.dispatchEvent(new CustomEvent("rustpdf:doc-changed"));

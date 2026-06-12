@@ -9,6 +9,43 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [1.0.0] — 2026-06-12
+
+Milestone v1.0 "OCR & Scans": scanned documents become searchable.
+
+### Added
+- **OCR (Texterkennung).** New group in the Convert tab. Tesseract is
+  driven as an external CLI (detected like Ghostscript: `TESSERACT` env
+  var, PATH, Program Files, `%LOCALAPPDATA%\Programs` — UB-Mannheim
+  build recommended, never bundled). Pages are rendered at 300 DPI,
+  recognised words are injected as an **invisible text layer** (render
+  mode 3, Helvetica/WinAnsi, `Tz`-scaled to the word boxes, /Rotate
+  0/90/180/270 handled) — the page becomes searchable/extractable while
+  the scan image stays untouched. Undo works like any other mutation.
+- **Language packs.** OCR dialog lists 20 curated languages (plus
+  everything the local Tesseract reports); missing packs are downloaded
+  on first use from `tessdata_fast` into the app config dir and passed
+  via `--tessdata-dir`. Combos like `deu+eng` work across system and
+  downloaded packs. Selected language persists in the settings.
+- **Image preprocessing.** Optional (on by default): contrast stretch
+  (1–99 percentile), 3×3 median despeckle, and deskew (±5°, projection
+  profile scoring on the Otsu-binarised image).
+- **Batch OCR.** Pick multiple PDFs and an output folder; each file is
+  OCRed (pages that already carry text are skipped) and written as
+  `<name>_ocr.pdf`. Encrypted inputs are skipped.
+- **Scan detection.** When an opened document's first pages contain no
+  extractable text, a dismissible banner offers to run OCR directly.
+- Progress events (`ocr-progress`) drive per-page/per-file status; new
+  error markers `TESSERACT_MISSING` / `OCR_LANG_MISSING` map to
+  localized messages (de/en fully covered).
+
+### Tests
+- `pdf_pdfium/tests/ocr_layer.rs`: injected layer is searchable,
+  reports as hidden text, hit rectangles match the word boxes (±8 pt),
+  rendering stays visually unchanged, rotated pages work.
+- `desktop-tauri` `ocr::tests::tesseract_roundtrip`: end-to-end against
+  a real Tesseract install (skips when absent).
+
 ## [0.9.5] — 2026-06-11
 
 Rebrand: the app is now **Docura PDF**.

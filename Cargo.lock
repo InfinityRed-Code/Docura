@@ -938,12 +938,13 @@ dependencies = [
 
 [[package]]
 name = "desktop-tauri"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dirs 5.0.1",
  "image",
+ "lopdf",
  "mozjpeg",
  "notify",
  "parking_lot",
@@ -966,6 +967,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ureq",
  "windows 0.58.0",
 ]
 
@@ -3325,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_cache"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "lru",
  "pdf_types",
@@ -3333,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_core"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "pdf_types",
@@ -3344,7 +3346,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_export"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "docx-rs",
  "pdf_types",
@@ -3354,7 +3356,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_mutate"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -3369,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_pdfium"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3387,7 +3389,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_services"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "pdf_types",
@@ -3397,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_sign"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "cms",
  "der",
@@ -3420,7 +3422,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_types"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "serde",
  "uuid",

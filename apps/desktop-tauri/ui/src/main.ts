@@ -12,6 +12,7 @@ import { initAnnot } from "./annot";
 import { initSign } from "./sign";
 import { initProtect } from "./protect";
 import { initExport } from "./export";
+import { initOcr } from "./ocr";
 import { initChrome } from "./chrome";
 import { dom } from "./dom";
 
@@ -32,6 +33,7 @@ initDoc();
 initEdit();
 initProtect();
 initExport();
+initOcr();
 initChrome();
 
 // 3. Thumb-click goto bridge — edit.ts dispatches this when a thumb is clicked

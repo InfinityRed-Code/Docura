@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use parking_lot::Mutex;
 
+mod ocr;
 mod vprinter;
 
 use pdf_cache::{CacheKey, CachedImage, RenderCache};
@@ -3071,6 +3072,9 @@ struct PersistedSettings {
     /// `"off" | "1b" | "2b" | "3b" | "4"`. Defaults to `"off"` (plain PDF).
     #[serde(default)]
     default_pdfa_level: Option<String>,
+    /// Tesseract language code(s) for OCR, e.g. `"deu"` or `"deu+eng"`.
+    #[serde(default)]
+    ocr_language: Option<String>,
 }
 
 fn load_settings(path: &Path) -> PersistedSettings {
@@ -3310,6 +3314,13 @@ pub fn run() {
             check_ghostscript,
             save_as_pdfa,
             convert_files_to_pdfa,
+            ocr::check_tesseract,
+            ocr::download_ocr_language,
+            ocr::ocr_document,
+            ocr::ocr_files_batch,
+            ocr::detect_needs_ocr,
+            ocr::get_ocr_language,
+            ocr::set_ocr_language,
             vprinter::virtual_printer_status,
             vprinter::install_virtual_printer,
             vprinter::uninstall_virtual_printer,
