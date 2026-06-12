@@ -35,15 +35,39 @@ fn strip_background_path(svg: &str) -> String {
     svg.to_string()
 }
 
-/// Render an SVG at its natural size (1 px per SVG unit).
-fn render_svg(svg: &str) -> RgbaImage {
-    let opt = resvg::usvg::Options::default();
-    let tree = resvg::usvg::Tree::from_str(svg, &opt).expect("svg parse");
+/// Lift Inkscape's variable-font weight (`font-variation-settings:'wght' N`
+/// alongside `font-weight:normal`) into the `font-weight` property, which is
+/// the only one resvg honors.
+fn fix_variable_font_weights(svg: &str) -> String {
+    let marker = "font-variation-settings:'wght' ";
+    let mut parts = svg.split(marker);
+    let mut out = String::from(parts.next().unwrap());
+    for part in parts {
+        let weight: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Some(idx) = out.rfind("font-weight:normal") {
+            out.replace_range(idx..idx + "font-weight:normal".len(), &format!("font-weight:{weight}"));
+        }
+        out.push_str(marker);
+        out.push_str(part);
+    }
+    out
+}
+
+/// Parse an SVG with system fonts available (the wordmark uses live
+/// `<text>` in Manrope).
+fn parse_svg(svg: &str) -> resvg::usvg::Tree {
+    let mut opt = resvg::usvg::Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    resvg::usvg::Tree::from_str(svg, &opt).expect("svg parse")
+}
+
+/// Render an SVG tree at its natural size (1 px per SVG unit).
+fn render_svg(tree: &resvg::usvg::Tree) -> RgbaImage {
     let size = tree.size();
     let (w, h) = (size.width().ceil() as u32, size.height().ceil() as u32);
     let mut pm = resvg::tiny_skia::Pixmap::new(w, h).expect("pixmap");
     resvg::render(
-        &tree,
+        tree,
         resvg::tiny_skia::Transform::identity(),
         &mut pm.as_mut(),
     );
@@ -134,26 +158,37 @@ fn resize(img: &RgbaImage, w: u32, h: u32) -> RgbaImage {
 }
 
 /// Set the SVG viewBox to the rendered content bbox so the vector asset
-/// has no dead margin around the artwork.
+/// has no dead margin around the artwork. Drops width/height so the
+/// viewBox alone defines the aspect ratio (usvg's writer emits only
+/// width/height, Inkscape emits all three).
 fn rewrite_viewbox(svg: &str, bbox: (u32, u32, u32, u32)) -> String {
-    let start = svg.find("viewBox=\"").expect("viewBox");
-    let vstart = start + "viewBox=\"".len();
-    let vend = vstart + svg[vstart..].find('"').expect("viewBox end");
+    let svg_start = svg.find("<svg").expect("svg tag");
+    let tag_end = svg_start + svg[svg_start..].find('>').expect("svg tag end");
+    let mut head = svg[..tag_end].to_string();
+    let tail = &svg[tag_end..];
+    for attr in ["viewBox=\"", " width=\"", " height=\""] {
+        while let Some(s) = head[svg_start..].find(attr).map(|i| i + svg_start) {
+            let vs = s + attr.len();
+            let ve = vs + head[vs..].find('"').expect("attr end");
+            head.replace_range(s..ve + 1, "");
+        }
+    }
     format!(
-        "{}{} {} {} {}{}",
-        &svg[..vstart],
+        "{} viewBox=\"{} {} {} {}\"{}",
+        head.trim_end(),
         bbox.0,
         bbox.1,
         bbox.2,
         bbox.3,
-        &svg[vend..]
+        tail
     )
 }
 
 fn process(svg_path: &str, out_svg: &str) -> RgbaImage {
     let raw = std::fs::read_to_string(svg_path).expect(svg_path);
-    let stripped = strip_background_path(&raw);
-    let mut img = render_svg(&stripped);
+    let stripped = fix_variable_font_weights(&strip_background_path(&raw));
+    let tree = parse_svg(&stripped);
+    let mut img = render_svg(&tree);
     // Flood fill only as a fallback: when the background path was
     // stripped successfully the canvas is already transparent, and the
     // fill would chew into the white page edges of the artwork.
@@ -165,7 +200,14 @@ fn process(svg_path: &str, out_svg: &str) -> RgbaImage {
         knock_out_background(&mut img);
     }
     let bbox = content_bbox(&img, 0.02);
-    std::fs::write(out_svg, rewrite_viewbox(&stripped, bbox)).expect(out_svg);
+    // Live <text> needs the font on the user's machine; serialize through
+    // usvg so the shipped asset carries the glyphs as plain paths.
+    let out = if stripped.contains("<text") {
+        tree.to_string(&resvg::usvg::WriteOptions::default())
+    } else {
+        stripped
+    };
+    std::fs::write(out_svg, rewrite_viewbox(&out, bbox)).expect(out_svg);
     image::imageops::crop_imm(&img, bbox.0, bbox.1, bbox.2, bbox.3).to_image()
 }
 
