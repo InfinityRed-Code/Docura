@@ -1,0 +1,19 @@
+[package]
+name = "desktop-slint"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "docura-slint"
+path = "src/main.rs"
+
+[dependencies]
+pdf_core = { workspace = true }
+pdf_pdfium = { workspace = true }
+pdf_types = { workspace = true }
+slint = "1"
+rfd = "0.15"
+
+[build-dependencies]
+slint-build = "1"
