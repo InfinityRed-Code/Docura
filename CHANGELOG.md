@@ -9,6 +9,37 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [1.0.1] — 2026-06-13
+
+Bug fixes and small tools for the v1.0 OCR and annotation features.
+
+### Fixed
+- **OCR found no text with downloaded language packs.** TSV word boxes are
+  now requested via `-c tessedit_create_tsv=1` instead of the `tsv`
+  configfile. The configfile lives in `<tessdata>/configs/`, which a
+  downloaded language-pack directory (passed as `--tessdata-dir`) does not
+  have, so Tesseract silently fell back to plain-text output and the parser
+  found zero words. Only affected downloaded languages (e.g. `deu`), not the
+  bundled-system `eng`.
+- **OCR text landed off-page on some PDFs (e.g. Canva exports).** Appended
+  content (the OCR text layer and every overlay) is now isolated from the
+  existing page content with `q`/`Q`. Content streams that leave a
+  non-identity CTM active no longer drag the injected text far off-page —
+  which had made it unsearchable (`FPDFText_GetBoundedText` over the page
+  rect found nothing) and unselectable.
+- **Selection/highlight boxes of tightly spaced words overlapped.** The text
+  layer now scales each run's glyphs horizontally to its box width, so the
+  invisible selection text no longer overflows into the neighbouring word.
+- **Highlighting words produced doubled, darker overlapping marks.** Markup
+  rectangles are merged per line before the annotation is created, yielding
+  one continuous bar instead of overlapping per-word quads.
+
+### Added
+- **Eraser tool.** Click an annotation to delete it (Edit tab, next to the
+  markup tools). Undo restores it.
+- **Extract Selected** is now also available in the Organize ribbon, before
+  the split tool.
+
 ## [1.0.0] — 2026-06-12
 
 Milestone v1.0 "OCR & Scans": scanned documents become searchable.

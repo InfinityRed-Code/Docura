@@ -25,7 +25,7 @@ export function clearSignToolUi() {
 
 function setAnnotTool(k: MarkupKind | null) {
   state.annotTool = k;
-  if (k !== null) { state.shapeTool = null; clearSignToolUi(); }
+  if (k !== null) { state.shapeTool = null; clearSignToolUi(); clearEraseMode(); }
   document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.annot === k);
   });
@@ -38,7 +38,7 @@ function setAnnotTool(k: MarkupKind | null) {
 
 export function setShapeTool(k: ShapeKindUi | null) {
   state.shapeTool = k;
-  if (k !== null) { state.annotTool = null; clearSignToolUi(); }
+  if (k !== null) { state.annotTool = null; clearSignToolUi(); clearEraseMode(); }
   document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.shape === k);
   });
@@ -47,6 +47,59 @@ export function setShapeTool(k: ShapeKindUi | null) {
   });
   document.body.classList.toggle("shapeMode", k !== null);
   document.body.classList.toggle("annotMode", false);
+}
+
+// Eraser tool: click an existing annotation to delete it.
+export function clearEraseMode() {
+  state.eraseMode = false;
+  document.getElementById("eraseAnnotBtn")?.classList.remove("active");
+  document.body.classList.remove("eraseMode");
+}
+
+function setEraseMode(on: boolean) {
+  state.eraseMode = on;
+  if (on) {
+    state.annotTool = null;
+    state.shapeTool = null;
+    clearSignToolUi();
+    document.querySelectorAll<HTMLButtonElement>(".annotTool,.shapeTool").forEach((b) => {
+      b.classList.remove("active");
+    });
+    document.body.classList.remove("annotMode", "shapeMode");
+  }
+  document.getElementById("eraseAnnotBtn")?.classList.toggle("active", on);
+  document.body.classList.toggle("eraseMode", on);
+}
+
+// Topmost annotation (last in document order) whose rectangle contains the
+// page-space point, or null. Used by the eraser hit-test.
+function annotationAtPagePoint(pageIdx: number, px: number, py: number): AnnotationInfo | null {
+  let best: AnnotationInfo | null = null;
+  for (const a of state.cachedAnnotations) {
+    if (a.page !== pageIdx) continue;
+    const r = a.rect_pt;
+    const x0 = Math.min(r.x0, r.x1), x1 = Math.max(r.x0, r.x1);
+    const y0 = Math.min(r.y0, r.y1), y1 = Math.max(r.y0, r.y1);
+    if (px >= x0 && px <= x1 && py >= y0 && py <= y1) best = a;
+  }
+  return best;
+}
+
+async function eraseAnnotation(a: AnnotationInfo) {
+  if (!state.currentDoc) return;
+  setStatus("Removing annotation…");
+  try {
+    const snap = await invoke<DocSnapshot>("delete_annotation", {
+      document: state.currentDoc,
+      page: a.page,
+      id: a.id,
+    });
+    applyDocSnapshot(snap);
+    await refreshComments();
+    setStatus("Annotation removed");
+  } catch (e) {
+    setStatus(`Erase error: ${e}`);
+  }
 }
 
 export function hexToRgb01(hex: string): [number, number, number] {
@@ -101,6 +154,45 @@ function screenRectToPagePt(domRect: DOMRect, slot: Slot, pageIdx: number): Rect
   }
 }
 
+// Union selection rectangles that lie on the same line so the resulting
+// markup is one continuous bar per line instead of one quad per word. Without
+// this, the per-word rects from `range.getClientRects()` can overlap (e.g. the
+// OCR text layer), and overlapping semi-transparent highlight quads stack into
+// darker "double-marked" seams.
+function mergeLineRects(rects: RectPt[]): RectPt[] {
+  const norm = rects.map((r) => ({
+    x0: Math.min(r.x0, r.x1),
+    x1: Math.max(r.x0, r.x1),
+    y0: Math.min(r.y0, r.y1),
+    y1: Math.max(r.y0, r.y1),
+  }));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < norm.length && !changed; i++) {
+      for (let j = i + 1; j < norm.length; j++) {
+        const a = norm[i];
+        const b = norm[j];
+        const minH = Math.min(a.y1 - a.y0, b.y1 - b.y0);
+        const vOverlap = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+        const sameLine = minH > 0 && vOverlap > minH * 0.5;
+        // Merge when the x-spans overlap or sit within ~one space of each other.
+        const hClose = Math.max(a.x0, b.x0) <= Math.min(a.x1, b.x1) + minH * 0.6;
+        if (sameLine && hClose) {
+          a.x0 = Math.min(a.x0, b.x0);
+          a.x1 = Math.max(a.x1, b.x1);
+          a.y0 = Math.min(a.y0, b.y0);
+          a.y1 = Math.max(a.y1, b.y1);
+          norm.splice(j, 1);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return norm.map((r) => ({ x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 }));
+}
+
 async function applyAnnotationFromSelection() {
   if (!state.annotTool || !state.currentDoc) return;
   const sel = window.getSelection();
@@ -129,7 +221,7 @@ async function applyAnnotationFromSelection() {
   try {
     let snap: DocSnapshot | null = null;
     for (const page of pages) {
-      const rects = byPage.get(page)!;
+      const rects = mergeLineRects(byPage.get(page)!);
       snap = await invoke<DocSnapshot>("add_annotation", {
         document: state.currentDoc,
         args: { page, rects, kind, color, opacity, print: state.printAnnotations },
@@ -990,6 +1082,26 @@ export function initAnnot() {
       }
       setShapeTool(k);
     });
+  });
+
+  // Eraser tool button
+  document.getElementById("eraseAnnotBtn")?.addEventListener("click", () => {
+    setEraseMode(!state.eraseMode);
+  });
+
+  // Eraser: click an annotation to delete it.
+  document.addEventListener("pointerdown", (ev) => {
+    if (!state.eraseMode || !state.currentDoc) return;
+    if (ev.button !== 0) return;
+    const hit = findSlotFromTarget(ev.target);
+    if (!hit) return;
+    const ipx = imagePxFromEvent(hit.slot, ev);
+    const pt = imagePxToPagePt(hit.slot, hit.idx, ipx.x, ipx.y);
+    if (!pt) return;
+    const a = annotationAtPagePoint(hit.idx, pt.x, pt.y);
+    if (!a) return;
+    ev.preventDefault();
+    void eraseAnnotation(a);
   });
 
   // Markup applies on text-selection mouseup over the pageList

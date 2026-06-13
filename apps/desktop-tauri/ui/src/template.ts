@@ -113,6 +113,7 @@ export function buildHtml(): string {
       </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
       <button data-ribbon="organize" id="mergePdfsBtn" title="${t("tip.merge")}"><i data-lucide="merge"></i></button>
+      <button data-ribbon="organize" id="extractSelectionOrgBtn" disabled title="${t("tip.extractSel")}"><i data-lucide="file-output"></i></button>
       <button data-ribbon="organize" id="splitPdfBtn" title="${t("tip.split")}"><i data-lucide="scissors"></i></button>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
@@ -121,6 +122,7 @@ export function buildHtml(): string {
             <button class="modeBtn annotTool" data-annot="underline" title="${t("tip.underline")}"><i data-lucide="underline"></i></button>
             <button class="modeBtn annotTool" data-annot="strikeout" title="${t("tip.strikeout")}"><i data-lucide="strikethrough"></i></button>
           </div>
+          <button class="modeBtn" id="eraseAnnotBtn" title="${t("tip.eraseAnnot")}"><i data-lucide="eraser"></i></button>
           <input type="color" id="annotColor" value="#ffe600" title="${t("tip.annotColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
           <button class="modeBtn active" id="printToggleBtn" title="${t("tip.printToggle")}"><i data-lucide="printer"></i></button>
         </div>
@@ -902,6 +904,8 @@ export const CSS = `
   body.shapeMode .selectLayer { pointer-events:none; }
   body.signMode .drawLayer { pointer-events:auto; cursor:crosshair; }
   body.signMode .selectLayer { pointer-events:none; }
+  body.eraseMode .selectLayer { pointer-events:none; }
+  body.eraseMode .pageSlot { cursor:cell; }
   .signMark.active { background:var(--accent-tint) !important; color:var(--accent-strong) !important; border-color:#bcd4f6 !important; }
   .sigCanvas { display:block; width:100%; height:160px; background:#fff;
                border:1px dashed var(--accent); border-radius:5px; cursor:crosshair; touch-action:none; }

@@ -586,6 +586,7 @@ export function initEdit() {
   // Edit-mode action buttons
   document.getElementById("deleteSelectionBtn")!.addEventListener("click", deleteSelectedPages);
   document.getElementById("extractSelectionBtn")!.addEventListener("click", extractSelectedPages);
+  document.getElementById("extractSelectionOrgBtn")?.addEventListener("click", extractSelectedPages);
 
   // Rotate menu
   dom.rotateMenuBtn.addEventListener("click", (e) => {

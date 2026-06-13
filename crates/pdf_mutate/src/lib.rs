@@ -695,6 +695,13 @@ impl MutableDoc {
         read::list_annotations(&self.inner)
     }
 
+    /// Remove the annotation with the given id (as reported by
+    /// [`list_annotations`](Self::list_annotations)) from a 0-indexed page.
+    /// Returns whether a matching annotation was found and removed.
+    pub fn delete_annotation(&mut self, page_index: u32, id: &str) -> MutateResult<bool> {
+        annotations::delete_annotation(&mut self.inner, page_index, id)
+    }
+
     /// Redaction: replace a page's whole content with a pre-rendered JPEG
     /// (regions already blacked out in pixel data). Removes the original
     /// content streams and annotations from the file.

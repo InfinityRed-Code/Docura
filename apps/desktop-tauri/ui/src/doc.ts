@@ -561,6 +561,11 @@ export function refreshSelectionUi() {
       : "Extract selected";
     ex.innerHTML = `<i data-lucide="file-output"></i> ${label}`;
   }
+  // Icon-only twin of the extract action in the Organize ribbon.
+  const exOrg = document.getElementById("extractSelectionOrgBtn") as HTMLButtonElement | null;
+  if (exOrg) {
+    exOrg.disabled = state.selectedPages.size === 0;
+  }
   refreshIcons();
   if (dom.modeHint) {
     const base = state.selectedPages.size === 0 ? "" : `${state.selectedPages.size} selected`;

@@ -276,6 +276,85 @@ fn page_id_for(doc: &Document, page_index: u32) -> MutateResult<ObjectId> {
         .ok_or(MutateError::PageOutOfRange(page_index, total))
 }
 
+/// The stable id read::list_annotations reports for an annotation: its `NM`
+/// name string, falling back to `obj-<num>-<gen>`. Must mirror that logic so
+/// the frontend can address an annotation for deletion.
+fn annot_id_string(dict: &Dictionary, oid: Option<ObjectId>) -> String {
+    if let Ok(s) = dict.get(b"NM").and_then(|o| o.as_str()) {
+        let dec = String::from_utf8_lossy(s).to_string();
+        if !dec.is_empty() {
+            return dec;
+        }
+    }
+    match oid {
+        Some(o) => format!("obj-{}-{}", o.0, o.1),
+        None => "obj-0-0".to_string(),
+    }
+}
+
+/// Remove the annotation whose id (see [`annot_id_string`]) matches `id` from
+/// the given 0-indexed page. Returns whether one was removed. The `Annots`
+/// array may be stored inline on the page or as an indirect array object.
+pub fn delete_annotation(doc: &mut Document, page_index: u32, id: &str) -> MutateResult<bool> {
+    let page_id = page_id_for(doc, page_index)?;
+    let annots_obj = doc
+        .get_dictionary(page_id)
+        .map_err(|e| MutateError::Parse(e.to_string()))?
+        .get(b"Annots")
+        .ok()
+        .cloned();
+    let Some(annots_obj) = annots_obj else {
+        return Ok(false);
+    };
+    let (mut arr, target_ref): (Vec<Object>, Option<ObjectId>) = match annots_obj {
+        Object::Array(a) => (a, None),
+        Object::Reference(r) => match doc.get_object(r) {
+            Ok(Object::Array(a)) => (a.clone(), Some(r)),
+            _ => return Ok(false),
+        },
+        _ => return Ok(false),
+    };
+
+    let mut remove_at: Option<usize> = None;
+    let mut remove_oid: Option<ObjectId> = None;
+    for (i, entry) in arr.iter().enumerate() {
+        let (oid, dict) = match entry {
+            Object::Reference(r) => match doc.get_dictionary(*r) {
+                Ok(d) => (Some(*r), d),
+                Err(_) => continue,
+            },
+            Object::Dictionary(d) => (None, d),
+            _ => continue,
+        };
+        if annot_id_string(dict, oid) == id {
+            remove_at = Some(i);
+            remove_oid = oid;
+            break;
+        }
+    }
+    let Some(i) = remove_at else {
+        return Ok(false);
+    };
+    arr.remove(i);
+
+    match target_ref {
+        Some(r) => {
+            if let Ok(obj) = doc.get_object_mut(r) {
+                *obj = Object::Array(arr);
+            }
+        }
+        None => {
+            if let Ok(pd) = doc.get_dictionary_mut(page_id) {
+                pd.set("Annots", Object::Array(arr));
+            }
+        }
+    }
+    if let Some(oid) = remove_oid {
+        doc.objects.remove(&oid);
+    }
+    Ok(true)
+}
+
 fn base_annot_dict(
     page_id: ObjectId,
     subtype: &str,
@@ -1098,4 +1177,67 @@ pub fn add_text_note_annotation(
     let annot_id = doc.add_object(Object::Dictionary(d));
     append_annot_to_page(doc, page_id, annot_id)?;
     Ok(annot_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdf_types::RectPt;
+
+    fn one_page_doc() -> Document {
+        let mut d = Document::with_version("1.5");
+        let pages_id = d.new_object_id();
+        let page_id = d.new_object_id();
+        let cat_id = d.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", Object::Reference(pages_id));
+        page.set(
+            "MediaBox",
+            Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        );
+        d.objects.insert(page_id, Object::Dictionary(page));
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", Object::Array(vec![Object::Reference(page_id)]));
+        pages.set("Count", Object::Integer(1));
+        d.objects.insert(pages_id, Object::Dictionary(pages));
+        let mut cat = Dictionary::new();
+        cat.set("Type", Object::Name(b"Catalog".to_vec()));
+        cat.set("Pages", Object::Reference(pages_id));
+        d.objects.insert(cat_id, Object::Dictionary(cat));
+        d.trailer.set("Root", Object::Reference(cat_id));
+        d.max_id = cat_id.0;
+        d
+    }
+
+    #[test]
+    fn delete_annotation_removes_by_id() {
+        let mut doc = one_page_doc();
+        let annot = MarkupAnnotation {
+            kind: MarkupKind::Highlight,
+            rects: vec![RectPt { x0: 72.0, y0: 100.0, x1: 200.0, y1: 120.0 }],
+            color: [1.0, 0.9, 0.0],
+            opacity: 0.4,
+            contents: None,
+            author: None,
+            print: true,
+        };
+        add_markup_annotation(&mut doc, 0, &annot).unwrap();
+
+        let listed = crate::read::list_annotations(&doc);
+        assert_eq!(listed.len(), 1, "annotation should be listed");
+        let id = listed[0].id.clone();
+
+        // Unknown id is a no-op.
+        assert!(!delete_annotation(&mut doc, 0, "no-such-id").unwrap());
+        assert_eq!(crate::read::list_annotations(&doc).len(), 1);
+
+        // Real id removes it.
+        assert!(delete_annotation(&mut doc, 0, &id).unwrap());
+        assert!(crate::read::list_annotations(&doc).is_empty());
+
+        // Second delete finds nothing.
+        assert!(!delete_annotation(&mut doc, 0, &id).unwrap());
+    }
 }

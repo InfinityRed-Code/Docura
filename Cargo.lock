@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-tauri"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3327,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_cache"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "lru",
  "pdf_types",
@@ -3335,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "pdf_types",
@@ -3346,7 +3346,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_export"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "docx-rs",
  "pdf_types",
@@ -3356,7 +3356,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_mutate"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_pdfium"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "image",
@@ -3389,7 +3389,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_services"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "pdf_types",
@@ -3399,7 +3399,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_sign"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "cms",
  "der",
@@ -3422,7 +3422,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_types"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "uuid",

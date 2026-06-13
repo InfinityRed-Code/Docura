@@ -1850,6 +1850,43 @@ async fn add_annotation(
     snapshot_doc(state, document).await
 }
 
+/// Delete a single annotation (by the id reported by `list_annotations`) from
+/// a page. Returns the refreshed snapshot. No-op if the id is not found.
+#[tauri::command]
+async fn delete_annotation(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+    id: String,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes, removed) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>, bool), String> {
+            let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+            let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            let removed = mdoc.delete_annotation(page, &id).map_err(|e| e.to_string())?;
+            if !removed {
+                // Nothing to write; signal caller to skip reload.
+                return Ok((bytes.clone(), bytes, false));
+            }
+            let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+            Ok((bytes, out, true))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    if !removed {
+        return snapshot_doc(state, document).await;
+    }
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
+
 #[derive(Deserialize)]
 struct ShapeArgs {
     page: u32,
@@ -3292,6 +3329,7 @@ pub fn run() {
             add_header_footer,
             add_image_watermark,
             add_annotation,
+            delete_annotation,
             add_shape,
             add_freetext,
             add_ink,

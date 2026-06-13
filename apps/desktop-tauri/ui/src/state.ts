@@ -74,6 +74,7 @@ export const state = {
   // Annotations
   annotTool: null as MarkupKind | null,
   shapeTool: null as ShapeKindUi | null,
+  eraseMode: false,
   stampImagePath: null as string | null,
   printAnnotations: true,
   drawState: null as DrawState | null,

@@ -475,7 +475,14 @@ fn run_tesseract_tsv(
     if let Some(dir) = tessdata {
         cmd.arg("--tessdata-dir").arg(dir);
     }
-    let out = no_window(&mut cmd).arg("tsv").output();
+    // Request TSV via the config variable, not the `tsv` configfile: the
+    // configfile lives in `<tessdata>/configs/tsv`, but a downloaded
+    // language pack dir (passed as --tessdata-dir) has no `configs/`, so
+    // the configfile silently falls back to plain-text output and the
+    // parser below finds zero words. The `-c` form has no such dependency.
+    let out = no_window(&mut cmd)
+        .args(["-c", "tessedit_create_tsv=1"])
+        .output();
     let _ = std::fs::remove_file(&png);
     let out = out.map_err(|e| format!("tesseract spawn: {e}"))?;
     if !out.status.success() {
@@ -915,6 +922,27 @@ mod tests {
         for w in &words {
             assert!(w.x >= 0.0 && w.x + w.w <= gray.width() as f32 + 1.0);
             assert!(w.y >= 0.0 && w.y + w.h <= gray.height() as f32 + 1.0);
+        }
+
+        // Regression: a downloaded language pack is passed via
+        // --tessdata-dir to a directory that has no `configs/` subdir.
+        // TSV output must still come through (we request it with
+        // `-c tessedit_create_tsv=1`, not the `tsv` configfile which lives
+        // under configs/ and would silently fall back to plain text).
+        let sys_pack = Path::new(&tesseract)
+            .parent()
+            .map(|p| p.join("tessdata").join("eng.traineddata"));
+        if let Some(src) = sys_pack.filter(|p| p.exists()) {
+            let tmp = std::env::temp_dir().join(format!("docura-ocr-test-td-{}", std::process::id()));
+            std::fs::create_dir_all(&tmp).unwrap();
+            std::fs::copy(&src, tmp.join("eng.traineddata")).unwrap();
+            let td_words = run_tesseract_tsv(&tesseract, Some(&tmp), "eng", &gray).unwrap();
+            let _ = std::fs::remove_dir_all(&tmp);
+            let td_texts: Vec<&str> = td_words.iter().map(|w| w.text.as_str()).collect();
+            assert!(
+                td_texts.contains(&"INVOICE"),
+                "tessdata-dir TSV regression: {td_texts:?}"
+            );
         }
 
         // Inject onto a blank page and verify the text extracts back.

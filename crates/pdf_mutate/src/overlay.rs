@@ -340,7 +340,6 @@ pub(crate) fn append_content_stream(
     page_id: ObjectId,
     content: Vec<u8>,
 ) -> MutateResult<()> {
-    let stream_id = doc.add_object(Object::Stream(Stream::new(Dictionary::new(), content)));
     // /Contents may be: missing, a Stream (direct or indirect), an array.
     let current = doc
         .get_dictionary(page_id)
@@ -350,18 +349,39 @@ pub(crate) fn append_content_stream(
         .cloned();
 
     let new_contents = match current {
-        None => Object::Array(vec![Object::Reference(stream_id)]),
-        Some(Object::Reference(r)) => {
-            Object::Array(vec![Object::Reference(r), Object::Reference(stream_id)])
+        None => {
+            let stream_id =
+                doc.add_object(Object::Stream(Stream::new(Dictionary::new(), content)));
+            Object::Array(vec![Object::Reference(stream_id)])
         }
-        Some(Object::Array(mut arr)) => {
+        Some(existing) => {
+            // Isolate the existing page content's graphics state so the
+            // appended content draws in the page's default user space. A
+            // content stream that leaves a non-identity CTM active (e.g.
+            // Canva exports that never restore a page-level `cm`) would
+            // otherwise transform the appended text/overlay far off-page —
+            // making OCR text unsearchable and unselectable. Wrap the prior
+            // content in `q`/`Q`: the leading save runs before it, the
+            // matching restore prefixes our own stream.
+            let save_id =
+                doc.add_object(Object::Stream(Stream::new(Dictionary::new(), b"q\n".to_vec())));
+            let mut restored = Vec::with_capacity(content.len() + 2);
+            restored.extend_from_slice(b"Q\n");
+            restored.extend_from_slice(&content);
+            let stream_id =
+                doc.add_object(Object::Stream(Stream::new(Dictionary::new(), restored)));
+            let mut arr = vec![Object::Reference(save_id)];
+            match existing {
+                Object::Reference(r) => arr.push(Object::Reference(r)),
+                Object::Array(a) => arr.extend(a),
+                other => {
+                    // Inline stream — promote to indirect.
+                    let promoted = doc.add_object(other);
+                    arr.push(Object::Reference(promoted));
+                }
+            }
             arr.push(Object::Reference(stream_id));
             Object::Array(arr)
-        }
-        Some(other) => {
-            // Inline stream — promote to indirect.
-            let promoted = doc.add_object(other);
-            Object::Array(vec![Object::Reference(promoted), Object::Reference(stream_id)])
         }
     };
 

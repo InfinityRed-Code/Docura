@@ -313,6 +313,10 @@ async function ensureTextLayer(idx: number) {
   if (!sz) return;
   const rot = effectiveRotation(idx);
   slot.selectLayer.innerHTML = "";
+  // First pass: place each run's text at its box, font-size = box height,
+  // but DON'T constrain the width — let the glyphs lay out at their natural
+  // size so we can measure it.
+  const pending: { span: HTMLSpanElement; targetW: number }[] = [];
   for (const run of runs) {
     const box = rotateRectToSlot(run.rect_pt, rot, sz, slot.img.width, slot.img.height);
     if (box.width <= 0 || box.height <= 0) continue;
@@ -322,8 +326,16 @@ async function ensureTextLayer(idx: number) {
     span.style.top = `${box.top}px`;
     span.style.fontSize = `${box.height}px`;
     span.style.height = `${box.height}px`;
-    span.style.width = `${box.width}px`;
     slot.selectLayer.appendChild(span);
+    pending.push({ span, targetW: box.width });
+  }
+  // Second pass (single reflow): scale each run's glyphs horizontally to fill
+  // exactly its box width. Without this the natural text width overflows the
+  // box and the selection/highlight rectangles of tightly spaced words
+  // overlap. transform-origin is 0 0 (CSS) so the left edge stays put.
+  for (const { span, targetW } of pending) {
+    const natural = span.offsetWidth;
+    if (natural > 0) span.style.transform = `scaleX(${targetW / natural})`;
   }
 }
 
