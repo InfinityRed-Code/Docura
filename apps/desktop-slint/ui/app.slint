@@ -1,73 +1,152 @@
-import { Button, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { Button, LineEdit, ListView, HorizontalBox, VerticalBox } from "std-widgets.slint";
 
-// One row = one page. `w`/`h` are the on-screen size (reserved for layout so
-// the scrollbar is correct before the bitmap exists); `img` is filled lazily
-// when the page scrolls into view.
 struct PageRow {
     w: length,
     h: length,
     img: image,
 }
 
+struct Thumb {
+    img: image,
+    label: string,
+}
+
+// A search-hit rectangle on the active hit page, in display pixels relative
+// to the page's top-left.
+struct HitRect {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+}
+
 export component AppWindow inherits Window {
     title: "Docura PDF — Slint";
-    preferred-width: 1100px;
+    preferred-width: 1200px;
     preferred-height: 850px;
     background: #333333;
 
     in property <[PageRow]> pages;
-    in property <string> info: "Open a PDF";
+    in property <[Thumb]> thumbs;
+    in property <bool> show-thumbs: false;
     in property <bool> has-doc: false;
+    in property <string> info: "Open a PDF";
+    in property <string> search-info: "";
+    // Active hit overlay: rects are drawn only on page index `hl-page`.
+    in property <int> hl-page: -1;
+    in property <[HitRect]> hl-rects;
+    // Two-way scroll offset of the page list (set by Rust to jump pages).
+    in-out property <length> list-vp-y;
 
     callback open-clicked();
     callback zoom-in();
     callback zoom-out();
-    // Fired when a page delegate is realised (scrolled into view) — the Rust
-    // side renders that page on a worker thread and fills its image.
+    callback search(string);
+    callback next-hit();
+    callback prev-hit();
+    callback toggle-thumbs();
+    callback thumb-clicked(int);
     callback request-render(int);
+    callback request-thumb(int);
+    callback scrolled(length);
 
     VerticalBox {
         padding: 0px;
         spacing: 0px;
 
+        // Toolbar
         Rectangle {
-            height: 46px;
+            height: 48px;
             background: #1e1e1e;
             HorizontalBox {
                 padding: 8px;
                 spacing: 6px;
                 alignment: start;
+                Button { text: "☰"; enabled: has-doc; clicked => { root.toggle-thumbs(); } }
                 Button { text: "Open…"; clicked => { root.open-clicked(); } }
                 Button { text: "−"; enabled: has-doc; clicked => { root.zoom-out(); } }
                 Button { text: "+"; enabled: has-doc; clicked => { root.zoom-in(); } }
-                Text {
-                    text: info;
-                    color: #dddddd;
-                    vertical-alignment: center;
+                Rectangle { width: 12px; }
+                search-box := LineEdit {
+                    width: 220px;
+                    placeholder-text: "Search…";
+                    enabled: has-doc;
+                    accepted(t) => { root.search(t); }
                 }
+                Button { text: "◀"; enabled: has-doc; clicked => { root.prev-hit(); } }
+                Button { text: "▶"; enabled: has-doc; clicked => { root.next-hit(); } }
+                Text { text: search-info; color: #cccccc; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: info; color: #dddddd; vertical-alignment: center; }
             }
         }
 
-        ListView {
-            for row[i] in pages: Rectangle {
-                height: row.h + 14px;
-                background: transparent;
-                page := Rectangle {
-                    y: 7px;
-                    width: row.w;
-                    height: row.h;
-                    x: (parent.width - self.width) / 2;
-                    background: white;
-                    drop-shadow-blur: 7px;
-                    drop-shadow-color: #00000055;
-                    Image {
-                        width: 100%;
-                        height: 100%;
-                        source: row.img;
-                        image-rendering: smooth;
+        // Body: optional thumbnail rail + page list
+        HorizontalBox {
+            padding: 0px;
+            spacing: 0px;
+
+            if show-thumbs : Rectangle {
+                width: 170px;
+                background: #262626;
+                ListView {
+                    for t[i] in thumbs : Rectangle {
+                        height: 190px;
+                        TouchArea {
+                            clicked => { root.thumb-clicked(i); }
+                            VerticalBox {
+                                padding: 6px;
+                                Image {
+                                    height: 158px;
+                                    source: t.img;
+                                    image-fit: contain;
+                                    init => { root.request-thumb(i); }
+                                }
+                                Text {
+                                    text: t.label;
+                                    color: #bbbbbb;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
                     }
-                    init => {
-                        root.request-render(i);
+                }
+            }
+
+            page-list := ListView {
+                viewport-y <=> root.list-vp-y;
+                changed viewport-y => { root.scrolled(self.viewport-y); }
+                for row[i] in pages : Rectangle {
+                    height: row.h + 14px;
+                    background: transparent;
+                    Rectangle {
+                        y: 7px;
+                        width: row.w;
+                        height: row.h;
+                        x: (parent.width - self.width) / 2;
+                        background: white;
+                        drop-shadow-blur: 7px;
+                        drop-shadow-color: #00000055;
+                        Image {
+                            width: 100%;
+                            height: 100%;
+                            source: row.img;
+                            image-rendering: smooth;
+                            init => { root.request-render(i); }
+                        }
+                        // Search-hit overlay (only on the active hit page).
+                        if i == root.hl-page : Rectangle {
+                            for r in root.hl-rects : Rectangle {
+                                x: r.x;
+                                y: r.y;
+                                width: r.w;
+                                height: r.h;
+                                background: #ffd60066;
+                                border-color: #e0a000;
+                                border-width: 1px;
+                            }
+                        }
                     }
                 }
             }
