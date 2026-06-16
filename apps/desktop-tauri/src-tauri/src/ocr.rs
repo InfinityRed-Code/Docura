@@ -981,7 +981,7 @@ mod tests {
             })
             .unwrap();
         let gray = preprocess_gray(rgba_to_gray(r.width_px, r.height_px, &r.rgba));
-        let words = run_tesseract_tsv(&tesseract, None, "eng", &gray).unwrap();
+        let words = run_tesseract_tsv(&tesseract, None, "eng", &gray, 1).unwrap();
         engine.close(doc).unwrap();
 
         let texts: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
@@ -1005,7 +1005,7 @@ mod tests {
             let tmp = std::env::temp_dir().join(format!("docura-ocr-test-td-{}", std::process::id()));
             std::fs::create_dir_all(&tmp).unwrap();
             std::fs::copy(&src, tmp.join("eng.traineddata")).unwrap();
-            let td_words = run_tesseract_tsv(&tesseract, Some(&tmp), "eng", &gray).unwrap();
+            let td_words = run_tesseract_tsv(&tesseract, Some(&tmp), "eng", &gray, 1).unwrap();
             let _ = std::fs::remove_dir_all(&tmp);
             let td_texts: Vec<&str> = td_words.iter().map(|w| w.text.as_str()).collect();
             assert!(
