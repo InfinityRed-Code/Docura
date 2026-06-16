@@ -26,6 +26,13 @@ Work on the v1.1 "Performance & Polish" milestone.
   `settings.json` and applied on startup.
 
 ### Changed
+- **Text-markup annotations now carry an appearance stream.** Highlight,
+  underline and strikeout each write an explicit `/AP /N` form instead of
+  relying on the viewer to synthesise one, so they render identically across
+  viewers and when printed or flattened. Highlights use the Multiply blend mode
+  so the text underneath stays readable (a real-highlighter look) instead of a
+  flat wash; underline/strikeout draw a clean per-line stroke at the baseline /
+  mid-line.
 - **Render cache is now byte-budgeted.** `pdf_cache` evicts by an approximate
   MB budget instead of a fixed entry count, a better proxy for actual memory
   given how much encoded page sizes vary.

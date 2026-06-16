@@ -156,9 +156,11 @@ pub fn add_markup_annotation(
 
     // Collect quadpoints + bounding rect.
     let mut quad: Vec<Object> = Vec::with_capacity(annot.rects.len() * 8);
+    let mut rects_native: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(annot.rects.len());
     let mut bbox: Option<(f32, f32, f32, f32)> = None;
     for r in &annot.rects {
         let (llx, lly, urx, ury) = rect_native(r, view);
+        rects_native.push((llx, lly, urx, ury));
         // PDF spec QuadPoints order for highlight (PDF 1.7 §12.5.6.10):
         // [x1 y1 x2 y2 x3 y3 x4 y4] = top-left, top-right, bottom-left, bottom-right.
         // Acrobat interprets in that order; some viewers expect bottom-first,
@@ -222,9 +224,78 @@ pub fn add_markup_annotation(
     }
     adict.set("P", Object::Reference(page_id));
 
+    // Explicit appearance stream (/AP /N). Relying on the viewer to synthesise
+    // one leaves highlights flat (covering text) and renders inconsistently
+    // across viewers and when printed/flattened. Highlights paint with the
+    // Multiply blend mode so text shows through like a real highlighter.
+    let w = rurx - rllx;
+    let h = rury - rlly;
+    let local: Vec<(f32, f32, f32, f32)> = rects_native
+        .iter()
+        .map(|&(a, b, c, d)| (a - rllx, b - rlly, c - rllx, d - rlly))
+        .collect();
+    let content = build_markup_appearance(annot.kind, &local, color);
+    let resources = if matches!(annot.kind, MarkupKind::Highlight) {
+        let mut gs = Dictionary::new();
+        gs.set("Type", Object::Name(b"ExtGState".to_vec()));
+        gs.set("BM", Object::Name(b"Multiply".to_vec()));
+        gs.set("ca", Object::Real(opacity));
+        let mut gsd = Dictionary::new();
+        gsd.set("GShl", Object::Dictionary(gs));
+        let mut res = Dictionary::new();
+        res.set("ExtGState", Object::Dictionary(gsd));
+        Some(res)
+    } else {
+        None
+    };
+    let form_id = make_form_xobject(doc, w, h, content, resources);
+    let mut ap = Dictionary::new();
+    ap.set("N", Object::Reference(form_id));
+    adict.set("AP", Object::Dictionary(ap));
+
     let annot_id = doc.add_object(Object::Dictionary(adict));
     append_annot_to_page(doc, page_id, annot_id)?;
     Ok(annot_id)
+}
+
+/// Build the `/AP /N` content stream for a text-markup annotation. Coordinates
+/// are local to the appearance BBox (page coords minus the bbox origin).
+fn build_markup_appearance(
+    kind: MarkupKind,
+    quads: &[(f32, f32, f32, f32)],
+    rgb: [f32; 3],
+) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf: Vec<u8> = Vec::with_capacity(128);
+    let [r, g, b] = rgb;
+    match kind {
+        MarkupKind::Highlight => {
+            // Multiply blend via the /GShl ExtGState set on the form resources.
+            let _ = write!(&mut buf, "q /GShl gs {r:.3} {g:.3} {b:.3} rg\n");
+            for &(x0, y0, x1, y1) in quads {
+                let qw = (x1 - x0).max(0.0);
+                let qh = (y1 - y0).max(0.0);
+                let _ = write!(&mut buf, "{x0:.3} {y0:.3} {qw:.3} {qh:.3} re\n");
+            }
+            buf.extend_from_slice(b"f Q\n");
+        }
+        MarkupKind::Underline | MarkupKind::StrikeOut => {
+            let _ = write!(&mut buf, "q {r:.3} {g:.3} {b:.3} RG\n");
+            for &(x0, y0, x1, y1) in quads {
+                let qh = (y1 - y0).max(1.0);
+                let lw = (qh * 0.07).max(0.6);
+                let y = match kind {
+                    // Underline sits just above the baseline; strikeout crosses
+                    // the vertical middle of the text quad.
+                    MarkupKind::Underline => y0 + qh * 0.08,
+                    _ => y0 + qh * 0.5,
+                };
+                let _ = write!(&mut buf, "{lw:.3} w {x0:.3} {y:.3} m {x1:.3} {y:.3} l S\n");
+            }
+            buf.extend_from_slice(b"Q\n");
+        }
+    }
+    buf
 }
 
 fn append_annot_to_page(
@@ -1239,5 +1310,60 @@ mod tests {
 
         // Second delete finds nothing.
         assert!(!delete_annotation(&mut doc, 0, &id).unwrap());
+    }
+
+    /// The markup annotation carries an explicit appearance stream, and a
+    /// highlight blends with Multiply so text underneath stays readable.
+    fn markup_ap_stream(doc: &Document, annot_id: ObjectId) -> (Dictionary, Vec<u8>) {
+        let adict = doc.get_dictionary(annot_id).unwrap();
+        let ap = adict.get(b"AP").unwrap().as_dict().unwrap();
+        let form_ref = ap.get(b"N").unwrap().as_reference().unwrap();
+        let stream = doc.get_object(form_ref).unwrap().as_stream().unwrap();
+        (stream.dict.clone(), stream.content.clone())
+    }
+
+    #[test]
+    fn highlight_has_multiply_appearance() {
+        let mut doc = one_page_doc();
+        let annot = MarkupAnnotation {
+            kind: MarkupKind::Highlight,
+            rects: vec![RectPt { x0: 72.0, y0: 100.0, x1: 200.0, y1: 120.0 }],
+            color: [1.0, 0.9, 0.0],
+            opacity: 0.4,
+            contents: None,
+            author: None,
+            print: true,
+        };
+        let id = add_markup_annotation(&mut doc, 0, &annot).unwrap();
+        let (form, content) = markup_ap_stream(&doc, id);
+
+        // Multiply blend mode is declared on the form's ExtGState.
+        let res = form.get(b"Resources").unwrap().as_dict().unwrap();
+        let gs = res
+            .get(b"ExtGState").unwrap().as_dict().unwrap()
+            .get(b"GShl").unwrap().as_dict().unwrap();
+        assert_eq!(gs.get(b"BM").unwrap().as_name().unwrap(), b"Multiply");
+        // The content fills a rectangle and references the blend state.
+        let s = String::from_utf8_lossy(&content);
+        assert!(s.contains("/GShl gs"), "content: {s}");
+        assert!(s.contains(" re") && s.contains("f"), "content: {s}");
+    }
+
+    #[test]
+    fn underline_appearance_strokes_a_line() {
+        let mut doc = one_page_doc();
+        let annot = MarkupAnnotation {
+            kind: MarkupKind::Underline,
+            rects: vec![RectPt { x0: 72.0, y0: 100.0, x1: 200.0, y1: 120.0 }],
+            color: [0.0, 0.0, 1.0],
+            opacity: 1.0,
+            contents: None,
+            author: None,
+            print: true,
+        };
+        let id = add_markup_annotation(&mut doc, 0, &annot).unwrap();
+        let (_form, content) = markup_ap_stream(&doc, id);
+        let s = String::from_utf8_lossy(&content);
+        assert!(s.contains(" m ") && s.contains(" l S"), "content: {s}");
     }
 }
