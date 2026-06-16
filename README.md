@@ -50,16 +50,16 @@ Redaction, Export & Conversion, OCR) are all shipped. Work is now on the v1.1
   flow-reconstructed), Excel (.xlsx, table heuristic); images → PDF; Office
   files → PDF via headless LibreOffice. Save as PDF/A-1b/2b/3b/4 via
   Ghostscript, batch convert from a tray.
-- **OCR.** Tesseract-CLI OCR with an invisible text layer over the image,
-  UI-driven language packs (`tessdata_fast`), image preprocessing (deskew /
-  despeckle / contrast), batch OCR, and an auto-detect banner for text-less
-  scans.
+- **OCR.** Tesseract-CLI OCR (parallelised across pages) with an invisible text
+  layer over the image, UI-driven language packs (`tessdata_fast`), image
+  preprocessing (deskew / despeckle / contrast), batch OCR, and an auto-detect
+  banner for text-less scans.
 - **Print to PDF.** Windows virtual printer (auto-installed PS class driver +
   Ghostscript pipeline). Jobs dropped into a watched spool folder land back in
   the reader automatically.
-- **Performance.** Async render pool (no UI freeze on large pages), byte-budgeted
-  LRU page cache keyed by zoom, lazy thumbnails, eviction of far-from-viewport
-  slots.
+- **Performance.** Bounded, viewport-prioritised render pool (pages encode while
+  the next rasterises; no UI freeze on large pages), byte-budgeted LRU page
+  cache keyed by zoom, lazy thumbnails, eviction of far-from-viewport slots.
 
 See `docs/roadmap.md` for the full feature inventory and what's still open
 (form-field JS calculations, PDF → PowerPoint, and the v1.1 performance/polish

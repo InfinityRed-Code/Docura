@@ -24,6 +24,19 @@ Work on the v1.1 "Performance & Polish" milestone.
 - **Render cache is now byte-budgeted.** `pdf_cache` evicts by an approximate
   MB budget instead of a fixed entry count, a better proxy for actual memory
   given how much encoded page sizes vary.
+- **Bounded render pool with viewport priority.** Page rendering now keeps up to
+  three `render_page` calls in flight (nearest-to-viewport first) instead of
+  rendering strictly one at a time, so a page encodes while the next
+  rasterises. PDFium rasterisation stays serialised (it is not thread-safe); a
+  render epoch drops superseded results so stale bitmaps never paint after a
+  zoom/rotate.
+- **Parallel OCR.** OCR now recognises pages across a bounded pool of Tesseract
+  processes (up to 6, one per core) instead of one page at a time — a large
+  speed-up on multi-page scans. Core budget is split between the pool and each
+  process's OpenMP threads, so a single-page job still uses all cores. (Tesseract
+  has no usable GPU path, so multithreading is the available lever.)
+- **Page loading skeleton.** Never-rendered pages show a blank sheet with a soft
+  shimmer instead of the old diagonal hatch.
 - **Settings window redesigned.** A vertical navigation rail replaces the long
   stacked layout: each entry scrolls its section into view (with a scrollspy
   highlight) and horizontal scrolling is gone.

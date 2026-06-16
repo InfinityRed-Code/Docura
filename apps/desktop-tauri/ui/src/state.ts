@@ -35,7 +35,11 @@ export const state = {
   slots: [] as Slot[],
   observer: null as IntersectionObserver | null,
   renderQueue: new Set<number>(),
-  renderRunning: false,
+  // Pages whose render_page round-trip is currently in flight (bounded pool).
+  renderInFlight: new Set<number>(),
+  // Bumped on every invalidateRenders(); a render whose epoch is stale when it
+  // returns is dropped instead of painting an outdated bitmap.
+  renderEpoch: 0,
   textRunsCache: new Map<number, TextRun[]>(),
   linksCache: new Map<number, PageLink[]>(),
 

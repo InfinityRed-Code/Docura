@@ -228,19 +228,24 @@ function pruneRenderQueue() {
   }
 }
 
-async function pumpRenderQueue() {
-  if (state.renderRunning) return;
-  state.renderRunning = true;
-  try {
-    while (state.renderQueue.size > 0) {
-      pruneRenderQueue();
-      const nearest = pickNearest();
-      if (nearest === null) break;
-      state.renderQueue.delete(nearest);
-      await renderSlot(nearest);
-    }
-  } finally {
-    state.renderRunning = false;
+// Bounded render pool. PDFium rasterisation is serialised in the backend (the
+// engine is not thread-safe), but JPEG-encoding runs on its own blocking task,
+// so keeping a few render_page calls in flight lets one page encode while the
+// next rasterises. Dispatch is always nearest-to-viewport first, so the visible
+// page never waits behind far ones.
+const RENDER_CONCURRENCY = 3;
+
+function pumpRenderQueue() {
+  pruneRenderQueue();
+  while (state.renderInFlight.size < RENDER_CONCURRENCY) {
+    const nearest = pickNearest();
+    if (nearest === null) break;
+    state.renderQueue.delete(nearest);
+    state.renderInFlight.add(nearest);
+    void renderSlot(nearest).finally(() => {
+      state.renderInFlight.delete(nearest);
+      pumpRenderQueue();
+    });
   }
 }
 
@@ -248,6 +253,7 @@ function pickNearest(): number | null {
   let best: number | null = null;
   let bestDist = Infinity;
   for (const idx of state.renderQueue) {
+    if (state.renderInFlight.has(idx)) continue;
     const d = Math.abs(idx - state.currentPage);
     if (d < bestDist) {
       bestDist = d;
@@ -263,6 +269,7 @@ async function renderSlot(idx: number) {
   if (!slot) return;
   const docAtStart = state.currentDoc;
   const zoomAtStart = state.zoom;
+  const epochAtStart = state.renderEpoch;
   slot.renderingZoom = zoomAtStart;
   try {
     const res = await invoke<Rendered>("render_page", {
@@ -271,7 +278,9 @@ async function renderSlot(idx: number) {
       zoom: zoomAtStart,
       rotation: effectiveRotation(idx),
     });
-    if (docAtStart !== state.currentDoc) return;
+    // Drop the result if the view was invalidated (zoom/rotate/doc change) or
+    // the document switched while this render was in flight.
+    if (docAtStart !== state.currentDoc || epochAtStart !== state.renderEpoch) return;
     slot.img.src = res.data_url;
     slot.img.width = res.width;
     slot.img.height = res.height;
@@ -466,6 +475,8 @@ export function invalidateRenders() {
     s.linkLayer.innerHTML = "";
   }
   state.renderQueue.clear();
+  // Supersede any in-flight renders: their results paint stale bitmaps.
+  state.renderEpoch++;
 }
 
 export function reflow() {

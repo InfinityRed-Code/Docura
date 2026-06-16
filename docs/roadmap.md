@@ -224,7 +224,7 @@ Gescannte Dokumente. Ohne OCR bleibt die App für ca. 20 % der echten PDFs blind
 
 Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 
-- [ ] Render-Worker-Pool (N Threads, Priorisierung nach Viewport) [C]
+- [x] Render-Worker-Pool (N Threads, Priorisierung nach Viewport) [C] — PDFium-Rasterung ist nicht threadsafe (Engine-Mutex), daher: begrenzter Render-Pool im Frontend (3 gleichzeitig, nearest-to-viewport zuerst), Backend pipelined Rasterung (seriell) + JPEG-Encode (parallel via `spawn_blocking`); Epoch-Guard verwirft veraltete Paints bei Zoom/Rotate
 - [ ] Progressive Rendering (niedrige Auflösung zuerst, dann scharf) [C][E]
 - [ ] GPU-beschleunigtes Blitting der Seitenbilder (wgpu-Backed Canvas optional) [X: wgpu]
 - [ ] Virtuelles Scrollen im kontinuierlichen Modus (nur sichtbare Seiten) [U]

@@ -915,8 +915,17 @@ export const CSS = `
   .pageList.single > .pageSlot:not(.current) { display:none; }
   .pageSlot { position:relative; background:white; box-shadow: 0 2px 10px rgba(0,0,0,0.35); flex: 0 0 auto; }
   .pageSlot img.page { display:block; width:100%; height:100%; }
+  /* Loading skeleton for never-rendered pages: a blank sheet with a soft
+     shimmer sweep (replaces the old diagonal hatch). */
   .pageSlot .placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-                           color:#888; font-size:0.8rem; background: repeating-linear-gradient(45deg,#f0f0f0,#f0f0f0 10px,#e6e6e6 10px,#e6e6e6 20px); }
+                           color:#b8b8bd; font-size:0.8rem; background:#f4f4f5; overflow:hidden; }
+  .pageSlot .placeholder::after { content:""; position:absolute; inset:0; pointer-events:none;
+                           background: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.7) 50%, transparent 65%);
+                           transform: translateX(-100%); animation: skeletonSweep 1.3s ease-in-out infinite; }
+  @keyframes skeletonSweep { to { transform: translateX(100%); } }
+  .theme-dark .pageSlot .placeholder { background:#2a2d31; color:#5a5e66; }
+  .theme-dark .pageSlot .placeholder::after { background: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.08) 50%, transparent 65%); }
+  @media (prefers-reduced-motion: reduce) { .pageSlot .placeholder::after { animation:none; } }
   .selectLayer { position:absolute; inset:0; cursor:text; color:transparent; user-select:text;
                  pointer-events:auto; line-height: 1; }
   .selectLayer span { position:absolute; white-space:pre; color:transparent; user-select:text;

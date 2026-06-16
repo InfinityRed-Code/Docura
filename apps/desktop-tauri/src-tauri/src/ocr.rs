@@ -11,9 +11,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
 use std::sync::Arc;
 
 use image::GrayImage;
+use parking_lot::Mutex;
 use pdf_core::{PdfEngine, RenderRequest};
 use pdf_types::{DocumentId, PageIndex, Rotation, ZoomLevel};
 use serde::{Deserialize, Serialize};
@@ -22,6 +24,10 @@ use tauri::{Emitter, Manager};
 use crate::{no_window, AppState};
 
 const OCR_DPI: u32 = 300;
+/// Upper bound on parallel Tesseract processes. Each holds a full 300-DPI page
+/// bitmap in RAM, so cap concurrency to keep the memory spike bounded even on
+/// many-core machines.
+const OCR_MAX_WORKERS: usize = 6;
 /// Words below this Tesseract confidence (0-100) are dropped.
 const MIN_CONFIDENCE: f32 = 30.0;
 /// Pages whose existing text layer exceeds this many characters are
@@ -450,6 +456,7 @@ fn run_tesseract_tsv(
     tessdata: Option<&Path>,
     lang: &str,
     img: &GrayImage,
+    omp_limit: usize,
 ) -> Result<Vec<pdf_mutate::OcrWord>, String> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -471,7 +478,11 @@ fn run_tesseract_tsv(
         .arg("stdout")
         .args(["-l", lang])
         .args(["--psm", "3"])
-        .args(["--dpi", &OCR_DPI.to_string()]);
+        .args(["--dpi", &OCR_DPI.to_string()])
+        // Cap Tesseract's own OpenMP pool so N parallel processes don't
+        // oversubscribe the cores. One page → all cores; many pages → one
+        // thread each (see ocr_pages_parallel).
+        .env("OMP_THREAD_LIMIT", omp_limit.max(1).to_string());
     if let Some(dir) = tessdata {
         cmd.arg("--tessdata-dir").arg(dir);
     }
@@ -516,6 +527,7 @@ fn run_tesseract_tsv(
 }
 
 /// OCR one already-open page: render, preprocess, recognise.
+#[allow(clippy::too_many_arguments)]
 fn ocr_page(
     engine: &Arc<dyn PdfEngine>,
     document: DocumentId,
@@ -524,6 +536,7 @@ fn ocr_page(
     tessdata: Option<&Path>,
     lang: &str,
     preprocess: bool,
+    omp_limit: usize,
 ) -> Result<(Vec<pdf_mutate::OcrWord>, u32, u32), String> {
     let r = engine
         .render(RenderRequest {
@@ -535,8 +548,81 @@ fn ocr_page(
         .map_err(|e| e.to_string())?;
     let gray = rgba_to_gray(r.width_px, r.height_px, &r.rgba);
     let gray = if preprocess { preprocess_gray(gray) } else { gray };
-    let words = run_tesseract_tsv(tesseract, tessdata, lang, &gray)?;
+    let words = run_tesseract_tsv(tesseract, tessdata, lang, &gray, omp_limit)?;
     Ok((words, gray.width(), gray.height()))
+}
+
+/// OCR many pages in parallel. PDFium rasterisation inside `ocr_page`
+/// serialises on the engine's internal mutex, but the Tesseract processes are
+/// independent and overlap across cores — the actual win over the old
+/// page-by-page loop. Returns recognised pages (sorted) and the skip count.
+#[allow(clippy::too_many_arguments)]
+fn ocr_pages_parallel(
+    engine: &Arc<dyn PdfEngine>,
+    document: DocumentId,
+    pages: &[u32],
+    tesseract: &str,
+    tessdata: Option<&Path>,
+    lang: &str,
+    preprocess: bool,
+    skip_text_pages: bool,
+    progress: &(dyn Fn(u32, u32, u32) + Sync),
+) -> Result<(Vec<(u32, Vec<pdf_mutate::OcrWord>, u32, u32)>, u32), String> {
+    let total = pages.len() as u32;
+    if pages.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let workers = cores.min(pages.len()).min(OCR_MAX_WORKERS).max(1);
+    // Split cores across workers for Tesseract's OpenMP pool: one page uses all
+    // cores, many pages run one single-threaded process each.
+    let omp_per_proc = (cores / workers).max(1);
+
+    let next = AtomicUsize::new(0);
+    let done = AtomicU32::new(0);
+    let skipped = AtomicU32::new(0);
+    let results: Mutex<Vec<(u32, Vec<pdf_mutate::OcrWord>, u32, u32)>> = Mutex::new(Vec::new());
+    let first_err: Mutex<Option<String>> = Mutex::new(None);
+
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                if first_err.lock().is_some() {
+                    break;
+                }
+                let i = next.fetch_add(1, Relaxed);
+                if i >= pages.len() {
+                    break;
+                }
+                let page = pages[i];
+                if skip_text_pages && page_has_text(engine, document, page) {
+                    skipped.fetch_add(1, Relaxed);
+                    progress(done.fetch_add(1, Relaxed) + 1, total, page);
+                    continue;
+                }
+                match ocr_page(
+                    engine, document, page, tesseract, tessdata, lang, preprocess, omp_per_proc,
+                ) {
+                    Ok((words, iw, ih)) => {
+                        if !words.is_empty() {
+                            results.lock().push((page, words, iw, ih));
+                        }
+                    }
+                    Err(e) => {
+                        *first_err.lock() = Some(e);
+                    }
+                }
+                progress(done.fetch_add(1, Relaxed) + 1, total, page);
+            });
+        }
+    });
+
+    if let Some(e) = first_err.into_inner() {
+        return Err(e);
+    }
+    let mut v = results.into_inner();
+    v.sort_by_key(|r| r.0);
+    Ok((v, skipped.load(Relaxed)))
 }
 
 fn page_has_text(engine: &Arc<dyn PdfEngine>, document: DocumentId, page: u32) -> bool {
@@ -602,27 +688,17 @@ pub async fn ocr_document(
             } else {
                 args.pages.iter().copied().filter(|&p| p < page_count).collect()
             };
-            let total = pages.len() as u32;
 
-            let mut results: Vec<(u32, Vec<pdf_mutate::OcrWord>, u32, u32)> = Vec::new();
-            let mut skipped = 0u32;
-            for (i, &page) in pages.iter().enumerate() {
-                let _ = app2.emit(
-                    "ocr-progress",
-                    OcrProgress { current: i as u32 + 1, total, page: page + 1, file: None },
-                );
-                if args.skip_text_pages && page_has_text(&engine, document, page) {
-                    skipped += 1;
-                    continue;
-                }
-                let (words, iw, ih) = ocr_page(
-                    &engine, document, page, &tesseract, tessdata.as_deref(),
-                    &args.lang, args.preprocess,
-                )?;
-                if !words.is_empty() {
-                    results.push((page, words, iw, ih));
-                }
-            }
+            let (results, skipped) = ocr_pages_parallel(
+                &engine, document, &pages, &tesseract, tessdata.as_deref(),
+                &args.lang, args.preprocess, args.skip_text_pages,
+                &|done, total, page| {
+                    let _ = app2.emit(
+                        "ocr-progress",
+                        OcrProgress { current: done, total, page: page + 1, file: None },
+                    );
+                },
+            )?;
             if results.is_empty() {
                 return Err("OCR_NO_TEXT_FOUND".into());
             }
@@ -713,30 +789,23 @@ pub async fn ocr_files_batch(
                 skipped += 1;
                 continue;
             };
+            let _ = app.emit(
+                "ocr-progress",
+                OcrProgress {
+                    current: fi as u32 + 1,
+                    total: file_count,
+                    page: 0,
+                    file: Some(name.clone()),
+                },
+            );
             let result = (|| -> Result<(Vec<u8>, u32), String> {
                 let page_count = engine.page_count(doc).map_err(|e| e.to_string())?;
-                let mut results: Vec<(u32, Vec<pdf_mutate::OcrWord>, u32, u32)> = Vec::new();
-                for page in 0..page_count {
-                    let _ = app.emit(
-                        "ocr-progress",
-                        OcrProgress {
-                            current: fi as u32 + 1,
-                            total: file_count,
-                            page: page + 1,
-                            file: Some(name.clone()),
-                        },
-                    );
-                    if page_has_text(&engine, doc, page) {
-                        continue;
-                    }
-                    let (words, iw, ih) = ocr_page(
-                        &engine, doc, page, &tesseract, tessdata.as_deref(),
-                        &args.lang, args.preprocess,
-                    )?;
-                    if !words.is_empty() {
-                        results.push((page, words, iw, ih));
-                    }
-                }
+                let pages: Vec<u32> = (0..page_count).collect();
+                let (results, _skipped) = ocr_pages_parallel(
+                    &engine, doc, &pages, &tesseract, tessdata.as_deref(),
+                    &args.lang, args.preprocess, true,
+                    &|_, _, _| {},
+                )?;
                 if results.is_empty() {
                     return Err("nothing recognised".into());
                 }
