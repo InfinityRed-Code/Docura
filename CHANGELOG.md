@@ -9,6 +9,28 @@ Versions are reconstructed from the milestone breakdown in
 to 0.6.2 only carried the version number, so the entries below summarise the
 scope each tag landed.
 
+## [Unreleased]
+
+Work on the v1.1 "Performance & Polish" milestone.
+
+### Added
+- **Default-zoom setting.** A new "Default zoom" dropdown (fit page / width /
+  actual) in Settings → Appearance, persisted and applied to documents on open.
+- **Render-cache budget setting.** Settings → Performance now exposes the
+  render cache as a memory budget in MB (default 256, floor 16), persisted in
+  `settings.json` and applied on startup.
+
+### Changed
+- **Render cache is now byte-budgeted.** `pdf_cache` evicts by an approximate
+  MB budget instead of a fixed entry count, a better proxy for actual memory
+  given how much encoded page sizes vary.
+- **Settings window redesigned.** A vertical navigation rail replaces the long
+  stacked layout: each entry scrolls its section into view (with a scrollspy
+  highlight) and horizontal scrolling is gone.
+- **Relicensed to PolyForm Noncommercial 1.0.0** (source-available): free for
+  noncommercial use, commercial license required for for-profit companies.
+  Replaces the previous MIT/Apache-2.0 dual license.
+
 ## [1.0.1] — 2026-06-13
 
 Bug fixes and small tools for the v1.0 OCR and annotation features.

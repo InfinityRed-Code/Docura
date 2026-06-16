@@ -362,6 +362,34 @@ export function initChrome() {
   dom.settingsOverlay.addEventListener("click", (e) => {
     if (e.target === dom.settingsOverlay) dom.settingsOverlay.classList.add("hidden");
   });
+
+  // Settings nav rail: clicking a tab scrolls its section into the body;
+  // a scrollspy keeps the active tab in sync while scrolling.
+  const settingsBody = document.getElementById("settingsBody")!;
+  const navItems = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("#settingsNav .settingsNavItem"),
+  );
+  navItems.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.getElementById(btn.dataset.sec!)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  // Each callback only reports sections whose intersection *changed*, so we
+  // keep a running map of all sections' visibility and pick the topmost one in
+  // DOM order — otherwise the last-changed section wins and highlighting sticks.
+  const secVisible = new Map<string, boolean>();
+  const spy = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((e) => secVisible.set(e.target.id, e.isIntersecting));
+      const active = navItems.find((n) => secVisible.get(n.dataset.sec!));
+      if (active) navItems.forEach((n) => n.classList.toggle("active", n === active));
+    },
+    { root: settingsBody, rootMargin: "0px 0px -55% 0px", threshold: 0 },
+  );
+  navItems.forEach((btn) => {
+    const sec = document.getElementById(btn.dataset.sec!);
+    if (sec) spy.observe(sec);
+  });
   document.getElementById("gsRecheckBtn")!.addEventListener("click", () => void refreshGhostscript());
   document.getElementById("gsLink")!.addEventListener("click", (e) => {
     e.preventDefault();

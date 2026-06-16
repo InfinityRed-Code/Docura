@@ -393,70 +393,80 @@ export function buildHtml(): string {
     </div>
   </div>
   <div id="settingsOverlay" class="propsOverlay hidden">
-    <div class="propsModal">
+    <div class="propsModal settingsModal">
       <div class="propsHeader"><strong>${t("set.title")}</strong><button id="settingsClose" class="propsClose">✕</button></div>
-      <div class="propsPanel wmPanel">
-        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.appearance")}</h3>
-        <label>${t("set.theme")}
-          <select id="themeSelect">
-            <option value="light">${t("theme.light")}</option>
-            <option value="dark">${t("theme.dark")}</option>
-            <option value="docura">${t("theme.docura")}</option>
-          </select>
-        </label>
-        <label>${t("set.language")}
-          <select id="langSelect">
-            <option value="de">Deutsch</option>
-            <option value="en">English</option>
-          </select>
-        </label>
-        <label>${t("set.defaultZoom")}
-          <select id="defaultZoomSelect">
-            <option value="page">${t("fit.page")}</option>
-            <option value="width">${t("fit.width")}</option>
-            <option value="actual">${t("fit.actual")}</option>
-          </select>
-        </label>
-        <div style="font-size:0.78rem;color:var(--text-3);">${t("set.themeHint")}</div>
-      </div>
-      <div class="propsPanel wmPanel">
-        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.performance")}</h3>
-        <label>${t("set.cacheSize")}
-          <input id="cacheMbInput" type="number" min="16" max="4096" step="16" value="256" style="width:6rem;" />
-        </label>
-        <div style="font-size:0.78rem;color:var(--text-3);">${t("set.cacheHint")}</div>
-      </div>
-      <div class="propsPanel wmPanel">
-        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.pdfaExport")}</h3>
-        <div id="gsStatus" style="font-size:0.85rem;color:var(--text-2);">${t("set.gsChecking")}</div>
-        <div id="gsInstall" class="hidden" style="font-size:0.85rem;">
-          ${t("set.gsNotFound")}
-          <a id="gsLink" href="https://ghostscript.com/releases/gsdnld.html" style="color:var(--accent);">ghostscript.com</a>.
+      <div class="settingsLayout">
+        <nav class="settingsNav" id="settingsNav">
+          <button class="settingsNavItem active" data-sec="secAppearance">${t("set.appearance")}</button>
+          <button class="settingsNavItem" data-sec="secPerformance">${t("set.performance")}</button>
+          <button class="settingsNavItem" data-sec="secPdfa">${t("set.pdfaExport")}</button>
+          <button class="settingsNavItem" data-sec="secVprinter">${t("set.vprinter")}</button>
+        </nav>
+        <div class="settingsBody" id="settingsBody">
+          <section id="secAppearance" class="wmPanel settingsSection">
+            <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.appearance")}</h3>
+            <label>${t("set.theme")}
+              <select id="themeSelect">
+                <option value="light">${t("theme.light")}</option>
+                <option value="dark">${t("theme.dark")}</option>
+                <option value="docura">${t("theme.docura")}</option>
+              </select>
+            </label>
+            <label>${t("set.language")}
+              <select id="langSelect">
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label>${t("set.defaultZoom")}
+              <select id="defaultZoomSelect">
+                <option value="page">${t("fit.page")}</option>
+                <option value="width">${t("fit.width")}</option>
+                <option value="actual">${t("fit.actual")}</option>
+              </select>
+            </label>
+            <div style="font-size:0.78rem;color:var(--text-3);">${t("set.themeHint")}</div>
+          </section>
+          <section id="secPerformance" class="wmPanel settingsSection">
+            <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.performance")}</h3>
+            <label>${t("set.cacheSize")}
+              <input id="cacheMbInput" type="number" min="16" max="4096" step="16" value="256" style="width:6rem;" />
+            </label>
+            <div style="font-size:0.78rem;color:var(--text-3);">${t("set.cacheHint")}</div>
+          </section>
+          <section id="secPdfa" class="wmPanel settingsSection">
+            <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.pdfaExport")}</h3>
+            <div id="gsStatus" style="font-size:0.85rem;color:var(--text-2);">${t("set.gsChecking")}</div>
+            <div id="gsInstall" class="hidden" style="font-size:0.85rem;">
+              ${t("set.gsNotFound")}
+              <a id="gsLink" href="https://ghostscript.com/releases/gsdnld.html" style="color:var(--accent);">ghostscript.com</a>.
+            </div>
+            <label>${t("set.defaultPdfaLevel")}
+              <select id="pdfaLevel">
+                <option value="off" selected>${t("pdfa.off")}</option>
+                <option value="1b">PDF/A-1b (ISO 19005-1)</option>
+                <option value="2b">PDF/A-2b (ISO 19005-2)</option>
+                <option value="3b">PDF/A-3b (ISO 19005-3)</option>
+                <option value="4">PDF/A-4 (ISO 19005-4)</option>
+              </select>
+            </label>
+            <div style="font-size:0.78rem;color:var(--text-3);">${t("set.pdfaHint")}</div>
+            <div class="wmActions"><button id="pdfaSaveBtn">${t("btn.savePdfaNow")}</button><button id="gsRecheckBtn">${t("btn.recheckGs")}</button></div>
+          </section>
+          <section id="secVprinter" class="wmPanel settingsSection">
+            <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.vprinter")}</h3>
+            <div id="vpStatus" style="font-size:0.85rem;color:var(--text-2);">${t("set.vpChecking")}</div>
+            <div id="vpPathRow" class="hidden" style="font-size:0.8rem;color:var(--text-3);"></div>
+            <div id="vpOutRow" style="font-size:0.8rem;color:var(--text-3);"></div>
+            <div id="vpWarn" class="hidden" style="font-size:0.8rem;color:#d98a8a;">${t("set.vpWarn")}</div>
+            <div class="wmActions">
+              <button id="vpInstallBtn">${t("btn.installPrinter")}</button>
+              <button id="vpUninstallBtn">${t("btn.uninstallPrinter")}</button>
+              <button id="vpOpenFolderBtn">${t("btn.openOutFolder")}</button>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-3);">${t("set.vpHint")}</div>
+          </section>
         </div>
-        <label>${t("set.defaultPdfaLevel")}
-          <select id="pdfaLevel">
-            <option value="off" selected>${t("pdfa.off")}</option>
-            <option value="1b">PDF/A-1b (ISO 19005-1)</option>
-            <option value="2b">PDF/A-2b (ISO 19005-2)</option>
-            <option value="3b">PDF/A-3b (ISO 19005-3)</option>
-            <option value="4">PDF/A-4 (ISO 19005-4)</option>
-          </select>
-        </label>
-        <div style="font-size:0.78rem;color:var(--text-3);">${t("set.pdfaHint")}</div>
-        <div class="wmActions"><button id="pdfaSaveBtn">${t("btn.savePdfaNow")}</button><button id="gsRecheckBtn">${t("btn.recheckGs")}</button></div>
-      </div>
-      <div class="propsPanel wmPanel">
-        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.vprinter")}</h3>
-        <div id="vpStatus" style="font-size:0.85rem;color:var(--text-2);">${t("set.vpChecking")}</div>
-        <div id="vpPathRow" class="hidden" style="font-size:0.8rem;color:var(--text-3);"></div>
-        <div id="vpOutRow" style="font-size:0.8rem;color:var(--text-3);"></div>
-        <div id="vpWarn" class="hidden" style="font-size:0.8rem;color:#d98a8a;">${t("set.vpWarn")}</div>
-        <div class="wmActions">
-          <button id="vpInstallBtn">${t("btn.installPrinter")}</button>
-          <button id="vpUninstallBtn">${t("btn.uninstallPrinter")}</button>
-          <button id="vpOpenFolderBtn">${t("btn.openOutFolder")}</button>
-        </div>
-        <div style="font-size:0.75rem;color:var(--text-3);">${t("set.vpHint")}</div>
       </div>
     </div>
   </div>
@@ -1128,6 +1138,16 @@ export const CSS = `
   .propsClose:hover { color:var(--text); }
   .propsPanel { padding: 0.8rem 1rem; overflow:auto; }
   .propsPanel.hidden { display:none; }
+  /* Settings modal: vertical nav rail + scrollable body (no horizontal scroll). */
+  .settingsModal { width: 46rem; max-width: 92vw; }
+  .settingsLayout { display:flex; flex:1; min-height:0; }
+  .settingsNav { display:flex; flex-direction:column; gap:0.1rem; padding:0.6rem 0.4rem; border-right:1px solid var(--border); background:var(--bg-2); min-width:11rem; flex-shrink:0; }
+  .settingsNavItem { text-align:left; background:transparent; color:var(--text-2); border:none; border-radius:6px; padding:0.45rem 0.7rem; cursor:pointer; font:inherit; font-size:0.88rem; }
+  .settingsNavItem:hover { background:var(--hover); color:var(--text); }
+  .settingsNavItem.active { background:var(--accent-tint); color:var(--accent); font-weight:600; }
+  .settingsBody { flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
+  .settingsSection { padding:0.8rem 1rem; scroll-margin-top:0.4rem; }
+  .settingsSection + .settingsSection { border-top:1px solid var(--border); }
   .propsRow { display:flex; gap:0.6rem; padding:0.25rem 0; font-size:0.88rem; }
   .propsRow .k { width: 10rem; color:var(--text-3); }
   .propsRow .v { flex:1; color:var(--text); word-break: break-word; }
