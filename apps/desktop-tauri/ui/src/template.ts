@@ -410,7 +410,21 @@ export function buildHtml(): string {
             <option value="en">English</option>
           </select>
         </label>
+        <label>${t("set.defaultZoom")}
+          <select id="defaultZoomSelect">
+            <option value="page">${t("fit.page")}</option>
+            <option value="width">${t("fit.width")}</option>
+            <option value="actual">${t("fit.actual")}</option>
+          </select>
+        </label>
         <div style="font-size:0.78rem;color:var(--text-3);">${t("set.themeHint")}</div>
+      </div>
+      <div class="propsPanel wmPanel">
+        <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.performance")}</h3>
+        <label>${t("set.cacheSize")}
+          <input id="cacheMbInput" type="number" min="16" max="4096" step="16" value="256" style="width:6rem;" />
+        </label>
+        <div style="font-size:0.78rem;color:var(--text-3);">${t("set.cacheHint")}</div>
       </div>
       <div class="propsPanel wmPanel">
         <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.pdfaExport")}</h3>

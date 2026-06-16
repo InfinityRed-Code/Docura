@@ -316,6 +316,37 @@ export function initChrome() {
     location.reload();
   });
 
+  // Default zoom — the fit mode applied to documents on open. Persisted in
+  // localStorage and seeded into state now so the first opened doc uses it.
+  const defaultZoomSelect = document.getElementById("defaultZoomSelect") as HTMLSelectElement;
+  const applyDefaultZoom = (v: string) => {
+    const mode = (["page", "width", "actual"].includes(v) ? v : "page") as FitMode;
+    state.fitMode = mode;
+    dom.fitSelect.value = mode;
+  };
+  const savedZoom = localStorage.getItem("docura-default-zoom") ?? "page";
+  defaultZoomSelect.value = savedZoom;
+  applyDefaultZoom(savedZoom);
+  defaultZoomSelect.addEventListener("change", () => {
+    localStorage.setItem("docura-default-zoom", defaultZoomSelect.value);
+    applyDefaultZoom(defaultZoomSelect.value);
+    if (state.currentDoc) reflow();
+  });
+
+  // Render-cache budget (MB) — read the effective value from the backend and
+  // push changes back (clamped + persisted server-side).
+  const cacheMbInput = document.getElementById("cacheMbInput") as HTMLInputElement;
+  void invoke<number>("get_cache_mb")
+    .then((mb) => { cacheMbInput.value = String(mb); })
+    .catch(() => {});
+  cacheMbInput.addEventListener("change", () => {
+    let mb = parseInt(cacheMbInput.value, 10);
+    if (isNaN(mb) || mb < 16) mb = 16;
+    void invoke<number>("set_cache_mb", { mb })
+      .then((applied) => { cacheMbInput.value = String(applied); })
+      .catch(() => {});
+  });
+
   // Settings overlay
   void loadDefaultPdfa();
   dom.pdfaLevelEl.addEventListener("change", () => {

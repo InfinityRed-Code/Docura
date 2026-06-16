@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -3103,6 +3102,9 @@ fn encode_jpeg(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<
     Ok(out)
 }
 
+/// Render-cache budget applied when the user has not chosen one.
+const DEFAULT_CACHE_MB: u64 = 256;
+
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedSettings {
     recent_files: VecDeque<RecentFile>,
@@ -3112,6 +3114,9 @@ struct PersistedSettings {
     /// Tesseract language code(s) for OCR, e.g. `"deu"` or `"deu+eng"`.
     #[serde(default)]
     ocr_language: Option<String>,
+    /// Render-cache memory budget in megabytes. `None` → `DEFAULT_CACHE_MB`.
+    #[serde(default)]
+    cache_mb: Option<u64>,
 }
 
 fn load_settings(path: &Path) -> PersistedSettings {
@@ -3161,6 +3166,30 @@ fn set_default_pdfa(state: tauri::State<'_, AppState>, level: String) -> Result<
     save_settings(cfg, &s).map_err(|e| e.to_string())?;
     vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
     Ok(())
+}
+
+/// Current render-cache budget in megabytes (the value actually in effect,
+/// after clamping to the minimum).
+#[tauri::command]
+fn get_cache_mb(state: tauri::State<'_, AppState>) -> u64 {
+    state.cache.lock().budget_mb()
+}
+
+/// Resize the render-cache budget, persist it, and evict down to it now.
+#[tauri::command]
+fn set_cache_mb(state: tauri::State<'_, AppState>, mb: u64) -> Result<u64, String> {
+    let applied = {
+        let mut cache = state.cache.lock();
+        cache.set_budget_mb(mb);
+        cache.budget_mb()
+    };
+    let guard = state.settings_path.lock();
+    if let Some(cfg) = guard.as_ref() {
+        let mut s = load_settings(cfg);
+        s.cache_mb = Some(applied);
+        save_settings(cfg, &s).map_err(|e| e.to_string())?;
+    }
+    Ok(applied)
 }
 
 /// PDF path the app was launched with (file association / "open with" /
@@ -3256,7 +3285,7 @@ pub fn run() {
         }
     };
 
-    let cache = RenderCache::new(NonZeroUsize::new(64).unwrap());
+    let cache = RenderCache::with_budget_mb(DEFAULT_CACHE_MB);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -3268,12 +3297,17 @@ pub fn run() {
                 .app_config_dir()
                 .ok()
                 .map(|d| d.join("settings.json"));
+            let state: tauri::State<'_, AppState> = app.state();
             if let Some(path) = settings_path.as_ref() {
                 migrate_legacy_config(path);
                 let s = load_settings(path);
                 vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
+                // Apply the persisted render-cache budget over the default.
+                state
+                    .cache
+                    .lock()
+                    .set_budget_mb(s.cache_mb.unwrap_or(DEFAULT_CACHE_MB));
             }
-            let state: tauri::State<'_, AppState> = app.state();
             *state.settings_path.lock() = settings_path;
             vprinter::start_spool_watcher(app.handle().clone());
             Ok(())
@@ -3370,7 +3404,9 @@ pub fn run() {
             recent_files,
             push_recent,
             get_default_pdfa,
-            set_default_pdfa
+            set_default_pdfa,
+            get_cache_mb,
+            set_cache_mb
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
