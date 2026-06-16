@@ -57,12 +57,26 @@ struct Shared {
     /// Cumulative top edge of each page in display px (for scroll-to-page).
     offsets: Vec<f32>,
     zoom: f32,
+    /// Page rotation in quarter turns (0..=3), applied to render + layout.
+    rot_q: u8,
+    /// Page index at the top of the viewport (tracked while scrolling).
+    current_page: usize,
     requested: HashSet<usize>,
     requested_thumbs: HashSet<usize>,
     hits: Vec<Hit>,
     hit_idx: usize,
     open_start: Option<Instant>,
     first_render_logged: bool,
+}
+
+impl Shared {
+    fn rotation(&self) -> Rotation {
+        Rotation::from_quarter_turns(self.rot_q)
+    }
+    /// True when the current rotation swaps page width and height.
+    fn rotated_90(&self) -> bool {
+        self.rot_q % 2 == 1
+    }
 }
 
 type State = Arc<Mutex<Shared>>;
@@ -77,6 +91,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         page_pt: Vec::new(),
         offsets: Vec::new(),
         zoom: DEFAULT_ZOOM,
+        rot_q: 0,
+        current_page: 0,
         requested: HashSet::new(),
         requested_thumbs: HashSet::new(),
         hits: Vec::new(),
@@ -136,6 +152,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    ui.on_fit_width({
+        let ui = ui.as_weak();
+        let state = state.clone();
+        let pages = pages.clone();
+        move || {
+            let ui = ui.unwrap();
+            fit(&state, &pages, &ui, false);
+        }
+    });
+
+    ui.on_fit_page({
+        let ui = ui.as_weak();
+        let state = state.clone();
+        let pages = pages.clone();
+        move || {
+            let ui = ui.unwrap();
+            fit(&state, &pages, &ui, true);
+        }
+    });
+
+    ui.on_rotate_left({
+        let ui = ui.as_weak();
+        let state = state.clone();
+        let pages = pages.clone();
+        let thumbs = thumbs.clone();
+        move || {
+            rotate(&state, &pages, &thumbs, &ui.unwrap(), 3);
+        }
+    });
+
+    ui.on_rotate_right({
+        let ui = ui.as_weak();
+        let state = state.clone();
+        let pages = pages.clone();
+        let thumbs = thumbs.clone();
+        move || {
+            rotate(&state, &pages, &thumbs, &ui.unwrap(), 1);
+        }
+    });
+
+    ui.on_goto_page({
+        let ui = ui.as_weak();
+        let state = state.clone();
+        move |t| {
+            let Ok(n) = t.trim().parse::<usize>() else { return };
+            if n == 0 {
+                return;
+            }
+            scroll_to_page(&state, &ui.unwrap(), n - 1);
+        }
+    });
+
     ui.on_toggle_thumbs({
         let ui = ui.as_weak();
         move || {
@@ -160,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = state.clone();
         move |y| {
             let info = {
-                let s = state.lock().unwrap();
+                let mut s = state.lock().unwrap();
                 if s.offsets.is_empty() {
                     return;
                 }
@@ -169,6 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .offsets
                     .partition_point(|&top| top <= scroll)
                     .saturating_sub(1);
+                s.current_page = page;
                 format!("page {} / {} · {}%", page + 1, s.page_pt.len(), (s.zoom * 100.0).round() as i32)
             };
             ui.unwrap().set_info(info.into());
@@ -293,8 +362,9 @@ fn make_render_cb(
     let is_thumb = matches!(kind, RenderKind::Thumb);
     move |i| {
         let i = i as usize;
-        let (engine, doc, zoom, bench) = {
+        let (engine, doc, zoom, rotation, bench) = {
             let mut s = state.lock().unwrap();
+            let rotation = s.rotation();
             let set = if is_thumb { &mut s.requested_thumbs } else { &mut s.requested };
             if set.contains(&i) {
                 return;
@@ -308,7 +378,7 @@ fn make_render_cb(
             } else {
                 None
             };
-            (s.engine.clone(), doc, zoom, bench)
+            (s.engine.clone(), doc, zoom, rotation, bench)
         };
         let ui_weak = ui.clone();
         std::thread::spawn(move || {
@@ -316,7 +386,7 @@ fn make_render_cb(
                 document: doc,
                 page: PageIndex(i as u32),
                 zoom: ZoomLevel(zoom),
-                rotation: Rotation::R0,
+                rotation,
             };
             let Ok(r) = engine.render(req) else { return };
             let _ = slint::invoke_from_event_loop(move || {
@@ -396,6 +466,8 @@ fn open_path(
         s.requested_thumbs.clear();
         s.hits.clear();
         s.hit_idx = 0;
+        s.rot_q = 0;
+        s.current_page = 0;
         s.open_start = Some(t0);
         s.first_render_logged = false;
     }
@@ -427,16 +499,19 @@ fn rebuild_rows(state: &State, pages: &Rc<VecModel<PageRow>>) {
         let mut s = state.lock().unwrap();
         s.requested.clear();
         let zoom = s.zoom;
+        let swap = s.rotated_90();
         let mut offsets = Vec::with_capacity(s.page_pt.len());
         let mut top = 0.0f32;
         let rows = s
             .page_pt
             .iter()
             .map(|(w, h)| {
+                // Rotation by 90°/270° swaps the displayed width and height.
+                let (dw, dh) = if swap { (h, w) } else { (w, h) };
                 offsets.push(top);
-                let rh = h * zoom;
+                let rh = dh * zoom;
                 top += rh + ROW_PAD;
-                PageRow { w: w * zoom, h: rh, img: Image::default() }
+                PageRow { w: dw * zoom, h: rh, img: Image::default() }
             })
             .collect();
         s.offsets = offsets;
@@ -448,13 +523,73 @@ fn rebuild_rows(state: &State, pages: &Rc<VecModel<PageRow>>) {
 /// Scroll the page list so page `i` sits at the top of the viewport.
 fn scroll_to_page(state: &State, ui: &AppWindow, i: usize) {
     let y = {
-        let s = state.lock().unwrap();
-        match s.offsets.get(i) {
-            Some(&top) => -top,
-            None => return,
+        let mut s = state.lock().unwrap();
+        if s.offsets.is_empty() {
+            return;
         }
+        let i = i.min(s.offsets.len() - 1);
+        s.current_page = i;
+        -s.offsets[i]
     };
     ui.set_list_vp_y(y);
+}
+
+/// Fit the current page to the viewport: `to_page` false = fit width only,
+/// true = fit the whole page (the smaller of the width/height ratios).
+fn fit(state: &State, pages: &Rc<VecModel<PageRow>>, ui: &AppWindow, to_page: bool) {
+    let view_w = ui.get_view_w();
+    let view_h = ui.get_view_h();
+    {
+        let mut s = state.lock().unwrap();
+        let idx = s.current_page.min(s.page_pt.len().saturating_sub(1));
+        let Some(&(w_pt, h_pt)) = s.page_pt.get(idx) else { return };
+        // Account for rotation and the per-row horizontal margin.
+        let (eff_w, eff_h) = if s.rotated_90() { (h_pt, w_pt) } else { (w_pt, h_pt) };
+        if eff_w <= 0.0 || eff_h <= 0.0 {
+            return;
+        }
+        let zw = (view_w - 24.0).max(1.0) / eff_w;
+        let zoom = if to_page {
+            let zh = (view_h - 2.0 * ROW_PAD).max(1.0) / eff_h;
+            zw.min(zh)
+        } else {
+            zw
+        };
+        s.zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+    }
+    rebuild_rows(state, pages);
+    let idx = state.lock().unwrap().current_page;
+    scroll_to_page(state, ui, idx);
+    update_info(state, ui);
+}
+
+/// Rotate all pages by `q` quarter turns clockwise, then re-layout. The search
+/// overlay is cleared because hit rectangles are computed for the unrotated page.
+fn rotate(
+    state: &State,
+    pages: &Rc<VecModel<PageRow>>,
+    thumbs: &Rc<VecModel<Thumb>>,
+    ui: &AppWindow,
+    q: u8,
+) {
+    let idx = {
+        let mut s = state.lock().unwrap();
+        s.rot_q = (s.rot_q + q) % 4;
+        s.requested_thumbs.clear();
+        s.hits.clear();
+        s.hit_idx = 0;
+        s.current_page
+    };
+    // Drop cached thumbnails so they re-render at the new rotation.
+    let count = thumbs.row_count();
+    let thumb_rows: Vec<Thumb> = (0..count)
+        .map(|p| Thumb { img: Image::default(), label: format!("{}", p + 1).into() })
+        .collect();
+    thumbs.set_vec(thumb_rows);
+    rebuild_rows(state, pages);
+    scroll_to_page(state, ui, idx);
+    ui.set_hl_page(-1);
+    ui.set_search_info("".into());
 }
 
 /// Jump to hit `idx`: scroll to its page and paint its rectangles.
