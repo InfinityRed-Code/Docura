@@ -134,8 +134,30 @@ the rustpdf virtual printer.
 See [`CHANGELOG.md`](CHANGELOG.md). The workspace version, the Tauri bundle
 version, and the latest git tag track each other.
 
-## License
+## Licensing
 
-Dual-licensed under MIT or Apache-2.0, at the consumer's option. PDFium is
-Apache-2.0 / BSD. lopdf, pdfium-render, image, lru and the other workspace
-dependencies are MIT/Apache-2.0 compatible.
+This project is **source-available**, not OSI open source: the code is public,
+but use is restricted by field. It is dual-licensed:
+
+- **Noncommercial use — free.** Released under the
+  [PolyForm Noncommercial License 1.0.0](LICENSE). Private individuals,
+  hobbyists, students, researchers, charities, schools, and other
+  noncommercial organisations may use, modify, and redistribute it at no cost.
+- **Commercial use — paid license required.** Any use by or on behalf of a
+  for-profit company (as defined under "Your company" in the PolyForm terms)
+  requires a separate commercial license.
+
+  > **Commercial licensing contact:** _TODO — add contact / purchase URL._
+
+Note on terminology: because the PolyForm Noncommercial License restricts
+commercial use, it does **not** meet the Open Source Definition (OSD §6, "No
+Discrimination Against Fields of Endeavor"). Describe the project as
+*source-available*, not *open source*.
+
+### Third-party licenses
+
+Bundled and dependency components keep their own permissive licenses, which are
+compatible with the above: PDFium is Apache-2.0 / BSD-3-Clause; lopdf,
+pdfium-render, image, lru and the other workspace crates are MIT / Apache-2.0.
+These permissive upstream licenses impose no restriction on the project's own
+noncommercial/commercial dual-licensing.
