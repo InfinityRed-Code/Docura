@@ -227,8 +227,8 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 - [x] Render-Worker-Pool (N Threads, Priorisierung nach Viewport) [C] — PDFium-Rasterung ist nicht threadsafe (Engine-Mutex), daher: begrenzter Render-Pool im Frontend (3 gleichzeitig, nearest-to-viewport zuerst), Backend pipelined Rasterung (seriell) + JPEG-Encode (parallel via `spawn_blocking`); Epoch-Guard verwirft veraltete Paints bei Zoom/Rotate
 - [ ] Progressive Rendering (niedrige Auflösung zuerst, dann scharf) [C][E]
 - [ ] GPU-beschleunigtes Blitting der Seitenbilder (wgpu-Backed Canvas optional) [X: wgpu]
-- [ ] Virtuelles Scrollen im kontinuierlichen Modus (nur sichtbare Seiten) [U]
-- [ ] Thumbnail-Cache auf Disk persistieren [S][pdf_cache]
+- [x] Virtuelles Scrollen im kontinuierlichen Modus (nur sichtbare Seiten) [U] — Seiten-Render ist virtualisiert: nur viewport-nahe Slots werden gerendert (IntersectionObserver, `MAX_RENDER_DIST`) und ferne wieder evictet; DOM-Slots bleiben leichte Platzhalter
+- [x] Thumbnail-Cache auf Disk persistieren [S][pdf_cache] — JPEGs unter `<app_cache>/thumbnails/<doc-hash>/p{page}_w{w}_r{rot}.jpg`; Doc-Identity (Bytes-Hash) in RenderCache memoisiert + bei jeder Mutation via `remove_document` invalidiert; Startup-Prune auf 200 MB (LRU nach mtime)
 - [ ] Memory-Footprint-Test mit 1000-Seiten-PDFs
 - [ ] MSI-Installer inkl. WebView2 Bootstrapper [X: WiX]
 - [ ] Auto-Update (Tauri Updater Plugin) [X]

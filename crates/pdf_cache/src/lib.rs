@@ -5,6 +5,8 @@
 //! proxy for memory. The cache therefore evicts by an approximate byte budget
 //! the user can tune in Settings.
 
+use std::collections::HashMap;
+
 use lru::LruCache;
 use pdf_types::{DocumentId, PageIndex};
 
@@ -43,6 +45,11 @@ pub struct RenderCache {
     entries: LruCache<CacheKey, CachedImage>,
     cur_bytes: usize,
     max_bytes: usize,
+    /// Per-document content identity (a hash of the document bytes) used as the
+    /// on-disk thumbnail-cache key. Cleared by `remove_document`/`clear`, which
+    /// already run at every mutation site, so a stale identity can never
+    /// outlive a content change.
+    thumb_ids: HashMap<DocumentId, u64>,
 }
 
 impl RenderCache {
@@ -52,7 +59,17 @@ impl RenderCache {
             entries: LruCache::unbounded(),
             cur_bytes: 0,
             max_bytes: Self::clamp_budget(mb),
+            thumb_ids: HashMap::new(),
         }
+    }
+
+    /// Memoised on-disk thumbnail identity for `doc`, if known.
+    pub fn thumb_id(&self, doc: DocumentId) -> Option<u64> {
+        self.thumb_ids.get(&doc).copied()
+    }
+
+    pub fn set_thumb_id(&mut self, doc: DocumentId, id: u64) {
+        self.thumb_ids.insert(doc, id);
     }
 
     fn clamp_budget(mb: u64) -> usize {
@@ -100,6 +117,7 @@ impl RenderCache {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.cur_bytes = 0;
+        self.thumb_ids.clear();
     }
 
     pub fn remove_document(&mut self, doc: DocumentId) {
@@ -113,5 +131,6 @@ impl RenderCache {
                 self.cur_bytes = self.cur_bytes.saturating_sub(entry_bytes(&old));
             }
         }
+        self.thumb_ids.remove(&doc);
     }
 }

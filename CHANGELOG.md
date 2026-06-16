@@ -37,6 +37,11 @@ Work on the v1.1 "Performance & Polish" milestone.
   has no usable GPU path, so multithreading is the available lever.)
 - **Page loading skeleton.** Never-rendered pages show a blank sheet with a soft
   shimmer instead of the old diagonal hatch.
+- **Persistent thumbnail cache.** Thumbnails are cached on disk
+  (`<app_cache>/thumbnails`) keyed by a document content hash, so the strip
+  fills instantly when reopening a file in a later session. The cache is
+  invalidated automatically when a document is edited and pruned to 200 MB on
+  startup.
 - **Settings window redesigned.** A vertical navigation rail replaces the long
   stacked layout: each entry scrolls its section into view (with a scrollspy
   highlight) and horizontal scrolling is gone.

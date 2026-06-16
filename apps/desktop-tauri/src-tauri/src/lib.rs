@@ -367,8 +367,74 @@ fn encode_data_url(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<
     Ok(format!("data:image/jpeg;base64,{b64}"))
 }
 
+/// Persistent thumbnail cache directory (`<app_cache>/thumbnails`).
+fn thumb_cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_cache_dir()
+        .map(|d| d.join("thumbnails"))
+        .map_err(|e| e.to_string())
+}
+
+/// Fast non-cryptographic identity hash of document bytes, used only as a
+/// cache key (collision = at worst a stale thumbnail, never a safety issue).
+fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+/// Decode the JPEG bytes out of a `data:image/jpeg;base64,...` URL.
+fn data_url_jpeg(data_url: &str) -> Option<Vec<u8>> {
+    let b64 = data_url.strip_prefix("data:image/jpeg;base64,")?;
+    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+}
+
+/// On-disk thumbnail cache budget. Pruned LRU-by-mtime on startup.
+const THUMB_CACHE_MAX_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Best-effort prune of the thumbnail cache to `max_bytes`, deleting the
+/// least-recently-modified files first, then any emptied per-document dirs.
+fn prune_thumb_cache(dir: &Path, max_bytes: u64) {
+    let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+    let mut total: u64 = 0;
+    let Ok(docs) = std::fs::read_dir(dir) else { return };
+    for doc in docs.flatten() {
+        let Ok(pages) = std::fs::read_dir(doc.path()) else { continue };
+        for f in pages.flatten() {
+            if let Ok(meta) = f.metadata() {
+                let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
+                total += meta.len();
+                files.push((f.path(), meta.len(), mtime));
+            }
+        }
+    }
+    if total <= max_bytes {
+        return;
+    }
+    files.sort_by_key(|(_, _, m)| *m); // oldest first
+    for (path, len, _) in files {
+        if total <= max_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+    // Drop now-empty document directories.
+    if let Ok(docs) = std::fs::read_dir(dir) {
+        for doc in docs.flatten() {
+            let p = doc.path();
+            if p.is_dir() && std::fs::read_dir(&p).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                let _ = std::fs::remove_dir(&p);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 async fn render_thumbnail(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     document: DocumentId,
     page: u32,
@@ -376,9 +442,70 @@ async fn render_thumbnail(
     page_width_pt: f32,
     rotation: Option<u8>,
 ) -> Result<RenderedPayload, String> {
+    let rot_q = rotation.unwrap_or(0) % 4;
+
+    // Document identity for the on-disk key. Memoised in the render cache and
+    // invalidated alongside it on every mutation (remove_document). Read into a
+    // local so the lock guard is not held across the await below.
+    let existing_id = state.cache.lock().thumb_id(document);
+    let id = match existing_id {
+        Some(h) => Some(h),
+        None => {
+            let engine = state.engine.clone();
+            match tokio::task::spawn_blocking(move || engine.document_bytes(document))
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                Ok(bytes) => {
+                    let h = content_hash(&bytes);
+                    state.cache.lock().set_thumb_id(document, h);
+                    Some(h)
+                }
+                // No persistent identity (e.g. transient doc) → skip disk cache.
+                Err(_) => None,
+            }
+        }
+    };
+
+    let disk_file = id.and_then(|h| {
+        thumb_cache_dir(&app)
+            .ok()
+            .map(|d| d.join(format!("{h:016x}")).join(format!("p{page}_w{max_width}_r{rot_q}.jpg")))
+    });
+
+    // Disk hit: skip PDFium entirely.
+    if let Some(file) = disk_file.clone() {
+        let hit = tokio::task::spawn_blocking(move || std::fs::read(&file).ok())
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(jpg) = hit {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&jpg);
+            return Ok(RenderedPayload {
+                width: 0,
+                height: 0,
+                data_url: format!("data:image/jpeg;base64,{b64}"),
+            });
+        }
+    }
+
     let pt = page_width_pt.max(1.0);
     let zoom = (max_width as f32 / pt).clamp(0.05, 1.0);
-    render_internal(state, document, page, zoom, rotation, 60).await
+    let payload = render_internal(state, document, page, zoom, rotation, 60).await?;
+
+    // Persist to disk (best-effort; never fail the render on a cache write).
+    if let Some(file) = disk_file {
+        if let Some(jpg) = data_url_jpeg(&payload.data_url) {
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Some(dir) = file.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(&file, &jpg);
+            })
+            .await;
+        }
+    }
+
+    Ok(payload)
 }
 
 #[tauri::command]
@@ -3309,6 +3436,10 @@ pub fn run() {
                     .set_budget_mb(s.cache_mb.unwrap_or(DEFAULT_CACHE_MB));
             }
             *state.settings_path.lock() = settings_path;
+            // Bound the on-disk thumbnail cache (best-effort, off the UI path).
+            if let Ok(dir) = thumb_cache_dir(app.handle()) {
+                std::thread::spawn(move || prune_thumb_cache(&dir, THUMB_CACHE_MAX_BYTES));
+            }
             vprinter::start_spool_watcher(app.handle().clone());
             Ok(())
         })
