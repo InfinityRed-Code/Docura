@@ -235,7 +235,7 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 - [ ] Crash-Reporting opt-in (Sentry oder eigenes) [X]
 - [ ] Lokalisierung: de / en mindestens [U]
 - [ ] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U]
-- [ ] Erweitertes Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
+- [x] Erweitertes Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
 - [ ] Tray-App / Autostart für Hintergrund-Spool-Watcher (Print-to-PDF ohne geöffnete Haupt-App)
 
 ---
