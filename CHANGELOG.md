@@ -47,6 +47,10 @@ Work on the v1.1 "Performance & Polish" milestone.
   fills instantly when reopening a file in a later session. The cache is
   invalidated automatically when a document is edited and pruned to 200 MB on
   startup.
+- **System tray + autostart.** A tray icon (Open / Quit) plus two Settings →
+  System options: "keep running in the tray on close" (the window hides instead
+  of quitting so the print-to-PDF spool watcher stays active) and "start at
+  login".
 - **Settings window redesigned.** A vertical navigation rail replaces the long
   stacked layout: each entry scrolls its section into view (with a scrollspy
   highlight) and horizontal scrolling is gone.

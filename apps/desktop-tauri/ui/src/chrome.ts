@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { enable as enableAutostart, disable as disableAutostart, isEnabled } from "@tauri-apps/plugin-autostart";
 import type {
   FitMode, GhostscriptInfo, SearchHit, VirtualPrinterInfo,
 } from "./types";
@@ -356,6 +357,24 @@ export function initChrome() {
     void invoke<number>("set_cache_mb", { mb })
       .then((applied) => { cacheMbInput.value = String(applied); })
       .catch(() => {});
+  });
+
+  // System: run-in-background (close-to-tray) + autostart at login.
+  const runBgCheck = document.getElementById("runBackgroundCheck") as HTMLInputElement;
+  void invoke<boolean>("get_run_in_background")
+    .then((v) => { runBgCheck.checked = v; })
+    .catch(() => {});
+  runBgCheck.addEventListener("change", () => {
+    void invoke("set_run_in_background", { enabled: runBgCheck.checked }).catch(() => {});
+  });
+
+  const autostartCheck = document.getElementById("autostartCheck") as HTMLInputElement;
+  void isEnabled()
+    .then((v) => { autostartCheck.checked = v; })
+    .catch(() => {});
+  autostartCheck.addEventListener("change", () => {
+    const op = autostartCheck.checked ? enableAutostart() : disableAutostart();
+    void op.catch(() => { autostartCheck.checked = !autostartCheck.checked; });
   });
 
   // Settings overlay

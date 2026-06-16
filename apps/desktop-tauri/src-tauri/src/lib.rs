@@ -3244,6 +3244,10 @@ struct PersistedSettings {
     /// Render-cache memory budget in megabytes. `None` → `DEFAULT_CACHE_MB`.
     #[serde(default)]
     cache_mb: Option<u64>,
+    /// Keep the app running in the system tray when the window is closed, so
+    /// the print-to-PDF spool watcher stays active in the background.
+    #[serde(default)]
+    run_in_background: bool,
 }
 
 fn load_settings(path: &Path) -> PersistedSettings {
@@ -3317,6 +3321,33 @@ fn set_cache_mb(state: tauri::State<'_, AppState>, mb: u64) -> Result<u64, Strin
         save_settings(cfg, &s).map_err(|e| e.to_string())?;
     }
     Ok(applied)
+}
+
+/// Whether the app stays in the tray (spool watcher alive) on window close.
+#[tauri::command]
+fn get_run_in_background(state: tauri::State<'_, AppState>) -> bool {
+    let guard = state.settings_path.lock();
+    guard.as_ref().map(|p| load_settings(p).run_in_background).unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_run_in_background(state: tauri::State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let guard = state.settings_path.lock();
+    let Some(cfg) = guard.as_ref() else {
+        return Err("settings path unavailable".into());
+    };
+    let mut s = load_settings(cfg);
+    s.run_in_background = enabled;
+    save_settings(cfg, &s).map_err(|e| e.to_string())
+}
+
+/// Reveal and focus the main window (from the tray menu).
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 /// PDF path the app was launched with (file association / "open with" /
@@ -3418,6 +3449,27 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None::<Vec<&str>>,
+        ))
+        .on_window_event(|window, event| {
+            // Close-to-tray: when "run in background" is on, hide the main
+            // window instead of quitting so the spool watcher keeps running.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let run_bg = {
+                        let state = window.app_handle().state::<AppState>();
+                        let guard = state.settings_path.lock();
+                        guard.as_ref().map(|p| load_settings(p).run_in_background).unwrap_or(false)
+                    };
+                    if run_bg {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         .setup(|app| {
             let settings_path = app
                 .path()
@@ -3440,6 +3492,25 @@ pub fn run() {
             if let Ok(dir) = thumb_cache_dir(app.handle()) {
                 std::thread::spawn(move || prune_thumb_cache(&dir, THUMB_CACHE_MAX_BYTES));
             }
+
+            // System tray: keeps the app (and the print spool watcher)
+            // reachable when the window is closed to the background.
+            let show_i = tauri::menu::MenuItem::with_id(app, "tray_show", "Docura PDF", true, None::<&str>)?;
+            let quit_i = tauri::menu::MenuItem::with_id(app, "tray_quit", "Quit", true, None::<&str>)?;
+            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+            let mut tray = tauri::tray::TrayIconBuilder::with_id("main-tray")
+                .tooltip("Docura PDF")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray_show" => show_main(app),
+                    "tray_quit" => app.exit(0),
+                    _ => {}
+                });
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon);
+            }
+            tray.build(app)?;
+
             vprinter::start_spool_watcher(app.handle().clone());
             Ok(())
         })
@@ -3537,7 +3608,9 @@ pub fn run() {
             get_default_pdfa,
             set_default_pdfa,
             get_cache_mb,
-            set_cache_mb
+            set_cache_mb,
+            get_run_in_background,
+            set_run_in_background
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

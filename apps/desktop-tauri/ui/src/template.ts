@@ -401,6 +401,7 @@ export function buildHtml(): string {
           <button class="settingsNavItem" data-sec="secPerformance">${t("set.performance")}</button>
           <button class="settingsNavItem" data-sec="secPdfa">${t("set.pdfaExport")}</button>
           <button class="settingsNavItem" data-sec="secVprinter">${t("set.vprinter")}</button>
+          <button class="settingsNavItem" data-sec="secSystem">${t("set.system")}</button>
         </nav>
         <div class="settingsBody" id="settingsBody">
           <section id="secAppearance" class="wmPanel settingsSection">
@@ -466,6 +467,13 @@ export function buildHtml(): string {
               <button id="vpOpenFolderBtn">${t("btn.openOutFolder")}</button>
             </div>
             <div style="font-size:0.75rem;color:var(--text-3);">${t("set.vpHint")}</div>
+          </section>
+          <section id="secSystem" class="wmPanel settingsSection">
+            <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.system")}</h3>
+            <label class="settingsCheck"><input id="runBackgroundCheck" type="checkbox" /> ${t("set.runInBackground")}</label>
+            <div style="font-size:0.78rem;color:var(--text-3);">${t("set.runInBackgroundHint")}</div>
+            <label class="settingsCheck" style="margin-top:0.6rem;"><input id="autostartCheck" type="checkbox" /> ${t("set.autostart")}</label>
+            <div style="font-size:0.78rem;color:var(--text-3);">${t("set.autostartHint")}</div>
           </section>
         </div>
       </div>
@@ -1173,6 +1181,8 @@ export const CSS = `
   .settingsBody { flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
   .settingsSection { padding:0.8rem 1rem; scroll-margin-top:0.4rem; }
   .settingsSection + .settingsSection { border-top:1px solid var(--border); }
+  .settingsSection label.settingsCheck { flex-direction:row; align-items:center; gap:0.5rem; cursor:pointer; margin:0.3rem 0; }
+  .settingsSection label.settingsCheck input { width:auto; }
   .propsRow { display:flex; gap:0.6rem; padding:0.25rem 0; font-size:0.88rem; }
   .propsRow .k { width: 10rem; color:var(--text-3); }
   .propsRow .v { flex:1; color:var(--text); word-break: break-word; }

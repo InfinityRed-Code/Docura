@@ -56,7 +56,8 @@ Redaction, Export & Conversion, OCR) are all shipped. Work is now on the v1.1
   banner for text-less scans.
 - **Print to PDF.** Windows virtual printer (auto-installed PS class driver +
   Ghostscript pipeline). Jobs dropped into a watched spool folder land back in
-  the reader automatically.
+  the reader automatically. Optional system-tray / autostart mode keeps the
+  spool watcher running in the background without an open window.
 - **Performance.** Bounded, viewport-prioritised render pool (pages encode while
   the next rasterises; no UI freeze on large pages), byte-budgeted LRU page
   cache keyed by zoom, lazy thumbnails, eviction of far-from-viewport slots.

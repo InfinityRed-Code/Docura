@@ -236,7 +236,7 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 - [ ] Lokalisierung: de / en mindestens [U]
 - [x] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U] — High-Contrast-Theme (schwarz/weiß + gelber Akzent, solide Rahmen), globaler `:focus-visible`-Outline, `aria-label` aus Tooltips für Icon-only-Buttons gespiegelt, `<html lang>` gesetzt
 - [x] Erweitertes Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
-- [ ] Tray-App / Autostart für Hintergrund-Spool-Watcher (Print-to-PDF ohne geöffnete Haupt-App)
+- [x] Tray-App / Autostart für Hintergrund-Spool-Watcher (Print-to-PDF ohne geöffnete Haupt-App) — System-Tray-Icon (Menü: Öffnen/Beenden); Setting „im Tray weiterlaufen" → Fenster-Schließen blendet aus statt zu beenden, Spool-Watcher bleibt aktiv; Autostart-Toggle via `tauri-plugin-autostart`
 
 ---
 
