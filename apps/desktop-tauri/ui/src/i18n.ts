@@ -110,6 +110,7 @@ const en: Dict = {
   // Settings
   "set.title": "Settings", "set.appearance": "Appearance", "set.theme": "Theme",
   "set.language": "Language", "theme.light": "Light", "theme.dark": "Dark", "theme.docura": "Docura",
+  "theme.contrast": "High contrast",
   "set.themeHint": "Switch the interface between the light and dark color scheme.",
   "set.defaultZoom": "Default zoom",
   "set.performance": "Performance",
@@ -416,6 +417,7 @@ const de: Dict = {
   "ptab.info": "Info", "ptab.perms": "Berechtigungen",
   "set.title": "Einstellungen", "set.appearance": "Darstellung", "set.theme": "Design",
   "set.language": "Sprache", "theme.light": "Hell", "theme.dark": "Dunkel", "theme.docura": "Docura",
+  "theme.contrast": "Hoher Kontrast",
   "set.themeHint": "Oberfläche zwischen hellem und dunklem Farbschema umschalten.",
   "set.defaultZoom": "Standard-Zoom",
   "set.performance": "Leistung",

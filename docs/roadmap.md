@@ -234,7 +234,7 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 - [ ] Auto-Update (Tauri Updater Plugin) [X]
 - [ ] Crash-Reporting opt-in (Sentry oder eigenes) [X]
 - [ ] Lokalisierung: de / en mindestens [U]
-- [ ] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U]
+- [x] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U] — High-Contrast-Theme (schwarz/weiß + gelber Akzent, solide Rahmen), globaler `:focus-visible`-Outline, `aria-label` aus Tooltips für Icon-only-Buttons gespiegelt, `<html lang>` gesetzt
 - [x] Erweitertes Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
 - [ ] Tray-App / Autostart für Hintergrund-Spool-Watcher (Print-to-PDF ohne geöffnete Haupt-App)
 

@@ -297,8 +297,9 @@ export function initChrome() {
   const applyTheme = (theme: string) => {
     document.body.classList.toggle("theme-dark", theme === "dark");
     document.body.classList.toggle("theme-docura", theme === "docura");
+    document.body.classList.toggle("theme-contrast", theme === "contrast");
     // Color the native Windows title bar along with the app (Windows 11+).
-    invoke("set_titlebar_theme", { dark: theme === "dark" }).catch(() => {});
+    invoke("set_titlebar_theme", { dark: theme === "dark" || theme === "contrast" }).catch(() => {});
   };
   const savedTheme = localStorage.getItem("rustpdf-theme") ?? "light";
   themeSelect.value = savedTheme;
@@ -306,6 +307,16 @@ export function initChrome() {
   themeSelect.addEventListener("change", () => {
     localStorage.setItem("rustpdf-theme", themeSelect.value);
     applyTheme(themeSelect.value);
+  });
+
+  // Accessibility: expose the UI language to assistive tech, and give every
+  // icon-only button an aria-label mirrored from its tooltip (screen readers
+  // announce nothing for a button that holds only an SVG icon).
+  document.documentElement.lang = getLang();
+  document.querySelectorAll<HTMLElement>("button[title]").forEach((btn) => {
+    if (!btn.getAttribute("aria-label") && !btn.textContent?.trim()) {
+      btn.setAttribute("aria-label", btn.getAttribute("title") ?? "");
+    }
   });
 
   // Language — changing it re-renders the whole UI, so reload after persisting.

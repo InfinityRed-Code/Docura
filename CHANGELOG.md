@@ -14,6 +14,11 @@ scope each tag landed.
 Work on the v1.1 "Performance & Polish" milestone.
 
 ### Added
+- **High-contrast theme + accessibility pass.** A new High-contrast theme
+  (black/white with a yellow accent and solid borders) in Settings → Appearance,
+  a visible keyboard focus outline everywhere (`:focus-visible`), `aria-label`s
+  mirrored from tooltips onto icon-only buttons, and a `lang` attribute for
+  assistive tech.
 - **Default-zoom setting.** A new "Default zoom" dropdown (fit page / width /
   actual) in Settings → Appearance, persisted and applied to documents on open.
 - **Render-cache budget setting.** Settings → Performance now exposes the

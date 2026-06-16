@@ -410,6 +410,7 @@ export function buildHtml(): string {
                 <option value="light">${t("theme.light")}</option>
                 <option value="dark">${t("theme.dark")}</option>
                 <option value="docura">${t("theme.docura")}</option>
+                <option value="contrast">${t("theme.contrast")}</option>
               </select>
             </label>
             <label>${t("set.language")}
@@ -716,6 +717,21 @@ export const CSS = `
     --text:#241e3a; --text-2:#5b5374; --text-3:#8d86a3;
     --canvas:#3f3955; --danger:#d23b3b;
   }
+  /* High-contrast theme (accessibility): pure black/white with a bright accent
+     and solid borders. */
+  body.theme-contrast {
+    --accent:#ffd400; --accent-strong:#fff34d; --accent-tint:#3a3300;
+    --bg:#000000; --bg-2:#000000; --bg-3:#0d0d0d; --hover:#252100;
+    --border:#ffffff; --border-2:#ffffff;
+    --text:#ffffff; --text-2:#ffffff; --text-3:#e6e6e6;
+    --canvas:#000000; --danger:#ff5a5a;
+  }
+  body.theme-contrast button, body.theme-contrast select, body.theme-contrast input,
+  body.theme-contrast textarea { border:1px solid #fff !important; }
+  body.theme-contrast .pageSlot { box-shadow:0 0 0 2px #fff; }
+  /* Keyboard focus must be clearly visible everywhere. */
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  body.theme-contrast :focus-visible { outline:3px solid #ffd400; outline-offset:2px; }
   /* Dark-theme tweaks for the few light-pastel accents. */
   body.theme-dark .deleteAction { background:#3a2a2a !important; color:#e09f9f !important; border-color:#5a3a3a !important; }
   body.theme-dark #mergeCommitBtn:not(:disabled) { background:#234023; color:#9fe09f; border-color:#3d6d3d; }
