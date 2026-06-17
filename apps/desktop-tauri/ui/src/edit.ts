@@ -191,7 +191,7 @@ export function setRibbonTab(tab: RibbonTab) {
   if (tab === "organize") {
     document.getElementById("sidebar")!.classList.remove("hidden");
     void setEditMode("select");
-  } else if (tab === "reader" || tab === "forms" || tab === "sign") {
+  } else if (tab === "reader" || tab === "view" || tab === "comment" || tab === "forms" || tab === "sign") {
     void setEditMode("select");
     clearSelection();
   }
@@ -445,7 +445,6 @@ export function addMergePaths(paths: string[]) {
 // ---------- Insert PDF (from another file) ----------
 
 async function runInsertPdf(where: InsertWhere) {
-  setInsertMenuOpen(false);
   if (!state.currentDoc) { setStatus("Open a PDF first"); return; }
   const picked = await open({
     multiple: true,
@@ -480,17 +479,7 @@ export function fmtMutationError(err: unknown): string {
 
 // ---------- Popovers ----------
 
-function setRotateMenuOpen(open: boolean) {
-  dom.rotateMenu.classList.toggle("hidden", !open);
-  dom.rotateMenuBtn.setAttribute("aria-expanded", String(open));
-}
-function setInsertMenuOpen(open: boolean) {
-  dom.insertMenu.classList.toggle("hidden", !open);
-  dom.insertMenuBtn.setAttribute("aria-expanded", String(open));
-}
-
 function runRotate(deg: number) {
-  setRotateMenuOpen(false);
   rotateSelectionOrCurrent(deg);
 }
 
@@ -588,34 +577,37 @@ export function initEdit() {
   document.getElementById("extractSelectionBtn")!.addEventListener("click", extractSelectedPages);
   document.getElementById("extractSelectionOrgBtn")?.addEventListener("click", extractSelectedPages);
 
-  // Rotate menu
-  dom.rotateMenuBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setRotateMenuOpen(dom.rotateMenu.classList.contains("hidden"));
-  });
+  // Generic ribbon dropdowns: any `.menuTrigger` that sits in a `.menuHost`
+  // toggles the `.popover` in that host. Clicking a [role=menuitem] or anywhere
+  // outside closes open popovers; clicks on popover form controls keep it open.
+  const closePopovers = (except?: Element | null) => {
+    document.querySelectorAll<HTMLElement>(".menuHost > .popover:not(.hidden)").forEach((p) => {
+      if (p === except) return;
+      p.classList.add("hidden");
+      p.closest(".menuHost")?.querySelector(".menuTrigger")?.setAttribute("aria-expanded", "false");
+    });
+  };
   document.addEventListener("click", (e) => {
-    if (!dom.rotateMenu.classList.contains("hidden")
-      && !dom.rotateMenu.contains(e.target as Node)
-      && e.target !== dom.rotateMenuBtn) {
-      setRotateMenuOpen(false);
+    const target = e.target as HTMLElement;
+    const trigger = target.closest(".menuTrigger") as HTMLElement | null;
+    const pop = trigger?.closest(".menuHost")?.querySelector<HTMLElement>(":scope > .popover") ?? null;
+    if (trigger && pop) {
+      e.stopPropagation();
+      const willOpen = pop.classList.contains("hidden");
+      closePopovers(willOpen ? null : pop);
+      pop.classList.toggle("hidden", !willOpen);
+      trigger.setAttribute("aria-expanded", String(willOpen));
+      return;
     }
+    if (target.closest(".menuHost > .popover")) {
+      if (target.closest('[role="menuitem"]')) closePopovers();
+      return;
+    }
+    closePopovers();
   });
   document.getElementById("rotateLeftBtn")!.addEventListener("click", () => runRotate(-90));
   document.getElementById("rotateRightBtn")!.addEventListener("click", () => runRotate(90));
   document.getElementById("rotate180Btn")!.addEventListener("click", () => runRotate(180));
-
-  // Insert menu
-  dom.insertMenuBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setInsertMenuOpen(dom.insertMenu.classList.contains("hidden"));
-  });
-  document.addEventListener("click", (e) => {
-    if (!dom.insertMenu.classList.contains("hidden")
-      && !dom.insertMenu.contains(e.target as Node)
-      && e.target !== dom.insertMenuBtn) {
-      setInsertMenuOpen(false);
-    }
-  });
   document.getElementById("insertBeforeBtn")!.addEventListener("click", () => runInsertPdf("before"));
   document.getElementById("insertAfterBtn")!.addEventListener("click", () => runInsertPdf("after"));
   document.getElementById("insertEndBtn")!.addEventListener("click", () => runInsertPdf("end"));

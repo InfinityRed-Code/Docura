@@ -20,6 +20,7 @@ pub enum MarkupKind {
     Highlight,
     Underline,
     StrikeOut,
+    Squiggly,
 }
 
 impl MarkupKind {
@@ -28,6 +29,7 @@ impl MarkupKind {
             MarkupKind::Highlight => "Highlight",
             MarkupKind::Underline => "Underline",
             MarkupKind::StrikeOut => "StrikeOut",
+            MarkupKind::Squiggly => "Squiggly",
         }
     }
 }
@@ -291,6 +293,29 @@ fn build_markup_appearance(
                     _ => y0 + qh * 0.5,
                 };
                 let _ = write!(&mut buf, "{lw:.3} w {x0:.3} {y:.3} m {x1:.3} {y:.3} l S\n");
+            }
+            buf.extend_from_slice(b"Q\n");
+        }
+        MarkupKind::Squiggly => {
+            // A wavy underline drawn as a triangle wave just above the baseline.
+            let _ = write!(&mut buf, "q {r:.3} {g:.3} {b:.3} RG\n");
+            for &(x0, y0, x1, y1) in quads {
+                let qh = (y1 - y0).max(1.0);
+                let lw = (qh * 0.06).max(0.5);
+                let amp = (qh * 0.09).max(1.0);
+                let base = y0 + qh * 0.05;
+                let step = (amp * 1.6).max(2.5);
+                let _ = write!(&mut buf, "{lw:.3} w {x0:.3} {base:.3} m\n");
+                let mut x = x0;
+                let mut up = true;
+                while x < x1 - 0.01 {
+                    let nx = (x + step).min(x1);
+                    let y = if up { base + amp } else { base };
+                    let _ = write!(&mut buf, "{nx:.3} {y:.3} l\n");
+                    x = nx;
+                    up = !up;
+                }
+                buf.extend_from_slice(b"S\n");
             }
             buf.extend_from_slice(b"Q\n");
         }

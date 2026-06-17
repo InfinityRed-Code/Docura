@@ -244,6 +244,8 @@ async function maybeShowBanner() {
 export function initOcr() {
   el("ocrBtn").addEventListener("click", () => void openOcrDialog());
   el("ocrBatchBtn").addEventListener("click", () => void batchOcr());
+  // OCR ("Schnellerkennung") also offered on the Edit tab.
+  document.getElementById("editOcrBtn")?.addEventListener("click", () => void openOcrDialog());
   el("ocrDlgClose").addEventListener("click", closeOcrDialog);
   el("ocrCancel").addEventListener("click", closeOcrDialog);
   el("ocrCommit").addEventListener("click", () => void commitOcr());

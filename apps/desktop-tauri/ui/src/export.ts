@@ -226,6 +226,9 @@ export function initExport() {
   document.getElementById("exportHtmlBtn")!.addEventListener("click", () => void exportHtml());
   document.getElementById("exportDocxBtn")!.addEventListener("click", () => void exportDocx());
   document.getElementById("exportXlsxBtn")!.addEventListener("click", () => void exportXlsx());
+  // Same Office export, surfaced on the Edit tab ("Nach Office").
+  document.getElementById("editExportDocxBtn")?.addEventListener("click", () => void exportDocx());
+  document.getElementById("editExportXlsxBtn")?.addEventListener("click", () => void exportXlsx());
   document.getElementById("imagesToPdfBtn")!.addEventListener("click", () => void imagesToPdf());
   document.getElementById("officeToPdfBtn")!.addEventListener("click", () => void officeToPdf());
 }

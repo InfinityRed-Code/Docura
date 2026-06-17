@@ -240,6 +240,106 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 
 ---
 
+## Foxit-Feature-Abgleich (Inspiration, 2026-06-17)
+
+Quelle: Screenshots der Foxit-PDF-Bänder in `pics/`. Funktionen, die Foxit hat
+und Docura noch fehlen, gruppiert nach Foxit-Band. Reihenfolge der Umsetzung
+nach Nutzerbedarf — nicht als fester Meilenstein gedacht, sondern als Backlog
+zur weiteren Bearbeitung. Architektur-Regeln (siehe unten) gelten weiter.
+
+### Bedienkonzept / Design (vom Foxit-Ribbon übernehmen)
+
+Design-Pass umgesetzt 2026-06-17 (UI-only, `template.ts`/`i18n.ts`/`edit.ts`/`types.ts`).
+Zweiter Pass (gleicher Tag): Drei-Zeilen-Chrome (Titelleiste+QAT / Tab-Strip /
+Band), einheitliche Icon-über-Label-Buttons (`.cmd`, 4,6×3,5rem, zentriert,
+Silbentrennung), verwandte Aktionen in Dropdowns, Bearbeiten-Tab gefüllt
+(Text einfügen/erkennen/Nach Office), neue **Wellenlinie (Squiggly)**-Markierung
+(Rust `MarkupKind::Squiggly`). Alle Ribbon-Icons aus kuratierter Lucide-Registry.
+
+- [x] **Tab-Leiste als Text-Tabs mit Akzent-Unterstrich** statt Button-Tabs:
+  Startseite / Kommentar / Ansicht / Bearbeiten / … als flache Textbeschriftung,
+  aktiver Tab mit Akzent-Unterstrich (kein Box-Fill mehr) [U]
+- [x] **Quick-Access-Toolbar** (`.qat`): Öffnen, Speichern, Drucken, Undo/Redo,
+  Zuletzt (▾), Seiten-Navigation — persistenter `data-ribbon="both"`-Cluster,
+  links mit Trenner abgesetzt, auf allen Tabs sichtbar (außer Convert-Subview) [U]
+  - [ ] noch offen: **Hand-/Pan-Werkzeug** in der QAT (echtes Pan ist aktuell an
+    den Wheel-Zoom-Modus gekoppelt → eigener Pan-Modus nötig, siehe Startseite)
+- [x] **Buttons mit Icon-über-Label** in den Ribbon-Gruppen (vertikal gestapelt,
+  größere Icons) + **▾-Caret** auf allen `.menuTrigger`-Dropdowns und „Zuletzt" [U]
+- [ ] **Globale Suchbox** mittig in der Titelleiste (Dokumentsuche + Befehlssuche),
+  nicht nur das aktuelle Such-Popup [U]
+- [x] **Gruppen-Trenner + konsistente Gruppen-Labels** auf allen Tabs;
+  Display-Matrix auf eine kompakte `:not()`-Regel pro Tab umgestellt (skaliert) [U]
+- [x] **Eigener „Kommentar"-Tab** abgespalten: Annotations-Gruppen
+  (Textauszeichnung/Zeichnen/Text/Bereich) von `edit` → `comment` verschoben [U]
+- [x] **Eigener „Ansicht"-Tab**: View-Modus, Drehen, Invertieren, Vollbild,
+  Präsentation von `reader` → `view` verschoben (Lesemodus/TTS folgen) [U]
+
+### Startseite (Home)
+
+- [ ] **Hand-/Pan-Werkzeug** als expliziter, umschaltbarer Modus (Greifhand) [U]
+- [ ] **Screenshot / Snapshot** — Rechteck aufziehen, Bereich als Bild in die
+  Zwischenablage / als PNG exportieren [E][U]
+- [ ] **Reflow / Fließtext** — Text seitenlos an die Fensterbreite umbrechen
+  (Lesefluss ohne festes Seitenlayout) [E][U]
+
+### Kommentar (Comment)
+
+- [ ] **Legende / Callout** — Textfeld mit Pfeil-/Linien-Verbindung zur Stelle [X: lopdf][U]
+- [ ] **Datei-Anhang als Annotation** — Datei an PDF-Position anheften
+  (FileAttachment-Annotation, nicht nur Dokument-Attachments) [X: lopdf]
+- [ ] **Messwerkzeuge** — Distanz, Umfang, Fläche mit Maßstab/Kalibrierung [E][U]
+- [ ] **Bereich-Hervorheben** — rechteckige Hervorhebung (Squiggly/Region), nicht
+  nur Text-Markup [X: lopdf]
+- [ ] **Dynamische / benutzerdefinierte Stempel** — Stempelgalerie (Genehmigt,
+  Vertraulich, Entwurf …) + eigener Stempel mit Name/Datum [X: lopdf][U]
+- [ ] **Kommentare zusammenfassen** — Report aller Annotationen
+  (Seite, Autor, Typ, Text) als PDF/Text exportieren [C][U]
+- [ ] **Kommentar-Export als JSON/CSV** (vgl. Kollaboration unten) [C]
+- [ ] **PDF per E-Mail senden** — `mailto:`/Standard-Mailclient mit Anhang [S]
+- [ ] **„Werkzeug beibehalten"-Toggle** — Annotationstool bleibt nach Setzen aktiv [U]
+
+### Ansicht (View)
+
+- [ ] **Lesemodus** — Chrome/Sidebars ausblenden, ablenkungsfreies Lesen [U]
+- [ ] **Textansicht** — reine Plaintext-Ansicht des Dokuments [E][U]
+- [ ] **Automatischer Bildlauf** — Auto-Scroll mit einstellbarer Geschwindigkeit [U]
+- [ ] **Vorlesen (Text-to-Speech)** — Windows-SAPI/WinRT-Sprachausgabe [S][U]
+- [ ] **Wortzählung** — Wörter/Zeichen/Seiten zählen [E][U]
+- [ ] **Split-View** — Fenster horizontal/vertikal teilen (zwei Stellen gleichzeitig) [U]
+
+### Formular
+
+- [ ] **Formular flatten („auf Blatt")** — ausgefüllte Felder in statischen
+  Seiteninhalt einbrennen (nicht mehr editierbar) [X: lopdf]
+- [ ] **Formulardaten Import/Export** — FDF/XFDF/XML der Feldwerte (ohne PDF) [X: hand-rolled]
+
+### Schützen / Signatur
+
+- [ ] **Zertifizierende Signatur (DocMDP)** — Autoren-Zertifizierung mit
+  Änderungs-Berechtigungsstufe, nicht nur Approval-Signatur [X: pdf_sign]
+- [ ] **Reines Zeitstempel-Dokument** — Dokument-Zeitstempel ohne Identitäts-Signatur
+  (RFC 3161, eigener Button) [X: ureq]
+
+### Bearbeiten (Edit) — große Brocken
+
+- [ ] **Text in-place bearbeiten** — vorhandenen Content-Stream-Text ändern/löschen
+  (Foxit „Text bearbeiten"). Hoher Aufwand: Content-Stream-Parsing + Font-Handling [X: lopdf/pdfium]
+- [ ] **Objekt bearbeiten** — Bilder/Vektorobjekte verschieben, skalieren, löschen [X: lopdf/pdfium]
+- [ ] **Lesezeichen bearbeiten** — Outline anlegen/umbenennen/verschieben/löschen
+  (aktuell nur Anzeige der TOC-Sidebar) [E/X: lopdf][U]
+
+### eSign (Cloud-Workflow) — niedrige Priorität
+
+Server-/Cloud-gebundene Foxit-eSign-Features. Für eine Offline-Desktop-App nur
+relevant, falls später ein Backend/Dienst dazukommt — bewusst zurückgestellt.
+
+- [ ] Signatur anfordern (Empfänger-Workflow) [S][X: Backend]
+- [ ] Massenversand an mehrere Empfänger [S][X: Backend]
+- [ ] Online-Formular erstellen / Dokumentstatus-Tracking [S][X: Backend]
+
+---
+
 ## v1.2+ — Nischen & Pro-Features
 
 Reihenfolge nach Nutzerbedarf sortieren, nicht streng umsetzen.

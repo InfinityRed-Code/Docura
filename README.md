@@ -30,7 +30,7 @@ Redaction, Export & Conversion, OCR) are all shipped. Work is now on the v1.1
   from another PDF, merge multiple PDFs, split by page ranges, undo/redo across
   all organise operations. Watermark (text + image), header/footer + page
   numbers.
-- **Annotate.** Highlight, underline, strikeout, sticky notes, free-hand ink,
+- **Annotate.** Highlight, underline, strikeout, squiggly, sticky notes, free-hand ink,
   shapes (rect / circle / line / arrow), stamps (image), free text. Comment
   panel with thread + filters. XFDF import/export. Print/no-print flag per
   annotation.

@@ -1930,6 +1930,7 @@ fn parse_markup_kind(s: &str) -> pdf_mutate::MarkupKind {
     match s.to_ascii_lowercase().as_str() {
         "underline" => pdf_mutate::MarkupKind::Underline,
         "strikeout" | "strike" | "strikethrough" => pdf_mutate::MarkupKind::StrikeOut,
+        "squiggly" | "wavy" => pdf_mutate::MarkupKind::Squiggly,
         _ => pdf_mutate::MarkupKind::Highlight,
     }
 }

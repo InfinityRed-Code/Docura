@@ -83,6 +83,13 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  FilePlus,
+  Layers,
+  Palette,
+  PenTool,
+  ScanText,
+  Shapes,
+  SlidersHorizontal,
 } from "lucide";
 
 const icons = {
@@ -165,6 +172,13 @@ const icons = {
   X,
   ZoomIn,
   ZoomOut,
+  FilePlus,
+  Layers,
+  Palette,
+  PenTool,
+  ScanText,
+  Shapes,
+  SlidersHorizontal,
 };
 
 /** Replace all `data-lucide` placeholders in the document with SVGs.

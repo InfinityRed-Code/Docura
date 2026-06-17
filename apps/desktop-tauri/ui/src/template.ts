@@ -6,283 +6,310 @@ export function buildHtml(): string {
   return `
 <main class="root">
   <header class="ribbon">
-    <div class="ribbonTabs" data-tauri-drag-region>
+    <div class="titleBar" data-tauri-drag-region>
       <span class="appGlyph" data-tauri-drag-region><img src="${appIcon}" alt="" draggable="false" /></span>
-      <button class="ribbonTab active" data-ribbon-tab="reader">${t("tab.reader")}</button>
-      <button class="ribbonTab" data-ribbon-tab="edit">${t("tab.edit")}</button>
-      <button class="ribbonTab" data-ribbon-tab="forms">${t("tab.forms")}</button>
-      <button class="ribbonTab" data-ribbon-tab="sign">${t("tab.sign")}</button>
-      <button class="ribbonTab" data-ribbon-tab="convert">${t("tab.convert")}</button>
-      <button class="ribbonTab" data-ribbon-tab="organize">${t("tab.organize")}</button>
-      <button class="ribbonTab" data-ribbon-tab="protect">${t("tab.protect")}</button>
+      <div class="qat">
+        <button id="sidebarBtn" title="${t("tip.sidebar")}"><i data-lucide="panel-left"></i></button>
+        <button id="commentToggleBtn" title="${t("tip.comments")}"><i data-lucide="message-square-text"></i></button>
+        <span class="sep"></span>
+        <button id="open" title="${t("tip.open")}"><i data-lucide="folder-open"></i></button>
+        <button id="recentBtn" title="${t("tip.recent")}" class="hasCaret"><i data-lucide="history"></i></button>
+        <div id="recentMenu" class="menu hidden"></div>
+        <button id="saveAsBtn" title="${t("tip.saveAs")}"><i data-lucide="save"></i></button>
+        <button id="printBtn" title="${t("tip.print")}"><i data-lucide="printer"></i></button>
+        <span class="sep"></span>
+        <button id="undoBtn" title="${t("tip.undo")}" disabled><i data-lucide="undo-2"></i></button>
+        <button id="redoBtn" title="${t("tip.redo")}" disabled><i data-lucide="redo-2"></i></button>
+        <span class="sep"></span>
+        <button id="prevPage" title="${t("tip.prevPage")}"><i data-lucide="chevron-left"></i></button>
+        <input id="pageInput" type="number" min="1" value="1" style="width:3.4rem" />
+        <span id="pageTotal">/ 0</span>
+        <button id="nextPage" title="${t("tip.nextPage")}"><i data-lucide="chevron-right"></i></button>
+        <button id="gotoBtn" title="${t("tip.goto")}"><i data-lucide="arrow-right-to-line"></i></button>
+      </div>
       <div class="titleDrag" data-tauri-drag-region><span id="titlebarTitle">Docura PDF</span></div>
-      <button id="settingsBtnTop" class="ribbonTab settingsTab" title="${t("tip.settings")}"><i data-lucide="settings"></i></button>
+      <button id="settingsBtnTop" class="winBtn" title="${t("tip.settings")}"><i data-lucide="settings"></i></button>
       <div class="winControls">
         <button id="winMin" title="${t("tip.winMin")}" tabindex="-1"><i data-lucide="minus"></i></button>
         <button id="winMax" title="${t("tip.winMax")}" tabindex="-1"><i data-lucide="square"></i></button>
         <button id="winClose" title="${t("tip.winClose")}" tabindex="-1"><i data-lucide="x"></i></button>
       </div>
     </div>
+    <div class="tabStrip">
+      <button class="ribbonTab active" data-ribbon-tab="reader">${t("tab.reader")}</button>
+      <button class="ribbonTab" data-ribbon-tab="comment">${t("tab.comment")}</button>
+      <button class="ribbonTab" data-ribbon-tab="view">${t("tab.view")}</button>
+      <button class="ribbonTab" data-ribbon-tab="edit">${t("tab.edit")}</button>
+      <button class="ribbonTab" data-ribbon-tab="forms">${t("tab.forms")}</button>
+      <button class="ribbonTab" data-ribbon-tab="sign">${t("tab.sign")}</button>
+      <button class="ribbonTab" data-ribbon-tab="convert">${t("tab.convert")}</button>
+      <button class="ribbonTab" data-ribbon-tab="organize">${t("tab.organize")}</button>
+      <button class="ribbonTab" data-ribbon-tab="protect">${t("tab.protect")}</button>
+    </div>
     <div class="ribbonBody" data-active="reader">
-      <button data-ribbon="both" id="sidebarBtn" title="${t("tip.sidebar")}"><i data-lucide="panel-left"></i></button>
-      <button data-ribbon="both" id="commentToggleBtn" title="${t("tip.comments")}"><i data-lucide="message-square-text"></i></button>
-      <button data-ribbon="both" id="open" title="${t("tip.open")}"><i data-lucide="folder-open"></i></button>
-      <button data-ribbon="both" id="recentBtn" title="${t("tip.recent")}"><i data-lucide="history"></i></button>
-      <div id="recentMenu" class="menu hidden"></div>
-      <span data-ribbon="both" class="sep"></span>
-      <button data-ribbon="both" id="undoBtn" title="${t("tip.undo")}" disabled><i data-lucide="undo-2"></i></button>
-      <button data-ribbon="both" id="redoBtn" title="${t("tip.redo")}" disabled><i data-lucide="redo-2"></i></button>
-      <span data-ribbon="both" class="sep"></span>
-      <button data-ribbon="both" id="prevPage" title="${t("tip.prevPage")}"><i data-lucide="chevron-left"></i></button>
-      <input data-ribbon="both" id="pageInput" type="number" min="1" value="1" style="width:4rem" />
-      <span data-ribbon="both" id="pageTotal">/ 0</span>
-      <button data-ribbon="both" id="nextPage" title="${t("tip.nextPage")}"><i data-lucide="chevron-right"></i></button>
-      <button data-ribbon="both" id="gotoBtn" title="${t("tip.goto")}"><i data-lucide="arrow-right-to-line"></i></button>
-      <span data-ribbon="reader" class="sep"></span>
-      <button data-ribbon="reader" id="zoomOut" title="${t("tip.zoomOut")}"><i data-lucide="zoom-out"></i></button>
-      <select data-ribbon="reader" id="fitSelect" title="${t("tip.fit")}">
-        <option value="custom">${t("fit.custom")}</option>
-        <option value="width">${t("fit.width")}</option>
-        <option value="page">${t("fit.page")}</option>
-        <option value="actual">${t("fit.actual")}</option>
-      </select>
-      <select data-ribbon="reader" id="zoomSelect" title="${t("tip.zoom")}">
-        <option value="custom" id="zoomCustomOpt">100%</option>
-        <option value="0.1">10%</option>
-        <option value="0.5">50%</option>
-        <option value="0.8">80%</option>
-        <option value="1">100%</option>
-        <option value="1.2">120%</option>
-        <option value="1.5">150%</option>
-        <option value="2">200%</option>
-      </select>
-      <button data-ribbon="reader" id="zoomIn" title="${t("tip.zoomIn")}"><i data-lucide="zoom-in"></i></button>
-      <button data-ribbon="reader" id="wheelZoomBtn" title="${t("tip.wheelZoom")}"><i data-lucide="mouse"></i></button>
-      <span data-ribbon="reader" class="sep"></span>
-      <select data-ribbon="reader" id="viewModeSelect" title="${t("tip.viewMode")}">
-        <option value="single">${t("view.single")}</option>
-        <option value="continuous">${t("view.continuous")}</option>
-        <option value="double">${t("view.double")}</option>
-      </select>
-      <button data-ribbon="reader" id="rotLeft" title="${t("tip.rotLeft")}"><i data-lucide="rotate-ccw"></i></button>
-      <button data-ribbon="reader" id="rotRight" title="${t("tip.rotRight")}"><i data-lucide="rotate-cw"></i></button>
-      <button data-ribbon="reader" id="darkToggle" title="${t("tip.invert")}"><i data-lucide="moon"></i></button>
-      <button data-ribbon="reader" id="fullscreenBtn" title="${t("tip.fullscreen")}"><i data-lucide="maximize"></i></button>
-      <button data-ribbon="reader" id="presentBtn" title="${t("tip.present")}"><i data-lucide="presentation"></i></button>
-      <span data-ribbon="reader" class="sep"></span>
-      <button data-ribbon="reader" id="searchBtn" title="${t("tip.search")}"><i data-lucide="search"></i></button>
-      <button data-ribbon="both" id="saveAsBtn" title="${t("tip.saveAs")}"><i data-lucide="save"></i></button>
-      <button data-ribbon="reader" id="printBtn" title="${t("tip.print")}"><i data-lucide="printer"></i></button>
-      <button data-ribbon="reader" id="propsBtn" title="${t("tip.props")}"><i data-lucide="info"></i></button>
+      <div data-ribbon="reader" class="ribbonGroup">
+        <div class="groupBody">
+          <button class="cmd" id="zoomOut" title="${t("tip.zoomOut")}"><i data-lucide="zoom-out"></i><span>${t("lbl.zoomOut")}</span></button>
+          <div class="fieldCol">
+            <select id="fitSelect" title="${t("tip.fit")}">
+              <option value="custom">${t("fit.custom")}</option>
+              <option value="width">${t("fit.width")}</option>
+              <option value="page">${t("fit.page")}</option>
+              <option value="actual">${t("fit.actual")}</option>
+            </select>
+            <select id="zoomSelect" title="${t("tip.zoom")}">
+              <option value="custom" id="zoomCustomOpt">100%</option>
+              <option value="0.1">10%</option>
+              <option value="0.5">50%</option>
+              <option value="0.8">80%</option>
+              <option value="1">100%</option>
+              <option value="1.2">120%</option>
+              <option value="1.5">150%</option>
+              <option value="2">200%</option>
+            </select>
+          </div>
+          <button class="cmd" id="zoomIn" title="${t("tip.zoomIn")}"><i data-lucide="zoom-in"></i><span>${t("lbl.zoomIn")}</span></button>
+          <button class="cmd" id="wheelZoomBtn" title="${t("tip.wheelZoom")}"><i data-lucide="mouse"></i><span>${t("lbl.pan")}</span></button>
+        </div>
+      </div>
+      <div data-ribbon="reader" class="ribbonGroup">
+        <div class="groupBody">
+          <button class="cmd" id="searchBtn" title="${t("tip.search")}"><i data-lucide="search"></i><span>${t("lbl.search")}</span></button>
+          <button class="cmd" id="propsBtn" title="${t("tip.props")}"><i data-lucide="info"></i><span>${t("lbl.props")}</span></button>
+        </div>
+      </div>
+      <div data-ribbon="view" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="fieldCol">
+            <select id="viewModeSelect" title="${t("tip.viewMode")}">
+              <option value="single">${t("view.single")}</option>
+              <option value="continuous">${t("view.continuous")}</option>
+              <option value="double">${t("view.double")}</option>
+            </select>
+            <span class="fieldCaption"><i data-lucide="layout-grid"></i>${t("lbl.layout")}</span>
+          </div>
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="viewRotateBtn" aria-haspopup="true" aria-expanded="false" title="${t("grp.rotate")}"><i data-lucide="rotate-cw-square"></i><span>${t("lbl.rotate")}</span></button>
+            <div class="popover hidden" role="menu">
+              <button class="mi" id="rotLeft" role="menuitem" title="${t("tip.rotLeft")}"><i data-lucide="rotate-ccw"></i><span>${t("tip.rotLeft")}</span></button>
+              <button class="mi" id="rotRight" role="menuitem" title="${t("tip.rotRight")}"><i data-lucide="rotate-cw"></i><span>${t("tip.rotRight")}</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div data-ribbon="view" class="ribbonGroup">
+        <div class="groupBody">
+          <button class="cmd" id="darkToggle" title="${t("tip.invert")}"><i data-lucide="moon"></i><span>${t("lbl.invert")}</span></button>
+          <button class="cmd" id="fullscreenBtn" title="${t("tip.fullscreen")}"><i data-lucide="maximize"></i><span>${t("lbl.fullscreen")}</span></button>
+          <button class="cmd" id="presentBtn" title="${t("tip.present")}"><i data-lucide="presentation"></i><span>${t("lbl.present")}</span></button>
+        </div>
+      </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
-          <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn active" data-mode="select" title="${t("tip.modeSelect")}"><i data-lucide="mouse-pointer-2"></i></button>
-            <button class="modeBtn" data-mode="delete" title="${t("tip.modeDelete")}"><i data-lucide="trash-2"></i></button>
-          </div>
-          <button id="deleteSelectionBtn" class="deleteAction" disabled title="${t("tip.deleteSel")}"><i data-lucide="trash-2"></i></button>
-          <button id="extractSelectionBtn" disabled title="${t("tip.extractSel")}"><i data-lucide="file-output"></i></button>
+          <button class="cmd modeBtn active" data-mode="select" title="${t("tip.modeSelect")}"><i data-lucide="mouse-pointer-2"></i><span>${t("lbl.select")}</span></button>
+          <button class="cmd modeBtn" data-mode="delete" title="${t("tip.modeDelete")}"><i data-lucide="trash-2"></i><span>${t("lbl.delMode")}</span></button>
+          <button class="cmd deleteAction" id="deleteSelectionBtn" disabled title="${t("tip.deleteSel")}"><i data-lucide="trash-2"></i><span>${t("lbl.delPage")}</span></button>
+          <button class="cmd" id="extractSelectionBtn" disabled title="${t("tip.extractSel")}"><i data-lucide="file-output"></i><span>${t("lbl.extract")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.modi")}</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <div class="menuHost">
-            <button id="rotateMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.rotatePages")}"><i data-lucide="rotate-cw-square"></i></button>
+            <button id="rotateMenuBtn" class="cmd menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.rotatePages")}"><i data-lucide="rotate-cw-square"></i><span>${t("lbl.rotate")}</span></button>
             <div id="rotateMenu" class="popover hidden" role="menu">
-              <button id="rotateLeftBtn" role="menuitem" title="${t("tip.rotateCcw")}"><i data-lucide="rotate-ccw"></i></button>
-              <button id="rotateRightBtn" role="menuitem" title="${t("tip.rotateCw")}"><i data-lucide="rotate-cw"></i></button>
-              <button id="rotate180Btn" role="menuitem" title="${t("tip.rotate180")}"><i data-lucide="arrow-up-down"></i></button>
+              <button id="rotateLeftBtn" class="mi" role="menuitem" title="${t("tip.rotateCcw")}"><i data-lucide="rotate-ccw"></i><span>${t("tip.rotateCcw")}</span></button>
+              <button id="rotateRightBtn" class="mi" role="menuitem" title="${t("tip.rotateCw")}"><i data-lucide="rotate-cw"></i><span>${t("tip.rotateCw")}</span></button>
+              <button id="rotate180Btn" class="mi" role="menuitem" title="${t("tip.rotate180")}"><i data-lucide="arrow-up-down"></i><span>${t("tip.rotate180")}</span></button>
             </div>
           </div>
-        </div>
-        <div class="groupLabel">${t("grp.rotate")}</div>
-      </div>
-      <div data-ribbon="edit" class="ribbonGroup">
-        <div class="groupBody">
           <div class="menuHost">
-            <button id="insertMenuBtn" class="menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.insertPages")}"><i data-lucide="file-plus-2"></i></button>
+            <button id="insertMenuBtn" class="cmd menuTrigger" aria-haspopup="true" aria-expanded="false" title="${t("tip.insertPages")}"><i data-lucide="file-plus-2"></i><span>${t("lbl.insert")}</span></button>
             <div id="insertMenu" class="popover hidden" role="menu">
-              <button id="insertBeforeBtn" role="menuitem" title="${t("tip.insertBefore")}"><i data-lucide="arrow-up-to-line"></i></button>
-              <button id="insertAfterBtn" role="menuitem" title="${t("tip.insertAfter")}"><i data-lucide="arrow-down-to-line"></i></button>
-              <button id="insertEndBtn" role="menuitem" title="${t("tip.insertEnd")}"><i data-lucide="list-end"></i></button>
+              <button id="insertBeforeBtn" class="mi" role="menuitem" title="${t("tip.insertBefore")}"><i data-lucide="arrow-up-to-line"></i><span>${t("tip.insertBefore")}</span></button>
+              <button id="insertAfterBtn" class="mi" role="menuitem" title="${t("tip.insertAfter")}"><i data-lucide="arrow-down-to-line"></i><span>${t("tip.insertAfter")}</span></button>
+              <button id="insertEndBtn" class="mi" role="menuitem" title="${t("tip.insertEnd")}"><i data-lucide="list-end"></i><span>${t("tip.insertEnd")}</span></button>
             </div>
           </div>
         </div>
-        <div class="groupLabel">${t("grp.insert")}</div>
       </div>
       <span data-ribbon="edit" id="modeHint" class="modeHint"></span>
-      <button data-ribbon="organize" id="mergePdfsBtn" title="${t("tip.merge")}"><i data-lucide="merge"></i></button>
-      <button data-ribbon="organize" id="extractSelectionOrgBtn" disabled title="${t("tip.extractSel")}"><i data-lucide="file-output"></i></button>
-      <button data-ribbon="organize" id="splitPdfBtn" title="${t("tip.split")}"><i data-lucide="scissors"></i></button>
-      <div data-ribbon="edit" class="ribbonGroup">
+      <div data-ribbon="organize" class="ribbonGroup">
         <div class="groupBody">
-          <div class="modeGroup" role="radiogroup" id="annotToolGroup" title="${t("tip.markText")}">
-            <button class="modeBtn annotTool" data-annot="highlight" title="${t("tip.highlight")}"><i data-lucide="highlighter"></i></button>
-            <button class="modeBtn annotTool" data-annot="underline" title="${t("tip.underline")}"><i data-lucide="underline"></i></button>
-            <button class="modeBtn annotTool" data-annot="strikeout" title="${t("tip.strikeout")}"><i data-lucide="strikethrough"></i></button>
-          </div>
-          <button class="modeBtn" id="eraseAnnotBtn" title="${t("tip.eraseAnnot")}"><i data-lucide="eraser"></i></button>
-          <input type="color" id="annotColor" value="#ffe600" title="${t("tip.annotColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
-          <button class="modeBtn active" id="printToggleBtn" title="${t("tip.printToggle")}"><i data-lucide="printer"></i></button>
+          <button class="cmd" id="mergePdfsBtn" title="${t("tip.merge")}"><i data-lucide="merge"></i><span>${t("lbl.merge")}</span></button>
+          <button class="cmd" id="extractSelectionOrgBtn" disabled title="${t("tip.extractSel")}"><i data-lucide="file-output"></i><span>${t("lbl.extract")}</span></button>
+          <button class="cmd" id="splitPdfBtn" title="${t("tip.split")}"><i data-lucide="scissors"></i><span>${t("lbl.split")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.textDecoration")}</div>
+      </div>
+      <div data-ribbon="comment" class="ribbonGroup">
+        <div class="groupBody" id="annotToolGroup">
+          <button class="cmd annotTool" data-annot="highlight" title="${t("tip.highlight")}"><i data-lucide="highlighter"></i><span>${t("lbl.highlight")}</span></button>
+          <button class="cmd annotTool" data-annot="underline" title="${t("tip.underline")}"><i data-lucide="underline"></i><span>${t("lbl.underline")}</span></button>
+          <button class="cmd annotTool" data-annot="strikeout" title="${t("tip.strikeout")}"><i data-lucide="strikethrough"></i><span>${t("lbl.strikeout")}</span></button>
+          <button class="cmd annotTool" data-annot="squiggly" title="${t("tip.squiggly")}"><i data-lucide="waves"></i><span>${t("lbl.squiggly")}</span></button>
+          <label class="fieldCol" title="${t("tip.annotColor")}">
+            <input type="color" id="annotColor" value="#ffe600" />
+            <span class="fieldCaption"><i data-lucide="palette"></i>${t("lbl.color")}</span>
+          </label>
+        </div>
+      </div>
+      <div data-ribbon="comment" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="shapeMenuBtn" aria-haspopup="true" aria-expanded="false" title="${t("tip.drawDrag")}"><i data-lucide="shapes"></i><span>${t("lbl.draw")}</span></button>
+            <div class="popover hidden" role="menu" id="shapeToolGroup">
+              <button class="mi shapeTool" data-shape="rect" role="menuitem" title="${t("tip.rect")}"><i data-lucide="square"></i><span>${t("tip.rect")}</span></button>
+              <button class="mi shapeTool" data-shape="circle" role="menuitem" title="${t("tip.circle")}"><i data-lucide="circle"></i><span>${t("tip.circle")}</span></button>
+              <button class="mi shapeTool" data-shape="line" role="menuitem" title="${t("tip.line")}"><i data-lucide="slash"></i><span>${t("tip.line")}</span></button>
+              <button class="mi shapeTool" data-shape="arrow" role="menuitem" title="${t("tip.arrow")}"><i data-lucide="arrow-up-right"></i><span>${t("tip.arrow")}</span></button>
+            </div>
+          </div>
+          <button class="cmd shapeTool" data-shape="ink" title="${t("tip.ink")}"><i data-lucide="pen-line"></i><span>${t("lbl.ink")}</span></button>
+          <button class="cmd shapeTool" data-shape="note" title="${t("tip.note")}"><i data-lucide="sticky-note"></i><span>${t("lbl.note")}</span></button>
+          <button class="cmd shapeTool" data-shape="stamp" title="${t("tip.stamp")}"><i data-lucide="stamp"></i><span>${t("lbl.stamp")}</span></button>
+        </div>
+      </div>
+      <div data-ribbon="comment" class="ribbonGroup">
+        <div class="groupBody">
+          <button class="cmd shapeTool" data-shape="freetext" title="${t("tip.freetext")}"><i data-lucide="type"></i><span>${t("lbl.textbox")}</span></button>
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="textOptsBtn" aria-haspopup="true" aria-expanded="false" title="${t("grp.text")}"><i data-lucide="sliders-horizontal"></i><span>${t("grp.text")}</span></button>
+            <div class="popover hidden popoverForm" role="menu">
+              <label class="popRow" title="${t("tip.textColor")}"><span>${t("tip.textColor")}</span><input type="color" id="textFgColor" value="#000000" /></label>
+              <label class="popRow" title="${t("tip.bgColor")}"><span>${t("tip.bgColor")}</span><input type="color" id="textBgColor" value="#ffffff" /></label>
+              <label class="popRow" title="${t("tip.transparentBg")}"><span>${t("tip.transparentBg")}</span><input type="checkbox" id="textBgTransparent" /></label>
+              <label class="popRow" title="${t("tip.fontFamily")}"><span>${t("tip.fontFamily")}</span>
+                <select id="textFontFamily"><option value="Helv" selected>Helvetica</option></select></label>
+              <label class="popRow" title="${t("tip.fontSize")}"><span>${t("tip.fontSize")}</span>
+                <input id="textFontSize" type="number" min="6" max="96" step="1" value="14" style="width:3.5rem;" /></label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div data-ribbon="comment" class="ribbonGroup">
+        <div class="groupBody">
+          <button class="cmd shapeTool" data-shape="region" title="${t("tip.regionTool")}"><i data-lucide="crop"></i><span>${t("lbl.region")}</span></button>
+          <button class="cmd" id="eraseAnnotBtn" title="${t("tip.eraseAnnot")}"><i data-lucide="eraser"></i><span>${t("lbl.erase")}</span></button>
+          <button class="cmd active" id="printToggleBtn" title="${t("tip.printToggle")}"><i data-lucide="printer"></i><span>${t("lbl.print")}</span></button>
+        </div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
-          <div class="modeGroup" role="radiogroup" id="shapeToolGroup" title="${t("tip.drawDrag")}">
-            <button class="modeBtn shapeTool" data-shape="rect" title="${t("tip.rect")}"><i data-lucide="square"></i></button>
-            <button class="modeBtn shapeTool" data-shape="circle" title="${t("tip.circle")}"><i data-lucide="circle"></i></button>
-            <button class="modeBtn shapeTool" data-shape="line" title="${t("tip.line")}"><i data-lucide="slash"></i></button>
-            <button class="modeBtn shapeTool" data-shape="arrow" title="${t("tip.arrow")}"><i data-lucide="arrow-up-right"></i></button>
-            <button class="modeBtn shapeTool" data-shape="ink" title="${t("tip.ink")}"><i data-lucide="pen-line"></i></button>
-            <button class="modeBtn shapeTool" data-shape="stamp" title="${t("tip.stamp")}"><i data-lucide="stamp"></i></button>
-            <button class="modeBtn shapeTool" data-shape="note" title="${t("tip.note")}"><i data-lucide="sticky-note"></i></button>
-          </div>
+          <button class="cmd shapeTool" data-shape="freetext" title="${t("tip.freetext")}"><i data-lucide="type"></i><span>${t("lbl.textAdd")}</span></button>
+          <button class="cmd" id="watermarkBtn" title="${t("tip.watermark")}"><i data-lucide="droplet"></i><span>${t("lbl.watermark")}</span></button>
+          <button class="cmd" id="headerFooterBtn" title="${t("tip.headerFooter")}"><i data-lucide="heading"></i><span>${t("lbl.headerFooter")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.draw")}</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
-          <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn shapeTool" data-shape="freetext" title="${t("tip.freetext")}"><i data-lucide="type"></i></button>
-          </div>
-          <input type="color" id="textFgColor" value="#000000" title="${t("tip.textColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
-          <input type="color" id="textBgColor" value="#ffffff" title="${t("tip.bgColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
-          <label class="commentChk" title="${t("tip.transparentBg")}"><input type="checkbox" id="textBgTransparent" /> ⌀</label>
-          <select id="textFontFamily" title="${t("tip.fontFamily")}" style="padding:0.15rem 0.3rem;">
-            <option value="Helv" selected>Helvetica</option>
-          </select>
-          <input id="textFontSize" type="number" min="6" max="96" step="1" value="14" title="${t("tip.fontSize")}" style="width:3.5rem;" />
-        </div>
-        <div class="groupLabel">${t("grp.text")}</div>
-      </div>
-      <div data-ribbon="edit" class="ribbonGroup">
-        <div class="groupBody">
-          <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn shapeTool" data-shape="region" title="${t("tip.regionTool")}"><i data-lucide="crop"></i></button>
+          <button class="cmd" id="editOcrBtn" title="${t("tip.ocr")}"><i data-lucide="scan-text"></i><span>${t("btn.ocr")}</span></button>
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="toOfficeBtn" aria-haspopup="true" aria-expanded="false" title="${t("lbl.toOffice")}"><i data-lucide="briefcase"></i><span>${t("lbl.toOffice")}</span></button>
+            <div class="popover hidden" role="menu">
+              <button class="mi" id="editExportDocxBtn" role="menuitem" title="${t("tip.expDocx")}"><i data-lucide="book-text"></i><span>Word</span></button>
+              <button class="mi" id="editExportXlsxBtn" role="menuitem" title="${t("tip.expXlsx")}"><i data-lucide="table"></i><span>Excel</span></button>
+            </div>
           </div>
         </div>
-        <div class="groupLabel">${t("grp.region")}</div>
-      </div>
-      <div data-ribbon="edit" class="ribbonGroup">
-        <div class="groupBody">
-          <button id="watermarkBtn" title="${t("tip.watermark")}"><i data-lucide="droplet"></i></button>
-          <button id="headerFooterBtn" title="${t("tip.headerFooter")}"><i data-lucide="heading"></i></button>
-        </div>
-        <div class="groupLabel">${t("grp.layout")}</div>
       </div>
       <div data-ribbon="forms" class="ribbonGroup">
         <div class="groupBody">
-          <button id="formPrevBtn" title="${t("tip.formPrev")}"><i data-lucide="chevron-left"></i></button>
-          <button id="formNextBtn" title="${t("tip.formNext")}"><i data-lucide="chevron-right"></i></button>
+          <button class="cmd" id="formPrevBtn" title="${t("tip.formPrev")}"><i data-lucide="chevron-left"></i><span>${t("lbl.prev")}</span></button>
+          <button class="cmd" id="formNextBtn" title="${t("tip.formNext")}"><i data-lucide="chevron-right"></i><span>${t("lbl.next")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.navigate")}</div>
       </div>
       <div data-ribbon="forms" class="ribbonGroup">
         <div class="groupBody">
-          <button id="formValidateBtn" title="${t("tip.formValidate")}"><i data-lucide="check"></i></button>
-          <button id="formResetBtn" title="${t("tip.formReset")}"><i data-lucide="eraser"></i></button>
+          <button class="cmd" id="formValidateBtn" title="${t("tip.formValidate")}"><i data-lucide="check"></i><span>${t("lbl.validate")}</span></button>
+          <button class="cmd" id="formResetBtn" title="${t("tip.formReset")}"><i data-lucide="eraser"></i><span>${t("lbl.reset")}</span></button>
+          <button class="cmd active" id="formHighlightBtn" title="${t("tip.formHighlight")}"><i data-lucide="eye"></i><span>${t("lbl.fieldHl")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.fill")}</div>
-      </div>
-      <div data-ribbon="forms" class="ribbonGroup">
-        <div class="groupBody">
-          <button id="formHighlightBtn" class="active" title="${t("tip.formHighlight")}"><i data-lucide="eye"></i></button>
-        </div>
-        <div class="groupLabel">${t("grp.view")}</div>
       </div>
       <span data-ribbon="forms" id="formHint" class="modeHint">${t("hint.noDoc")}</span>
       <div data-ribbon="sign" class="ribbonGroup">
         <div class="groupBody">
-          <button id="signSignatureBtn" title="${t("tip.placeSignature")}"><i data-lucide="signature"></i> ${t("btn.signature")}</button>
-          <button id="signInitialsBtn" title="${t("tip.placeInitials")}">${t("btn.initials")}</button>
-          <button id="signManageBtn" class="menuTrigger" title="${t("tip.manageSig")}"><i data-lucide="pen-line"></i></button>
+          <button class="cmd" id="signSignatureBtn" title="${t("tip.placeSignature")}"><i data-lucide="signature"></i><span>${t("btn.signature")}</span></button>
+          <button class="cmd" id="signInitialsBtn" title="${t("tip.placeInitials")}"><i data-lucide="pen-tool"></i><span>${t("btn.initials")}</span></button>
+          <button class="cmd menuTrigger" id="signManageBtn" title="${t("tip.manageSig")}"><i data-lucide="pen-line"></i><span>${t("lbl.manageSig")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.sign")}</div>
       </div>
       <div data-ribbon="sign" class="ribbonGroup">
         <div class="groupBody">
-          <button class="signMark" data-sign="check" title="${t("tip.markCheck")}"><i data-lucide="check"></i></button>
-          <button class="signMark" data-sign="cross" title="${t("tip.markCross")}"><i data-lucide="x"></i></button>
-          <button class="signMark" data-sign="dot" title="${t("tip.markDot")}"><i data-lucide="dot"></i></button>
-          <button class="signMark" data-sign="date" title="${t("tip.markDate")}"><i data-lucide="calendar"></i></button>
-          <button class="signMark" data-sign="text" title="${t("tip.signText")}"><i data-lucide="type"></i></button>
-          <input type="color" id="signColor" value="#1a3a8f" title="${t("tip.markColor")}" style="height:1.6rem;width:1.8rem;padding:0;border:1px solid #4a4a4a;background:#3a3a3a;cursor:pointer" />
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="signMarksBtn" aria-haspopup="true" aria-expanded="false" title="${t("grp.fill")}"><i data-lucide="check"></i><span>${t("lbl.marks")}</span></button>
+            <div class="popover hidden" role="menu">
+              <button class="mi signMark" data-sign="check" role="menuitem" title="${t("tip.markCheck")}"><i data-lucide="check"></i><span>${t("tip.markCheck")}</span></button>
+              <button class="mi signMark" data-sign="cross" role="menuitem" title="${t("tip.markCross")}"><i data-lucide="x"></i><span>${t("tip.markCross")}</span></button>
+              <button class="mi signMark" data-sign="dot" role="menuitem" title="${t("tip.markDot")}"><i data-lucide="dot"></i><span>${t("tip.markDot")}</span></button>
+              <button class="mi signMark" data-sign="date" role="menuitem" title="${t("tip.markDate")}"><i data-lucide="calendar"></i><span>${t("tip.markDate")}</span></button>
+              <button class="mi signMark" data-sign="text" role="menuitem" title="${t("tip.signText")}"><i data-lucide="type"></i><span>${t("tip.signText")}</span></button>
+            </div>
+          </div>
+          <label class="fieldCol" title="${t("tip.markColor")}">
+            <input type="color" id="signColor" value="#1a3a8f" />
+            <span class="fieldCaption"><i data-lucide="palette"></i>${t("lbl.color")}</span>
+          </label>
         </div>
-        <div class="groupLabel">${t("grp.fill")}</div>
       </div>
       <div data-ribbon="sign" class="ribbonGroup">
         <div class="groupBody">
-          <button id="dsignBtn" title="${t("tip.digitalSign")}"><i data-lucide="file-key-2"></i> ${t("btn.digitalSign")}</button>
-          <button id="dverifyBtn" title="${t("tip.verify")}"><i data-lucide="shield-check"></i> ${t("btn.verify")}</button>
+          <button class="cmd" id="dsignBtn" title="${t("tip.digitalSign")}"><i data-lucide="file-key-2"></i><span>${t("btn.digitalSign")}</span></button>
+          <button class="cmd" id="dverifyBtn" title="${t("tip.verify")}"><i data-lucide="shield-check"></i><span>${t("btn.verify")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.digital")}</div>
       </div>
       <span data-ribbon="sign" id="signHint" class="modeHint">${t("hint.signPick")}</span>
       <span data-ribbon="organize" id="organizeHint" class="modeHint">${t("hint.organize")}</span>
       <div data-ribbon="convert" class="ribbonGroup">
         <div class="groupBody">
-          <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn active" data-conv="pdfa" title="${t("tip.convPdfa")}" type="button"><i data-lucide="file-check-2"></i> PDF/A</button>
+          <button class="cmd modeBtn active" data-conv="pdfa" title="${t("tip.convPdfa")}" type="button"><i data-lucide="file-check-2"></i><span>PDF/A</span></button>
+        </div>
+      </div>
+      <div data-ribbon="convert" class="ribbonGroup">
+        <div class="groupBody">
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="exportMenuBtn" aria-haspopup="true" aria-expanded="false" title="${t("grp.export")}"><i data-lucide="file-output"></i><span>${t("lbl.export")}</span></button>
+            <div class="popover hidden" role="menu">
+              <button class="mi" id="exportImagesBtn" role="menuitem" title="${t("tip.expImages")}"><i data-lucide="image"></i><span>PNG/JPG</span></button>
+              <button class="mi" id="exportTextBtn" role="menuitem" title="${t("tip.expText")}"><i data-lucide="file-text"></i><span>${t("btn.expText")}</span></button>
+              <button class="mi" id="exportHtmlBtn" role="menuitem" title="${t("tip.expHtml")}"><i data-lucide="file-code-2"></i><span>HTML</span></button>
+              <button class="mi" id="exportDocxBtn" role="menuitem" title="${t("tip.expDocx")}"><i data-lucide="book-text"></i><span>Word</span></button>
+              <button class="mi" id="exportXlsxBtn" role="menuitem" title="${t("tip.expXlsx")}"><i data-lucide="table"></i><span>Excel</span></button>
+            </div>
+          </div>
+          <div class="menuHost">
+            <button class="cmd menuTrigger" id="createMenuBtn" aria-haspopup="true" aria-expanded="false" title="${t("grp.import")}"><i data-lucide="file-plus"></i><span>${t("lbl.create")}</span></button>
+            <div class="popover hidden" role="menu">
+              <button class="mi" id="imagesToPdfBtn" role="menuitem" title="${t("tip.imagesToPdf")}"><i data-lucide="images"></i><span>${t("btn.imagesToPdf")}</span></button>
+              <button class="mi" id="officeToPdfBtn" role="menuitem" title="${t("tip.officeToPdf")}"><i data-lucide="briefcase"></i><span>${t("btn.officeToPdf")}</span></button>
+            </div>
           </div>
         </div>
-        <div class="groupLabel">${t("grp.conversion")}</div>
       </div>
       <div data-ribbon="convert" class="ribbonGroup">
         <div class="groupBody">
-          <button id="exportImagesBtn" title="${t("tip.expImages")}"><i data-lucide="image"></i> PNG/JPG</button>
-          <button id="exportTextBtn" title="${t("tip.expText")}"><i data-lucide="file-text"></i> ${t("btn.expText")}</button>
-          <button id="exportHtmlBtn" title="${t("tip.expHtml")}"><i data-lucide="file-code-2"></i> HTML</button>
-          <button id="exportDocxBtn" title="${t("tip.expDocx")}"><i data-lucide="book-text"></i> Word</button>
-          <button id="exportXlsxBtn" title="${t("tip.expXlsx")}"><i data-lucide="table"></i> Excel</button>
+          <button class="cmd" id="ocrBtn" title="${t("tip.ocr")}"><i data-lucide="scan-text"></i><span>${t("btn.ocr")}</span></button>
+          <button class="cmd" id="ocrBatchBtn" title="${t("tip.ocrBatch")}"><i data-lucide="layers"></i><span>${t("btn.ocrBatch")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.export")}</div>
-      </div>
-      <div data-ribbon="convert" class="ribbonGroup">
-        <div class="groupBody">
-          <button id="imagesToPdfBtn" title="${t("tip.imagesToPdf")}"><i data-lucide="images"></i> ${t("btn.imagesToPdf")}</button>
-          <button id="officeToPdfBtn" title="${t("tip.officeToPdf")}"><i data-lucide="briefcase"></i> ${t("btn.officeToPdf")}</button>
-        </div>
-        <div class="groupLabel">${t("grp.import")}</div>
-      </div>
-      <div data-ribbon="convert" class="ribbonGroup">
-        <div class="groupBody">
-          <button id="ocrBtn" title="${t("tip.ocr")}"><i data-lucide="scan-text"></i> ${t("btn.ocr")}</button>
-          <button id="ocrBatchBtn" title="${t("tip.ocrBatch")}"><i data-lucide="layers"></i> ${t("btn.ocrBatch")}</button>
-        </div>
-        <div class="groupLabel">${t("grp.ocr")}</div>
       </div>
       <span data-ribbon="convert" class="modeHint">${t("hint.convert")}</span>
       <div data-ribbon="protect" class="ribbonGroup">
         <div class="groupBody">
-          <button id="protectBtn" title="${t("tip.protect")}"><i data-lucide="lock"></i> ${t("btn.protect")}</button>
-          <button id="unprotectBtn" title="${t("tip.unprotect")}" disabled><i data-lucide="lock-open"></i> ${t("btn.unprotect")}</button>
+          <button class="cmd" id="protectBtn" title="${t("tip.protect")}"><i data-lucide="lock"></i><span>${t("btn.protect")}</span></button>
+          <button class="cmd" id="unprotectBtn" title="${t("tip.unprotect")}" disabled><i data-lucide="lock-open"></i><span>${t("btn.unprotect")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.password")}</div>
       </div>
       <div data-ribbon="protect" class="ribbonGroup">
         <div class="groupBody">
-          <div class="modeGroup" role="radiogroup">
-            <button class="modeBtn shapeTool" data-shape="redact" title="${t("tip.redactTool")}"><i data-lucide="box-select"></i></button>
-          </div>
-          <button id="redactPatternBtn" title="${t("tip.redactPattern")}"><i data-lucide="regex"></i></button>
-          <button id="redactApplyBtn" disabled title="${t("tip.redactApply")}"><i data-lucide="check"></i> <span>${t("redact.apply")}</span></button>
-          <button id="redactDiscardBtn" disabled title="${t("tip.redactDiscard")}"><i data-lucide="x"></i></button>
+          <button class="cmd shapeTool" data-shape="redact" title="${t("tip.redactTool")}"><i data-lucide="box-select"></i><span>${t("grp.redact")}</span></button>
+          <button class="cmd" id="redactPatternBtn" title="${t("tip.redactPattern")}"><i data-lucide="regex"></i><span>${t("lbl.pattern")}</span></button>
+          <button class="cmd" id="redactApplyBtn" disabled title="${t("tip.redactApply")}"><i data-lucide="check"></i><span>${t("lbl.applyRedact")}</span></button>
+          <button class="cmd" id="redactDiscardBtn" disabled title="${t("tip.redactDiscard")}"><i data-lucide="x"></i><span>${t("lbl.discard")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.redact")}</div>
       </div>
       <div data-ribbon="protect" class="ribbonGroup">
         <div class="groupBody">
-          <button id="sanitizeBtn" title="${t("tip.sanitize")}"><i data-lucide="eraser"></i> ${t("btn.sanitize")}</button>
+          <button class="cmd" id="sanitizeBtn" title="${t("tip.sanitize")}"><i data-lucide="eraser"></i><span>${t("grp.metadata")}</span></button>
+          <button class="cmd" id="findHiddenBtn" title="${t("tip.findHidden")}"><i data-lucide="eye-off"></i><span>${t("grp.inspect")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.metadata")}</div>
-      </div>
-      <div data-ribbon="protect" class="ribbonGroup">
-        <div class="groupBody">
-          <button id="findHiddenBtn" title="${t("tip.findHidden")}"><i data-lucide="eye-off"></i> ${t("btn.findHidden")}</button>
-        </div>
-        <div class="groupLabel">${t("grp.inspect")}</div>
       </div>
       <span data-ribbon="protect" id="protectHint" class="modeHint"></span>
       <span data-ribbon="both" id="status" class="status"></span>
@@ -761,6 +788,12 @@ export const CSS = `
   .ribbonTabs { display:flex; gap:0.1rem; background:var(--bg-2);
                 border-bottom:1px solid var(--border); padding: 0 0 0 0.2rem; align-items:stretch;
                 min-height:34px; user-select:none; -webkit-user-select:none; }
+  /* Two-tier chrome: row 1 = title bar (app icon + quick-access toolbar +
+     title + window controls); row 2 = tab strip; row 3 = ribbon body. */
+  .titleBar { display:flex; gap:0.1rem; background:var(--bg-2); align-items:center;
+              padding: 0 0 0 0.2rem; min-height:34px; user-select:none; -webkit-user-select:none; }
+  .tabStrip { display:flex; gap:0.1rem; align-items:stretch; background:var(--bg-2);
+              border-bottom:1px solid var(--border); padding: 0 0.3rem; }
   .appGlyph { display:inline-flex; align-items:center; padding:0 0.45rem 0 0.3rem; }
   .appGlyph img { width:16px; height:16px; pointer-events:none; }
   .titleDrag { flex:1; min-width:0; display:flex; align-items:center; justify-content:center; }
@@ -773,16 +806,49 @@ export const CSS = `
   .winControls button:hover { background:var(--bg-3); color:var(--text); }
   .winControls #winClose:hover { background:#e81123; color:#fff; }
   .winControls svg.lucide { width:15px; height:15px; stroke-width:1.6; }
-  .ribbonTab.settingsTab { padding:0.25rem 0.6rem; font-size:1rem;
-                           color:var(--text-2); cursor:pointer; }
-  .ribbonTab.settingsTab:hover { color:var(--text); background:var(--bg-3); }
-  .ribbonTab.settingsTab.active { border-bottom:none; color:var(--accent); }
-  .ribbonTab { background:transparent; color:var(--text-2); border:none; padding:0.4rem 1rem;
-               cursor:pointer; font:inherit; font-size:0.85rem; border-radius:4px 4px 0 0;
+  .winBtn { width:38px; align-self:stretch; border:none; background:transparent; color:var(--text-2);
+            padding:0; display:inline-flex; align-items:center; justify-content:center;
+            border-radius:0; cursor:pointer; font:inherit; }
+  .winBtn:hover { background:var(--bg-3); color:var(--text); }
+  .winBtn svg.lucide { width:16px; height:16px; }
+  /* Foxit-style flat text tabs: no box fill, active marked by an accent
+     underline + accent text. */
+  .ribbonTab { background:transparent; color:var(--text-2); border:none; padding:0.4rem 0.95rem;
+               cursor:pointer; font:inherit; font-size:0.85rem; border-radius:0;
                border-bottom:2px solid transparent; }
-  .ribbonTab:hover { background:var(--bg-3); color:var(--text); }
-  .ribbonTab.active { background:var(--bg); color:var(--accent); font-weight:600;
+  .ribbonTab:hover { background:transparent; color:var(--text); }
+  .ribbonTab.active { background:transparent; color:var(--accent); font-weight:600;
                       border-bottom:2px solid var(--accent); }
+  /* Quick-access toolbar in the title bar: compact icon-only cluster
+     (open/save/print/undo/redo/page-nav). */
+  .qat { display:inline-flex; align-items:center; gap:0.1rem; padding:0 0.35rem;
+         margin-left:0.2rem; border-left:1px solid var(--border); }
+  .qat button { background:transparent; border:1px solid transparent; border-radius:4px;
+                color:var(--text-2); cursor:pointer; font:inherit; padding:0;
+                width:2rem; height:2rem; box-sizing:border-box;
+                display:inline-flex; align-items:center; justify-content:center; }
+  .qat button:hover:not(:disabled) { background:var(--bg-3); color:var(--text); }
+  .qat button:disabled { opacity:0.4; cursor:default; }
+  .qat svg.lucide { width:16px; height:16px; }
+  .qat input { background:var(--bg); color:var(--text); border:1px solid var(--border-2);
+               border-radius:4px; padding:0.15rem 0.3rem; font:inherit; text-align:center; }
+  .qat #pageTotal { font-size:0.8rem; color:var(--text-2); padding:0 0.1rem; }
+  /* Dropdown caret. Compact triggers (QAT/recent) get it inline after the icon;
+     labeled .cmd triggers get it after the caption. */
+  button.hasCaret::after, .menuTrigger:not(.cmd)::after { content:"\\25be"; font-size:0.7em;
+                                                          margin-left:0.15rem; opacity:0.7; }
+  .cmd.menuTrigger > span::after { content:" \\25be"; opacity:0.55; font-size:0.9em; }
+  /* Foxit-style command button: icon stacked over a caption. Uniform box so the
+     whole ribbon reads as an even grid (same width/height, centered content). */
+  button.cmd { flex-direction:column; justify-content:center; gap:0.15rem;
+               width:4.6rem; height:3.5rem; padding:0.2rem 0.1rem; line-height:1.08;
+               border-radius:5px; box-sizing:border-box; }
+  button.cmd svg.lucide { width:18px; height:18px; }
+  button.cmd > span { font-size:0.6rem; color:var(--text-2); text-align:center; width:100%;
+                      white-space:normal; overflow-wrap:break-word; hyphens:auto;
+                      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+                      overflow:hidden; }
+  button.cmd:hover:not(:disabled) > span, button.cmd.active > span { color:inherit; }
   .ribbonBody { padding: 0.35rem 0.6rem; display:flex; gap: 0.3rem; align-items:center;
                 flex-wrap: wrap; background:var(--bg); }
   .ribbonBody button, .ribbonBody select, .ribbonBody input {
@@ -810,56 +876,33 @@ export const CSS = `
   body.wheelZoomMode.panning .viewer { cursor: grabbing; }
   body.wheelZoomMode .selectLayer, body.wheelZoomMode .drawLayer { pointer-events: none; }
   body.wheelZoomMode .pageSlot, body.wheelZoomMode .pageSlot * { user-select: none; -webkit-user-select: none; }
-  .ribbonBody[data-active="reader"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="reader"] > [data-ribbon="forms"],
-  .ribbonBody[data-active="reader"] > [data-ribbon="sign"],
-  .ribbonBody[data-active="reader"] > [data-ribbon="organize"],
-  .ribbonBody[data-active="reader"] > [data-ribbon="protect"],
-  .ribbonBody[data-active="reader"] > [data-ribbon="convert"] { display:none; }
-  .ribbonBody[data-active="edit"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="edit"] > [data-ribbon="forms"],
-  .ribbonBody[data-active="edit"] > [data-ribbon="sign"],
-  .ribbonBody[data-active="edit"] > [data-ribbon="organize"],
-  .ribbonBody[data-active="edit"] > [data-ribbon="protect"],
-  .ribbonBody[data-active="edit"] > [data-ribbon="convert"] { display:none; }
-  .ribbonBody[data-active="forms"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="forms"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="forms"] > [data-ribbon="sign"],
-  .ribbonBody[data-active="forms"] > [data-ribbon="organize"],
-  .ribbonBody[data-active="forms"] > [data-ribbon="protect"],
-  .ribbonBody[data-active="forms"] > [data-ribbon="convert"] { display:none; }
-  .ribbonBody[data-active="sign"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="sign"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="sign"] > [data-ribbon="forms"],
-  .ribbonBody[data-active="sign"] > [data-ribbon="organize"],
-  .ribbonBody[data-active="sign"] > [data-ribbon="protect"],
-  .ribbonBody[data-active="sign"] > [data-ribbon="convert"] { display:none; }
-  .ribbonBody[data-active="organize"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="organize"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="organize"] > [data-ribbon="forms"],
-  .ribbonBody[data-active="organize"] > [data-ribbon="sign"],
-  .ribbonBody[data-active="organize"] > [data-ribbon="protect"],
-  .ribbonBody[data-active="organize"] > [data-ribbon="convert"] { display:none; }
-  .ribbonBody[data-active="convert"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="convert"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="convert"] > [data-ribbon="forms"],
-  .ribbonBody[data-active="convert"] > [data-ribbon="sign"],
-  .ribbonBody[data-active="convert"] > [data-ribbon="organize"],
-  .ribbonBody[data-active="convert"] > [data-ribbon="protect"],
+  /* A ribbon child is visible only when its data-ribbon matches the active tab
+     or is "both" (the persistent quick-access cluster). One rule per tab. */
+  .ribbonBody[data-active="reader"]   > [data-ribbon]:not([data-ribbon="reader"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="comment"]  > [data-ribbon]:not([data-ribbon="comment"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="view"]     > [data-ribbon]:not([data-ribbon="view"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="edit"]     > [data-ribbon]:not([data-ribbon="edit"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="forms"]    > [data-ribbon]:not([data-ribbon="forms"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="sign"]     > [data-ribbon]:not([data-ribbon="sign"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="convert"]  > [data-ribbon]:not([data-ribbon="convert"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="organize"] > [data-ribbon]:not([data-ribbon="organize"]):not([data-ribbon="both"]),
+  .ribbonBody[data-active="protect"]  > [data-ribbon]:not([data-ribbon="protect"]):not([data-ribbon="both"]) { display:none; }
+  /* Convert is a full sub-view; it suppresses the quick-access cluster too. */
   .ribbonBody[data-active="convert"] > [data-ribbon="both"] { display:none; }
-  .ribbonBody[data-active="protect"] > [data-ribbon="reader"],
-  .ribbonBody[data-active="protect"] > [data-ribbon="edit"],
-  .ribbonBody[data-active="protect"] > [data-ribbon="forms"],
-  .ribbonBody[data-active="protect"] > [data-ribbon="sign"],
-  .ribbonBody[data-active="protect"] > [data-ribbon="organize"],
-  .ribbonBody[data-active="protect"] > [data-ribbon="convert"] { display:none; }
   .ribbonLabel { color:var(--text-3); font-size:0.85rem; margin-left:0.2rem; }
-  .ribbonGroup { display:inline-flex; flex-direction:column; align-items:stretch; align-self:stretch;
-                 padding: 0 0.55rem; border-right:1px solid var(--border); gap: 0.15rem; }
-  .ribbonGroup:last-child { border-right:none; }
-  .ribbonGroup .groupBody { display:flex; align-items:center; gap:0.25rem; flex:1; }
-  .ribbonGroup .groupLabel { text-align:center; font-size:0.64rem; color:var(--text-3);
-                             text-transform:uppercase; letter-spacing:0.04em; padding-top:0.1rem; }
+  /* Group = a divider-separated cluster of command buttons (no caption row;
+     each button carries its own Foxit-style caption). */
+  .ribbonGroup { display:inline-flex; align-items:stretch; align-self:stretch;
+                 padding: 0 0.35rem; border-right:1px solid var(--border); }
+  .ribbonGroup:last-of-type { border-right:none; }
+  .ribbonGroup .groupBody { display:flex; align-items:center; gap:0.05rem; }
+  .fieldCol { display:inline-flex; flex-direction:column; align-items:center; justify-content:center;
+              gap:0.15rem; height:3.5rem; padding:0 0.25rem; box-sizing:border-box; }
+  .fieldCol select { font-size:0.78rem; padding:0.1rem 0.25rem; }
+  .fieldCol input[type=color] { height:1.5rem; width:2rem; padding:0; cursor:pointer; }
+  .fieldCaption { font-size:0.62rem; color:var(--text-2); display:inline-flex; align-items:center;
+                  gap:0.2rem; }
+  .fieldCaption svg.lucide { width:12px; height:12px; }
   .modeGroup { display:inline-flex; gap: 0; border:1px solid var(--border-2); border-radius:5px;
                overflow:hidden; }
   .modeGroup .modeBtn { background:var(--bg); color:var(--text); border:none; border-right:1px solid var(--border);
@@ -878,7 +921,20 @@ export const CSS = `
   .popover button { background:transparent; color:var(--text); border:none; padding:0.4rem 0.6rem;
                     text-align:left; border-radius:4px; cursor:pointer; font-size:0.9rem; }
   .popover button:hover { background:var(--hover); }
+  /* Popover menu items: icon + label in a row; reuse the active-tint for the
+     currently-selected tool. */
+  .popover .mi { display:flex; align-items:center; justify-content:flex-start; gap:0.5rem;
+                 width:100%; white-space:nowrap; }
+  .popover .mi svg.lucide { width:16px; height:16px; }
+  .popover .mi > span { font-size:0.85rem; }
+  /* Form-style popover (text options): label left, control right. */
+  .popoverForm { min-width:210px; gap:0.15rem; }
+  .popoverForm .popRow { display:flex; align-items:center; justify-content:space-between;
+                         gap:0.6rem; padding:0.2rem 0.45rem; font-size:0.82rem; color:var(--text);
+                         cursor:default; }
+  .popoverForm .popRow input[type=color] { height:1.4rem; width:2rem; padding:0; }
   .menuTrigger[aria-expanded="true"] { background:var(--bg-3); }
+  .cmd.menuTrigger[aria-expanded="true"] { background:var(--accent-tint); }
   body.edit-delete .thumb { outline:1px dashed transparent; cursor: pointer; }
   body.edit-delete .thumb:hover { outline:2px solid var(--danger); }
   .thumb.selected { outline:2px solid var(--accent); box-shadow: 0 0 0 3px rgba(43,108,223,0.3); }

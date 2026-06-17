@@ -14,6 +14,21 @@ scope each tag landed.
 Work on the v1.1 "Performance & Polish" milestone.
 
 ### Added
+- **Foxit-style ribbon redesign.** Three-tier chrome: a title bar with the app
+  icon + a compact icon-only quick-access toolbar (open/save/print/undo/redo/
+  page-nav), a flat text tab strip with an accent underline on the active tab,
+  and a ribbon body of uniform icon-over-label command buttons. Closely-related
+  actions are grouped into clean dropdowns (Markup shapes, Text options, Export,
+  Create, Sign marks, page Rotate/Insert). Split the former combined `edit` tab
+  into dedicated **Comment** and **View** tabs, mirroring Foxit's layout. The
+  per-tab show/hide matrix was collapsed to one compact `:not()` rule per tab.
+- **Squiggly (wavy) text markup.** A new text-markup annotation alongside
+  highlight/underline/strikeout, drawn as a wavy underline appearance stream
+  (`MarkupKind::Squiggly`, subtype `Squiggly`); the three markup tools are now
+  individual ribbon buttons instead of a dropdown.
+- **Fuller Edit tab.** "Text einfügen" (free text), "Text erkennen" (OCR) and a
+  "Nach Office" (Word/Excel) dropdown are now surfaced on the Edit tab too,
+  reusing the existing OCR/export handlers.
 - **High-contrast theme + accessibility pass.** A new High-contrast theme
   (black/white with a yellow accent and solid borders) in Settings → Appearance,
   a visible keyboard focus outline everywhere (`:focus-visible`), `aria-label`s
