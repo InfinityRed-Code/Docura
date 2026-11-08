@@ -6,9 +6,14 @@
 //! /AcroForm/NeedAppearances so PDFium / Acrobat regenerate the appearance
 //! stream on next render.
 
+use std::collections::HashSet;
+
 use lopdf::{Document, Object, ObjectId};
 
 use crate::{MutateError, MutateResult};
+
+/// Bound for /Parent chain walks (real forms nest a few levels at most).
+const MAX_FIELD_DEPTH: usize = 64;
 
 fn get_acroform_id(doc: &Document) -> MutateResult<ObjectId> {
     let root_id = doc
@@ -63,7 +68,13 @@ fn collect_terminal_fields(
     field_id: ObjectId,
     parent_name: &str,
     out: &mut Vec<(ObjectId, String)>,
+    visited: &mut HashSet<ObjectId>,
 ) {
+    // A /Kids cycle in a malformed form would otherwise recurse until the
+    // stack overflows (an abort, not a recoverable error).
+    if !visited.insert(field_id) {
+        return;
+    }
     let Ok(d) = doc.get_dictionary(field_id) else {
         return;
     };
@@ -104,7 +115,7 @@ fn collect_terminal_fields(
         }
         if has_field_kids {
             for &kid in &kid_ids {
-                collect_terminal_fields(doc, kid, &full, out);
+                collect_terminal_fields(doc, kid, &full, out, visited);
             }
             return;
         }
@@ -128,9 +139,9 @@ fn pdf_string_text(s: &str) -> Object {
 }
 
 fn field_subtype(doc: &Document, field_id: ObjectId) -> Option<Vec<u8>> {
-    // /FT may be inherited from parent.
+    // /FT may be inherited from parent. Bounded so a /Parent cycle can't hang.
     let mut cur = field_id;
-    loop {
+    for _ in 0..MAX_FIELD_DEPTH {
         let d = doc.get_dictionary(cur).ok()?;
         if let Ok(ft) = d.get(b"FT").and_then(|o| o.as_name()) {
             return Some(ft.to_vec());
@@ -141,6 +152,7 @@ fn field_subtype(doc: &Document, field_id: ObjectId) -> Option<Vec<u8>> {
             _ => return None,
         }
     }
+    None
 }
 
 fn widget_kids(doc: &Document, field_id: ObjectId) -> Vec<ObjectId> {
@@ -238,8 +250,9 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
         _ => Vec::new(),
     };
     let mut all: Vec<(ObjectId, String)> = Vec::new();
+    let mut visited = HashSet::new();
     for &fid in &root_field_ids {
-        collect_terminal_fields(doc, fid, "", &mut all);
+        collect_terminal_fields(doc, fid, "", &mut all, &mut visited);
     }
     let target = all
         .iter()
@@ -265,6 +278,33 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
                 }
                 if let Ok(d) = doc.get_dictionary_mut(w) {
                     d.remove(b"AP");
+                }
+            }
+        }
+        b"Btn" if value.starts_with("radio:") => {
+            // Radio group: "radio:<n>" turns on the n-th widget (PDFium's
+            // index-in-group = /Kids order) and switches every sibling off.
+            let idx: usize = value["radio:".len()..]
+                .trim()
+                .parse()
+                .map_err(|_| MutateError::Parse(format!("bad radio value {value:?}")))?;
+            let widgets = widget_kids(doc, target);
+            let chosen = *widgets
+                .get(idx)
+                .ok_or_else(|| MutateError::Parse(format!("radio option {idx} not found in {name}")))?;
+            let on_name = checkbox_on_name(doc, chosen).unwrap_or_else(|| idx.to_string().into_bytes());
+            if let Ok(d) = doc.get_dictionary_mut(target) {
+                d.set("V", Object::Name(on_name.clone()));
+            }
+            for w in widgets {
+                // Widgets sharing the chosen on-state (radios in unison) turn
+                // on together; everything else is off.
+                let on = w == chosen || checkbox_on_name(doc, w).as_deref() == Some(on_name.as_slice());
+                if let Ok(d) = doc.get_dictionary_mut(w) {
+                    d.set(
+                        "AS",
+                        Object::Name(if on { on_name.clone() } else { b"Off".to_vec() }),
+                    );
                 }
             }
         }
@@ -318,11 +358,19 @@ pub fn reset_form(doc: &mut Document) -> MutateResult<()> {
         .clone();
     let root_field_ids: Vec<ObjectId> = match fields_obj {
         Object::Array(a) => a.iter().filter_map(|o| o.as_reference().ok()).collect(),
+        Object::Reference(r) => doc
+            .get_object(r)
+            .and_then(|o| o.as_array().map(|a| a.clone()))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|o| o.as_reference().ok())
+            .collect(),
         _ => Vec::new(),
     };
     let mut all: Vec<(ObjectId, String)> = Vec::new();
+    let mut visited = HashSet::new();
     for &fid in &root_field_ids {
-        collect_terminal_fields(doc, fid, "", &mut all);
+        collect_terminal_fields(doc, fid, "", &mut all, &mut visited);
     }
     for (fid, _) in all {
         let ft = field_subtype(doc, fid).unwrap_or_default();
@@ -364,4 +412,99 @@ pub fn reset_form(doc: &mut Document) -> MutateResult<()> {
     }
     set_need_appearances(doc);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::dictionary;
+
+    #[test]
+    fn kids_cycle_does_not_overflow_the_stack() {
+        let mut d = Document::with_version("1.5");
+        let a = d.new_object_id();
+        let b = d.new_object_id();
+        // Malformed: a and b are each other's kid and parent.
+        d.objects.insert(a, Object::Dictionary(dictionary! {
+            "T" => Object::string_literal("a"),
+            "Parent" => Object::Reference(b),
+            "Kids" => Object::Array(vec![Object::Reference(b), Object::Reference(b)]),
+        }));
+        d.objects.insert(b, Object::Dictionary(dictionary! {
+            "T" => Object::string_literal("b"),
+            "Parent" => Object::Reference(a),
+            "Kids" => Object::Array(vec![Object::Reference(a), Object::Reference(a)]),
+        }));
+        let mut all = Vec::new();
+        collect_terminal_fields(&d, a, "", &mut all, &mut HashSet::new());
+        assert!(all.is_empty());
+        assert_eq!(field_subtype(&d, b), None);
+    }
+
+    /// Radio field "Choice" with three widgets whose on-states are A, B, C.
+    fn radio_doc() -> (Document, ObjectId, Vec<ObjectId>) {
+        let mut doc = Document::with_version("1.5");
+        let field = doc.new_object_id();
+        let mut kids = Vec::new();
+        for on in ["A", "B", "C"] {
+            let n = doc.add_object(dictionary! {
+                on => Object::Null,
+                "Off" => Object::Null,
+            });
+            let ap = doc.add_object(dictionary! { "N" => Object::Reference(n) });
+            kids.push(doc.add_object(dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Widget",
+                "Parent" => Object::Reference(field),
+                "AP" => Object::Reference(ap),
+                "AS" => if on == "A" { "A" } else { "Off" },
+            }));
+        }
+        doc.objects.insert(field, Object::Dictionary(dictionary! {
+            "FT" => "Btn",
+            "Ff" => 1 << 15,
+            "T" => Object::string_literal("Choice"),
+            "V" => "A",
+            "Kids" => Object::Array(kids.iter().map(|&k| Object::Reference(k)).collect()),
+        }));
+        let af = doc.add_object(dictionary! {
+            "Fields" => Object::Array(vec![Object::Reference(field)]),
+        });
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog", "AcroForm" => Object::Reference(af) });
+        doc.trailer.set("Root", Object::Reference(cat));
+        (doc, field, kids)
+    }
+
+    fn as_of(doc: &Document, id: ObjectId) -> Vec<u8> {
+        doc.get_dictionary(id).unwrap().get(b"AS").unwrap().as_name().unwrap().to_vec()
+    }
+
+    #[test]
+    fn radio_selects_exactly_the_chosen_option() {
+        let (mut doc, field, kids) = radio_doc();
+        set_field_value(&mut doc, "Choice", "radio:2").unwrap();
+        let v = doc.get_dictionary(field).unwrap().get(b"V").unwrap().as_name().unwrap().to_vec();
+        assert_eq!(v, b"C");
+        assert_eq!(as_of(&doc, kids[0]), b"Off");
+        assert_eq!(as_of(&doc, kids[1]), b"Off");
+        assert_eq!(as_of(&doc, kids[2]), b"C");
+        assert!(set_field_value(&mut doc, "Choice", "radio:7").is_err());
+    }
+
+    #[test]
+    fn reset_form_follows_indirect_fields_array() {
+        let mut doc = Document::with_version("1.5");
+        let field = doc.add_object(dictionary! {
+            "FT" => "Tx",
+            "T" => Object::string_literal("Name"),
+            "V" => Object::string_literal("filled"),
+        });
+        // Catalog → AcroForm whose /Fields is an indirect array.
+        let arr = doc.add_object(Object::Array(vec![Object::Reference(field)]));
+        let af = doc.add_object(dictionary! { "Fields" => Object::Reference(arr) });
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog", "AcroForm" => Object::Reference(af) });
+        doc.trailer.set("Root", Object::Reference(cat));
+        reset_form(&mut doc).unwrap();
+        assert!(!doc.get_dictionary(field).unwrap().has(b"V"), "field not reset");
+    }
 }

@@ -73,7 +73,11 @@ impl RenderCache {
     }
 
     fn clamp_budget(mb: u64) -> usize {
-        mb.max(MIN_BUDGET_MB) as usize * BYTES_PER_MB
+        // Saturate: an absurd setting must not overflow (debug panic, or a
+        // wrapped — possibly near-zero — budget in release builds).
+        usize::try_from(mb.max(MIN_BUDGET_MB))
+            .unwrap_or(usize::MAX)
+            .saturating_mul(BYTES_PER_MB)
     }
 
     /// Current budget in megabytes (clamped, as actually applied).
@@ -132,5 +136,18 @@ impl RenderCache {
             }
         }
         self.thumb_ids.remove(&doc);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn huge_budget_saturates_instead_of_overflowing() {
+        let mut c = RenderCache::with_budget_mb(u64::MAX);
+        assert_eq!(c.max_bytes, usize::MAX);
+        c.set_budget_mb(1);
+        assert_eq!(c.budget_mb(), MIN_BUDGET_MB);
     }
 }

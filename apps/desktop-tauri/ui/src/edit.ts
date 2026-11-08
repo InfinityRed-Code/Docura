@@ -1,70 +1,72 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import type {
-  DocSnapshot, EditMode, InsertWhere, MergeFile, OpenedDocument, RibbonTab,
+  DocSnapshot, InsertWhere, MergeFile, OpenedDocument, RibbonTab,
 } from "./types";
 import { state, makeMdrag, makePdrag } from "./state";
 import { t } from "./i18n";
 import { dom, setStatus } from "./dom";
 import { reflow } from "./viewer";
 import {
-  applyDocSnapshot, applyOpenedDoc, clearSelection, handleThumbSelect,
+  applyDocSnapshot, applyOpenedDoc, armThumbObserver, clearSelection,
+  confirmDiscardChanges, docBaseName, fileNameFromPath, handleThumbSelect,
   refreshSelectionUi,
 } from "./doc";
-import { clearSignToolUi, setShapeTool } from "./annot";
+import { disarmAllTools } from "./annot";
 
 // ---------- Page operations ----------
+
+function pagesLabel(pages: number[]): string {
+  return pages.length === 1
+    ? t("page.one", { n: pages[0] + 1 })
+    : t("page.range", { count: pages.length, from: pages[0] + 1, to: pages[pages.length - 1] + 1 });
+}
 
 export async function deleteSelectedPages() {
   if (!state.currentDoc || state.selectedPages.size === 0) return;
   const pages = [...state.selectedPages].sort((a, b) => a - b);
   if (pages.length >= state.pageCount) {
-    setStatus("Can't delete every page");
+    setStatus(t("st.cantDeleteAll"));
     return;
   }
-  const label = pages.length === 1
-    ? `page ${pages[0] + 1}`
-    : `${pages.length} pages (${pages[0] + 1}–${pages[pages.length - 1] + 1})`;
-  if (state.editMode === "select") {
-    const ok = await confirmDialog(
-      `Are you sure you want to delete all selected pages?\n\n(${label} — this can only be undone by not saving.)`,
-      { title: "Delete pages", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
-    );
-    if (!ok) return;
-  }
-  setStatus(`Deleting ${label}…`);
+  const label = pagesLabel(pages);
+  const ok = await confirmDialog(t("dlg.deleteMsg", { label }), {
+    title: t("dlg.deleteTitle"),
+    kind: "warning",
+    okLabel: t("btn.delete"),
+    cancelLabel: t("tip.cancel"),
+  });
+  if (!ok) return;
+  setStatus(t("st.deleting", { label }));
   try {
     const snap = await invoke<DocSnapshot>("delete_pages", { document: state.currentDoc, pages });
     clearSelection();
     applyDocSnapshot(snap);
-    setStatus(`Deleted ${label}`);
+    setStatus(t("st.deleted", { label }));
   } catch (e) {
-    setStatus(`Delete error: ${e}`);
+    setStatus(t("st.deleteError", { e: String(e) }));
   }
 }
 
 export async function extractSelectedPages() {
   if (!state.currentDoc || state.selectedPages.size === 0) return;
   const pages = [...state.selectedPages].sort((a, b) => a - b);
-  const base = state.currentDocPath
-    ? state.currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
-    : "document";
   const suffix = pages.length === 1
     ? `page_${pages[0] + 1}`
     : `pages_${pages[0] + 1}-${pages[pages.length - 1] + 1}`;
-  const defaultName = `${base}_${suffix}.pdf`;
   const path = await save({
-    title: "Extract pages to…",
-    defaultPath: defaultName,
+    title: t("dlg.extractTitle"),
+    defaultPath: `${docBaseName()}_${suffix}.pdf`,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (!path) return;
-  setStatus(`Extracting ${pages.length} page${pages.length === 1 ? "" : "s"}…`);
+  const label = pagesLabel(pages);
+  setStatus(t("st.extracting", { label }));
   try {
     await invoke("extract_pages", { document: state.currentDoc, pages, path });
-    setStatus(`Extracted ${pages.length} page${pages.length === 1 ? "" : "s"} → ${path}`);
+    setStatus(t("st.extracted", { label, path }));
   } catch (e) {
-    setStatus(`Extract error: ${e}`);
+    setStatus(t("st.extractError", { e: String(e) }));
   }
 }
 
@@ -73,10 +75,8 @@ export async function rotateSelectionOrCurrent(degrees: number) {
   const pages = state.selectedPages.size > 0
     ? [...state.selectedPages].sort((a, b) => a - b)
     : [state.currentPage];
-  const label = pages.length === 1
-    ? `page ${pages[0] + 1}`
-    : `${pages.length} pages`;
-  setStatus(`Rotating ${label}…`);
+  const label = pagesLabel(pages);
+  setStatus(t("st.rotating", { label }));
   try {
     const snap = await invoke<DocSnapshot>("rotate_pages", {
       document: state.currentDoc,
@@ -84,80 +84,15 @@ export async function rotateSelectionOrCurrent(degrees: number) {
       degrees,
     });
     applyDocSnapshot(snap);
+    // Rotation keeps the page order, so the selection stays meaningful.
     refreshSelectionUi();
-    setStatus(`Rotated ${label} by ${degrees}°`);
+    setStatus(t("st.rotated", { label, deg: degrees }));
   } catch (e) {
-    setStatus(`Rotate error: ${e}`);
+    setStatus(t("st.rotateError", { e: String(e) }));
   }
 }
 
-// ---------- Save / Print ----------
-
-export async function triggerSaveAs() {
-  if (!state.currentDoc) return;
-  const suggestion = state.currentDocPath
-    ? state.currentDocPath.replace(/\.pdf$/i, "") + "-copy.pdf"
-    : "document.pdf";
-  const dest = await save({
-    defaultPath: suggestion,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (!dest || typeof dest !== "string") return;
-  const level = dom.pdfaLevelEl?.value ?? "off";
-  if (level !== "off" && hasInteractiveFormFields()) {
-    setStatus(`PDF/A skipped — document is a fillable form. Saved plain PDF: ${dest}`);
-    try {
-      await invoke("save_pdf_as", { document: state.currentDoc, path: dest });
-    } catch (e) {
-      setStatus(`Save error: ${e}`);
-    }
-    return;
-  }
-  if (level !== "off") {
-    setStatus(`Saving as PDF/A-${level}…`);
-    try {
-      const label = await invoke<string>("save_as_pdfa", {
-        document: state.currentDoc,
-        args: { path: dest, level },
-      });
-      // PDF/A forbids encryption — flag the dropped protection.
-      let suffix = "";
-      try {
-        const sec = await invoke<{ protected: boolean }>("get_pdf_security", {
-          document: state.currentDoc,
-        });
-        if (sec.protected) suffix = ` · ${t("st.pdfaNoProtection")}`;
-      } catch {}
-      setStatus(`Saved as ${label}: ${dest}${suffix}`);
-    } catch (e) {
-      setStatus(`PDF/A save error: ${e}`);
-    }
-    return;
-  }
-  setStatus(`Saving to ${dest}…`);
-  try {
-    await invoke("save_pdf_as", { document: state.currentDoc, path: dest });
-    setStatus(`Saved: ${dest}`);
-  } catch (e) {
-    setStatus(`Save error: ${e}`);
-  }
-}
-
-export function hasInteractiveFormFields(): boolean {
-  return state.formFields.some(
-    (f) => !f.readonly && (f.kind === "text" || f.kind === "checkbox" ||
-      f.kind === "radio" || f.kind === "combobox" || f.kind === "listbox" ||
-      f.kind === "signature"),
-  );
-}
-
-export async function confirmFormsLostInPdfa(level: string): Promise<boolean> {
-  if (!hasInteractiveFormFields()) return true;
-  return await confirmDialog(
-    `This document contains interactive form fields. Saving as PDF/A-${level} flattens the form: field values are baked into static content and the document is no longer fillable.\n\nContinue and lose the interactive form?`,
-    { title: "PDF/A would flatten the form", kind: "warning" },
-  );
-}
+// ---------- Print ----------
 
 export async function triggerPrint() {
   if (!state.currentDoc) return;
@@ -175,47 +110,31 @@ export async function triggerPrint() {
 // ---------- Ribbon ----------
 
 export function setRibbonTab(tab: RibbonTab) {
+  const changed = state.ribbonTab !== tab;
   state.ribbonTab = tab;
   dom.ribbonBody.dataset.active = tab;
-  document.querySelectorAll(".ribbonTab[data-ribbon-tab]").forEach((el) => {
-    el.classList.toggle("active", (el as HTMLElement).dataset.ribbonTab === tab);
+  dom.ribbonBody.querySelectorAll<HTMLElement>(":scope > [data-ribbon]").forEach((el) => {
+    el.classList.toggle("offTab", el.dataset.ribbon !== tab);
   });
-  const wasOrganize = document.body.classList.contains("organize");
-  const wasConvert = document.body.classList.contains("convert");
-  // Leaving the Sign tab disarms any signature/mark tool.
-  if (tab !== "sign") { clearSignToolUi(); setShapeTool(null); }
+  document.querySelectorAll(".ribbonTab[data-ribbon-tab]").forEach((el) => {
+    const on = (el as HTMLElement).dataset.ribbonTab === tab;
+    el.classList.toggle("active", on);
+    el.setAttribute("aria-selected", String(on));
+  });
+  // A tool armed on one tab must never keep acting on another (e.g. the
+  // eraser deleting annotations while the user is on "Start").
+  if (changed) disarmAllTools();
   if (state.mergeMode && tab !== "organize") exitMergeMode();
-  if (tab !== "convert" && wasConvert) exitConvertMode();
-  if (tab === "convert" && !wasConvert) enterConvertMode();
+  if (tab !== "convert" && document.body.classList.contains("convert")) exitConvertMode();
+  const wasOrganize = document.body.classList.contains("organize");
   document.body.classList.toggle("organize", tab === "organize");
   if (tab === "organize") {
-    document.getElementById("sidebar")!.classList.remove("hidden");
-    void setEditMode("select");
-  } else if (tab === "reader" || tab === "view" || tab === "comment" || tab === "forms" || tab === "sign") {
-    void setEditMode("select");
+    armThumbObserver();
+  } else if (wasOrganize) {
+    // Page selection only exists in the page grid.
     clearSelection();
+    if (state.currentDoc) requestAnimationFrame(() => reflow());
   }
-  if ((wasOrganize || wasConvert) && tab !== "organize" && tab !== "convert" && state.currentDoc) {
-    requestAnimationFrame(() => reflow());
-  }
-}
-
-export async function setEditMode(mode: EditMode) {
-  if (mode === "delete" && state.editMode !== "delete") {
-    const ok = await confirmDialog(
-      "When entering Delete mode, no further confirmation is needed to delete pages.\n\nMake sure to use with caution!",
-      { title: "Enter Delete mode", kind: "warning", okLabel: "Enter Delete mode", cancelLabel: "Cancel" },
-    );
-    if (!ok) return;
-  }
-  state.editMode = mode;
-  document.querySelectorAll(".modeBtn").forEach((el) => {
-    const m = (el as HTMLElement).dataset.mode;
-    el.classList.toggle("active", m === mode);
-    el.classList.toggle("danger", m === mode && mode === "delete");
-  });
-  document.body.classList.toggle("edit-delete", mode === "delete");
-  refreshSelectionUi();
 }
 
 // ---------- Watermark ----------
@@ -232,8 +151,8 @@ async function pickImageWatermark() {
   const picked = await open({
     multiple: false,
     directory: false,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
-    title: "Pick image for watermark",
+    filters: [{ name: t("lbl.images"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    title: t("dlg.pickWmImage"),
   });
   if (picked && typeof picked === "string") {
     (document.getElementById("iwPath") as HTMLInputElement).value = picked;
@@ -244,7 +163,7 @@ async function runWatermark() {
   if (!state.currentDoc) return;
   if (state.wmMode === "text") {
     const text = (document.getElementById("wmText") as HTMLInputElement).value.trim();
-    if (!text) { setStatus("Watermark text is empty"); return; }
+    if (!text) { setStatus(t("st.wmEmpty")); return; }
     const args = {
       text,
       font_size: parseFloat((document.getElementById("wmFontSize") as HTMLInputElement).value) || 72,
@@ -254,17 +173,17 @@ async function runWatermark() {
     };
     if (!Number.isFinite(args.gray)) args.gray = 0.5;
     dom.wmOverlay.classList.add("hidden");
-    setStatus("Applying watermark…");
+    setStatus(t("st.wmApplying"));
     try {
       const snap = await invoke<DocSnapshot>("add_watermark", { document: state.currentDoc, args });
       applyDocSnapshot(snap);
-      setStatus("Watermark applied");
+      setStatus(t("st.wmApplied"));
     } catch (e) {
-      setStatus(`Watermark error: ${e}`);
+      setStatus(t("st.wmError", { e: String(e) }));
     }
   } else {
     const image_path = (document.getElementById("iwPath") as HTMLInputElement).value.trim();
-    if (!image_path) { setStatus("Pick an image first"); return; }
+    if (!image_path) { setStatus(t("st.pickImageFirst")); return; }
     const args = {
       image_path,
       scale_frac: parseFloat((document.getElementById("iwScale") as HTMLInputElement).value) || 0.4,
@@ -274,13 +193,13 @@ async function runWatermark() {
       margin_pt: parseFloat((document.getElementById("iwMargin") as HTMLInputElement).value) || 36,
     };
     dom.wmOverlay.classList.add("hidden");
-    setStatus("Applying image watermark…");
+    setStatus(t("st.wmApplying"));
     try {
       const snap = await invoke<DocSnapshot>("add_image_watermark", { document: state.currentDoc, args });
       applyDocSnapshot(snap);
-      setStatus("Image watermark applied");
+      setStatus(t("st.wmApplied"));
     } catch (e) {
-      setStatus(`Image watermark error: ${e}`);
+      setStatus(t("st.wmError", { e: String(e) }));
     }
   }
 }
@@ -302,48 +221,120 @@ async function runHeaderFooter() {
   };
   if (!Number.isFinite(args.gray)) args.gray = 0;
   const anyText = [args.header_left, args.header_center, args.header_right, args.footer_left, args.footer_center, args.footer_right].some((s) => s.trim() !== "");
-  if (!anyText) { setStatus("Fill at least one slot"); return; }
+  if (!anyText) { setStatus(t("st.hfEmpty")); return; }
   dom.hfOverlay.classList.add("hidden");
-  setStatus("Applying header/footer…");
+  setStatus(t("st.hfApplying"));
   try {
     const snap = await invoke<DocSnapshot>("add_header_footer", { document: state.currentDoc, args });
     applyDocSnapshot(snap);
-    setStatus("Header/footer applied");
+    setStatus(t("st.hfApplied"));
   } catch (e) {
-    setStatus(`Header/footer error: ${e}`);
+    setStatus(t("st.hfError", { e: String(e) }));
   }
 }
 
-async function runSplitPdf() {
-  if (!state.currentDoc) { setStatus("Open a PDF first"); return; }
-  const suggestion = `1-${Math.min(state.pageCount, Math.max(1, Math.ceil(state.pageCount / 2)))},${Math.min(state.pageCount, Math.max(1, Math.ceil(state.pageCount / 2)) + 1)}-${state.pageCount}`;
-  const spec = window.prompt(
-    `Split into parts by page ranges (1-based, comma-separated).\nExamples:  1-3,4-6,7-${state.pageCount}    or    1,2-5,6`,
-    suggestion,
-  );
-  if (!spec) return;
-  const outDir = await open({ directory: true, title: "Output folder for split parts" });
+// ---------- Split ----------
+//
+// window.prompt() does not work inside the WebView, so splitting runs
+// through its own small dialog: "every N pages" (the common case) or free
+// page ranges. Both are turned into the range spec the backend expects.
+
+function splitEl<T extends HTMLElement>(id: string): T {
+  return document.getElementById(id) as T;
+}
+
+/** Parse "1-3, 4, 5-9" into [from, to] pairs (1-based, inclusive). */
+function parseRanges(spec: string, total: number): [number, number][] | null {
+  const parts = spec.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const out: [number, number][] = [];
+  for (const p of parts) {
+    const m = p.match(/^(\d+)\s*(?:-\s*(\d+))?$/);
+    if (!m) return null;
+    const a = parseInt(m[1], 10);
+    const b = m[2] ? parseInt(m[2], 10) : a;
+    if (a < 1 || b < a || b > total) return null;
+    out.push([a, b]);
+  }
+  return out;
+}
+
+function splitPlan(): [number, number][] | null {
+  const total = state.pageCount;
+  if (splitEl<HTMLInputElement>("splitModeEvery").checked) {
+    const n = parseInt(splitEl<HTMLInputElement>("splitEvery").value, 10);
+    if (!Number.isFinite(n) || n < 1) return null;
+    const out: [number, number][] = [];
+    for (let a = 1; a <= total; a += n) out.push([a, Math.min(total, a + n - 1)]);
+    return out;
+  }
+  return parseRanges(splitEl<HTMLInputElement>("splitRanges").value, total);
+}
+
+function updateSplitPreview() {
+  const plan = splitPlan();
+  const preview = splitEl<HTMLSpanElement>("splitPreview");
+  const commit = splitEl<HTMLButtonElement>("splitCommit");
+  const ranges = splitEl<HTMLInputElement>("splitRanges");
+  const every = splitEl<HTMLInputElement>("splitEvery");
+  const rangesMode = splitEl<HTMLInputElement>("splitModeRanges").checked;
+  ranges.disabled = !rangesMode;
+  every.disabled = rangesMode;
+  commit.disabled = !plan || plan.length < 1;
+  if (!plan) {
+    preview.textContent = t("split.invalid", { n: state.pageCount });
+    preview.style.color = "var(--danger)";
+    return;
+  }
+  const fmt = ([a, b]: [number, number]) => (a === b ? `${a}` : `${a}–${b}`);
+  const shown = plan.slice(0, 6).map(fmt).join(", ") + (plan.length > 6 ? ", …" : "");
+  preview.textContent = t("split.preview", { n: plan.length, parts: shown });
+  preview.style.color = "";
+}
+
+function openSplitDialog() {
+  if (!state.currentDoc) { setStatus(t("st.openFirst")); return; }
+  const half = Math.max(1, Math.ceil(state.pageCount / 2));
+  const ranges = splitEl<HTMLInputElement>("splitRanges");
+  ranges.value = state.pageCount > 1 ? `1-${half}, ${half + 1}-${state.pageCount}` : "1";
+  ranges.placeholder = `1-3, 4, 5-${state.pageCount}`;
+  // The label carries an example with the real page count.
+  const lbl = ranges.closest("label");
+  if (lbl?.firstChild) lbl.firstChild.textContent = t("split.rangesLabel", { n: state.pageCount });
+  splitEl<HTMLInputElement>("splitEvery").max = String(state.pageCount);
+  updateSplitPreview();
+  splitEl<HTMLDivElement>("splitOverlay").classList.remove("hidden");
+}
+
+function closeSplitDialog() {
+  splitEl<HTMLDivElement>("splitOverlay").classList.add("hidden");
+}
+
+async function runSplit() {
+  const plan = splitPlan();
+  if (!state.currentDoc || !plan) return;
+  const spec = plan.map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`)).join(",");
+  const outDir = await open({ directory: true, title: t("split.outDir") });
   if (!outDir || typeof outDir !== "string") return;
-  const baseName = state.currentDocPath
-    ? state.currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
-    : "document";
-  setStatus("Splitting…");
+  closeSplitDialog();
+  setStatus(t("st.splitting"));
   try {
     const res = await invoke<{ files: string[] }>("split_pdf", {
       document: state.currentDoc,
       ranges: spec,
       outDir,
-      baseName,
+      baseName: docBaseName(),
     });
-    setStatus(`Split → ${res.files.length} file${res.files.length === 1 ? "" : "s"} in ${outDir}`);
+    setStatus(t("st.split", { n: res.files.length, dir: outDir }));
   } catch (e) {
-    setStatus(`Split error: ${e}`);
+    setStatus(t("st.splitError", { e: String(e) }));
   }
 }
 
-// ---------- Convert pane (PDF → PDF/A) ----------
+// ---------- Convert pane (PDF → PDF/A, batch) ----------
 
-function enterConvertMode() {
+export function enterConvertMode() {
+  if (state.ribbonTab !== "convert") setRibbonTab("convert");
   document.body.classList.add("convert");
   if (dom.pdfaLevelEl && dom.pdfaLevelEl.value !== "off") {
     dom.convertLevelEl.value = dom.pdfaLevelEl.value;
@@ -355,33 +346,52 @@ function exitConvertMode() {
   document.body.classList.remove("convert");
   state.convertFiles = [];
   renderConvertList();
+  if (state.currentDoc) requestAnimationFrame(() => reflow());
 }
+
+/** One removable file tile for the merge / convert panes. */
+function fileTile(f: MergeFile, i: number): HTMLElement {
+  const tile = document.createElement("div");
+  tile.className = "mergeTile";
+  tile.dataset.idx = String(i);
+  const idx = document.createElement("span");
+  idx.className = "mergeIndex";
+  idx.textContent = String(i + 1);
+  const rm = document.createElement("button");
+  rm.className = "mergeRemove";
+  rm.title = t("tip.remove");
+  rm.dataset.idx = String(i);
+  rm.textContent = "✕";
+  const name = document.createElement("div");
+  name.className = "mergeName";
+  name.textContent = f.name;
+  const path = document.createElement("div");
+  path.className = "mergePath";
+  path.textContent = f.path;
+  tile.append(idx, rm, name, path);
+  return tile;
+}
+
+function emptyTile(text: string): HTMLElement {
+  const empty = document.createElement("div");
+  empty.className = "mergeEmpty";
+  empty.textContent = text;
+  return empty;
+}
+
 function renderConvertList() {
   dom.convertList.innerHTML = "";
   if (state.convertFiles.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "mergeEmpty";
-    empty.textContent = "No files yet. Click ＋ to add PDFs to convert.";
-    dom.convertList.appendChild(empty);
+    dom.convertList.appendChild(emptyTile(t("convert.empty")));
   } else {
-    state.convertFiles.forEach((f, i) => {
-      const tile = document.createElement("div");
-      tile.className = "mergeTile";
-      tile.dataset.idx = String(i);
-      tile.innerHTML = `
-        <span class="mergeIndex">${i + 1}</span>
-        <button class="mergeRemove" title="Remove" data-idx="${i}">✕</button>
-        <div class="mergeName">${f.name}</div>
-        <div class="mergePath">${f.path}</div>`;
-      dom.convertList.appendChild(tile);
-    });
+    state.convertFiles.forEach((f, i) => dom.convertList.appendChild(fileTile(f, i)));
   }
   dom.convertCommitBtn.disabled = state.convertFiles.length === 0 || !state.convertOutDir;
 }
 function updateConvertOutLabel() {
   dom.convertOutLabel.textContent = state.convertOutDir
-    ? `Output: ${state.convertOutDir}`
-    : "Output: (none chosen — pick an output folder)";
+    ? t("convert.outputSet", { dir: state.convertOutDir })
+    : t("convert.output");
 }
 function addConvertPaths(paths: string[]) {
   const pdfs = paths.filter((p) => /\.pdf$/i.test(p));
@@ -407,29 +417,12 @@ function exitMergeMode() {
   document.body.classList.remove("merge", "mergeDrop");
   renderMergeList();
 }
-export function fileNameFromPath(p: string): string {
-  const m = p.replace(/\\/g, "/").split("/").pop() ?? p;
-  return m || p;
-}
 function renderMergeList() {
   dom.mergeList.innerHTML = "";
   if (state.mergeFiles.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "mergeEmpty";
-    empty.textContent = "No files yet. Drop PDFs here or click ＋ Add files.";
-    dom.mergeList.appendChild(empty);
+    dom.mergeList.appendChild(emptyTile(t("merge.empty")));
   } else {
-    state.mergeFiles.forEach((f, i) => {
-      const tile = document.createElement("div");
-      tile.className = "mergeTile";
-      tile.dataset.idx = String(i);
-      tile.innerHTML = `
-        <span class="mergeIndex">${i + 1}</span>
-        <button class="mergeRemove" title="Remove" data-idx="${i}">✕</button>
-        <div class="mergeName">${f.name}</div>
-        <div class="mergePath">${f.path}</div>`;
-      dom.mergeList.appendChild(tile);
-    });
+    state.mergeFiles.forEach((f, i) => dom.mergeList.appendChild(fileTile(f, i)));
   }
   dom.mergeCommitBtn.disabled = state.mergeFiles.length < 2;
 }
@@ -445,7 +438,7 @@ export function addMergePaths(paths: string[]) {
 // ---------- Insert PDF (from another file) ----------
 
 async function runInsertPdf(where: InsertWhere) {
-  if (!state.currentDoc) { setStatus("Open a PDF first"); return; }
+  if (!state.currentDoc) { setStatus(t("st.openFirst")); return; }
   const picked = await open({
     multiple: true,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
@@ -456,16 +449,16 @@ async function runInsertPdf(where: InsertWhere) {
   const at = where === "end" ? state.pageCount
     : where === "before" ? state.currentPage
     : state.currentPage + 1;
-  setStatus(`Inserting ${paths.length} file${paths.length === 1 ? "" : "s"}…`);
+  setStatus(t("st.inserting", { n: paths.length }));
   try {
     const snap = await invoke<DocSnapshot>("insert_pdf_files", {
       document: state.currentDoc, paths, atIndex: at,
     });
     clearSelection();
     applyDocSnapshot(snap);
-    setStatus(`Inserted ${paths.length} file${paths.length === 1 ? "" : "s"} (${snap.page_count} pages total)`);
+    setStatus(t("st.inserted", { n: paths.length, pages: snap.page_count }));
   } catch (err) {
-    setStatus(`Insert error: ${fmtMutationError(err)}`);
+    setStatus(t("st.insertError", { e: fmtMutationError(err) }));
   }
 }
 
@@ -475,12 +468,6 @@ export function fmtMutationError(err: unknown): string {
   const m = s.match(/ENCRYPTED_INPUT:(.+)$/);
   if (m) return t("st.encryptedInput", { file: m[1] });
   return s;
-}
-
-// ---------- Popovers ----------
-
-function runRotate(deg: number) {
-  rotateSelectionOrCurrent(deg);
 }
 
 // ---------- Drag-to-reorder helpers ----------
@@ -496,15 +483,15 @@ function findMergeDropTarget(x: number, y: number): { el: HTMLElement; after: bo
   let best: HTMLElement | null = null;
   let bestRect: DOMRect | null = null;
   let bestDist = Infinity;
-  for (const t of all) {
-    if (t.classList.contains("dragging")) continue;
-    const r = t.getBoundingClientRect();
+  for (const tile of all) {
+    if (tile.classList.contains("dragging")) continue;
+    const r = tile.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
     const dx = cx - x;
     const dy = cy - y;
     const d = dx * dx + dy * dy;
-    if (d < bestDist) { bestDist = d; best = t; bestRect = r; }
+    if (d < bestDist) { bestDist = d; best = tile; bestRect = r; }
   }
   if (!best || !bestRect) return null;
   return { el: best, after: x > bestRect.left + bestRect.width / 2 };
@@ -543,6 +530,7 @@ function findDropTarget(x: number, y: number): { el: HTMLElement; after: boolean
 
 function resetPdrag() {
   if (state.pdrag.preview) state.pdrag.preview.remove();
+  document.body.classList.remove("pageDragging");
   state.thumbWraps.forEach((w) => w.classList.remove("dragging"));
   document.querySelectorAll(".thumb.dropBefore, .thumb.dropAfter").forEach((el) => {
     el.classList.remove("dropBefore");
@@ -551,31 +539,42 @@ function resetPdrag() {
   state.pdrag = makePdrag();
 }
 
+/** Disable a button while an async action runs (guards double clicks). */
+async function busy(btn: HTMLButtonElement, fn: () => Promise<void>) {
+  if (btn.dataset.busy) return;
+  btn.dataset.busy = "1";
+  const wasDisabled = btn.disabled;
+  btn.disabled = true;
+  try {
+    await fn();
+  } finally {
+    delete btn.dataset.busy;
+    btn.disabled = wasDisabled;
+  }
+}
+
 // ---------- Init ----------
 
 export function initEdit() {
-  // Save As / Print
-  document.getElementById("saveAsBtn")!.addEventListener("click", triggerSaveAs);
+  // Print
   document.getElementById("printBtn")!.addEventListener("click", triggerPrint);
 
   // Ribbon tabs
   document.querySelectorAll(".ribbonTab[data-ribbon-tab]").forEach((el) => {
     el.addEventListener("click", () => {
-      const t = (el as HTMLElement).dataset.ribbonTab as RibbonTab;
-      setRibbonTab(t);
+      const tab = (el as HTMLElement).dataset.ribbonTab as RibbonTab;
+      setRibbonTab(tab);
     });
   });
-  document.querySelectorAll(".modeBtn").forEach((el) => {
-    el.addEventListener("click", () => {
-      const m = (el as HTMLElement).dataset.mode as EditMode;
-      if (m) void setEditMode(m);
-    });
-  });
+  // Initial paint: hide every group that isn't on the start tab.
+  state.ribbonTab = "reader";
+  setRibbonTab("reader");
 
-  // Edit-mode action buttons
+  // Page actions (Pages tab)
   document.getElementById("deleteSelectionBtn")!.addEventListener("click", deleteSelectedPages);
   document.getElementById("extractSelectionBtn")!.addEventListener("click", extractSelectedPages);
-  document.getElementById("extractSelectionOrgBtn")?.addEventListener("click", extractSelectedPages);
+  document.getElementById("rotateLeftBtn")!.addEventListener("click", () => void rotateSelectionOrCurrent(-90));
+  document.getElementById("rotateRightBtn")!.addEventListener("click", () => void rotateSelectionOrCurrent(90));
 
   // Generic ribbon dropdowns: any `.menuTrigger` that sits in a `.menuHost`
   // toggles the `.popover` in that host. Clicking a [role=menuitem] or anywhere
@@ -605,22 +604,32 @@ export function initEdit() {
     }
     closePopovers();
   });
-  document.getElementById("rotateLeftBtn")!.addEventListener("click", () => runRotate(-90));
-  document.getElementById("rotateRightBtn")!.addEventListener("click", () => runRotate(90));
-  document.getElementById("rotate180Btn")!.addEventListener("click", () => runRotate(180));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && document.querySelector(".menuHost > .popover:not(.hidden)")) {
+      e.stopPropagation();
+      closePopovers();
+    }
+  }, true);
   document.getElementById("insertBeforeBtn")!.addEventListener("click", () => runInsertPdf("before"));
   document.getElementById("insertAfterBtn")!.addEventListener("click", () => runInsertPdf("after"));
   document.getElementById("insertEndBtn")!.addEventListener("click", () => runInsertPdf("end"));
 
   // Merge / split
   document.getElementById("mergePdfsBtn")!.addEventListener("click", () => enterMergeMode());
-  document.getElementById("splitPdfBtn")!.addEventListener("click", () => void runSplitPdf());
+  document.getElementById("splitPdfBtn")!.addEventListener("click", openSplitDialog);
+  document.getElementById("splitClose")!.addEventListener("click", closeSplitDialog);
+  document.getElementById("splitCancel")!.addEventListener("click", closeSplitDialog);
+  document.getElementById("splitCommit")!.addEventListener("click", () => void runSplit());
+  for (const id of ["splitModeEvery", "splitModeRanges", "splitEvery", "splitRanges"]) {
+    document.getElementById(id)!.addEventListener("input", updateSplitPreview);
+    document.getElementById(id)!.addEventListener("change", updateSplitPreview);
+  }
 
   // Watermark overlay
   dom.wmTabText.addEventListener("click", () => setWmMode("text"));
   dom.wmTabImage.addEventListener("click", () => setWmMode("image"));
   document.getElementById("watermarkBtn")!.addEventListener("click", () => {
-    if (!state.currentDoc) { setStatus("Open a PDF first"); return; }
+    if (!state.currentDoc) { setStatus(t("st.openFirst")); return; }
     dom.wmOverlay.classList.remove("hidden");
     if (state.wmMode === "text") (document.getElementById("wmText") as HTMLInputElement).focus();
   });
@@ -631,7 +640,7 @@ export function initEdit() {
 
   // Header/footer overlay
   document.getElementById("headerFooterBtn")!.addEventListener("click", () => {
-    if (!state.currentDoc) { setStatus("Open a PDF first"); return; }
+    if (!state.currentDoc) { setStatus(t("st.openFirst")); return; }
     dom.hfOverlay.classList.remove("hidden");
   });
   document.getElementById("hfClose")!.addEventListener("click", () => dom.hfOverlay.classList.add("hidden"));
@@ -639,6 +648,7 @@ export function initEdit() {
   document.getElementById("hfCommit")!.addEventListener("click", () => void runHeaderFooter());
 
   // Convert pane wiring
+  document.getElementById("pdfaBatchBtn")!.addEventListener("click", enterConvertMode);
   document.getElementById("convertAddBtn")!.addEventListener("click", async () => {
     const picked = await open({
       multiple: true,
@@ -648,13 +658,13 @@ export function initEdit() {
     addConvertPaths(Array.isArray(picked) ? picked : [picked]);
   });
   document.getElementById("convertOutBtn")!.addEventListener("click", async () => {
-    const picked = await open({ directory: true, multiple: false, title: "Pick output folder" });
+    const picked = await open({ directory: true, multiple: false, title: t("tip.pickOutFolder") });
     if (!picked || typeof picked !== "string") return;
     state.convertOutDir = picked;
     updateConvertOutLabel();
     renderConvertList();
   });
-  document.getElementById("convertCancelBtn")!.addEventListener("click", () => setRibbonTab("reader"));
+  document.getElementById("convertCancelBtn")!.addEventListener("click", exitConvertMode);
   dom.convertList.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest(".mergeRemove") as HTMLElement | null;
     if (!btn) return;
@@ -663,11 +673,11 @@ export function initEdit() {
     state.convertFiles.splice(idx, 1);
     renderConvertList();
   });
-  dom.convertCommitBtn.addEventListener("click", async () => {
+  dom.convertCommitBtn.addEventListener("click", () => void busy(dom.convertCommitBtn, async () => {
     if (state.convertFiles.length === 0 || !state.convertOutDir) return;
     const paths = state.convertFiles.map((f: MergeFile) => f.path);
     const level = dom.convertLevelEl.value;
-    setStatus(`Converting ${paths.length} file${paths.length === 1 ? "" : "s"} to PDF/A-${level}…`);
+    setStatus(t("st.converting", { n: paths.length, level }));
     try {
       type ConvertResult = { files: string[]; failed: string[] };
       const res = await invoke<ConvertResult>("convert_files_to_pdfa", {
@@ -676,18 +686,19 @@ export function initEdit() {
         level,
       });
       const okCount = res.files.length;
-      const failCount = res.failed.length;
-      if (failCount > 0) {
-        setStatus(`Converted ${okCount}/${paths.length}. Failed: ${res.failed.map(fileNameFromPath).join(", ")}`);
+      if (res.failed.length > 0) {
+        setStatus(t("st.convertPartial", {
+          ok: okCount, total: paths.length, failed: res.failed.map(fileNameFromPath).join(", "),
+        }));
       } else {
-        setStatus(`Converted ${okCount} file${okCount === 1 ? "" : "s"} → ${state.convertOutDir}`);
+        setStatus(t("st.converted", { n: okCount, dir: state.convertOutDir ?? "" }));
       }
       state.convertFiles = [];
       renderConvertList();
     } catch (e) {
-      setStatus(`Convert error: ${e}`);
+      setStatus(t("st.convertError", { e: String(e) }));
     }
-  });
+  }));
 
   // Merge pane wiring
   document.getElementById("mergeAddBtn")!.addEventListener("click", async () => {
@@ -700,22 +711,22 @@ export function initEdit() {
     addMergePaths(paths);
   });
   document.getElementById("mergeCancelBtn")!.addEventListener("click", exitMergeMode);
-  dom.mergeCommitBtn.addEventListener("click", async () => {
+  dom.mergeCommitBtn.addEventListener("click", () => void busy(dom.mergeCommitBtn, async () => {
     if (state.mergeFiles.length < 2) return;
+    if (!(await confirmDiscardChanges())) return;
     const paths = state.mergeFiles.map((f: MergeFile) => f.path);
-    setStatus(`Merging ${paths.length} files…`);
+    setStatus(t("st.merging", { n: paths.length }));
     try {
       type MergeResult = OpenedDocument & { temp_path: string };
       const res = await invoke<MergeResult>("merge_files_and_open", { paths });
-      const tmp = res.temp_path;
       exitMergeMode();
-      applyOpenedDoc(res, tmp);
+      applyOpenedDoc(res, res.temp_path, { temp: true });
       setRibbonTab("organize");
-      setStatus(`Merged ${paths.length} files into ${res.page_count} pages (temp: ${tmp})`);
+      setStatus(t("st.merged", { n: paths.length, pages: res.page_count }));
     } catch (err) {
-      setStatus(`Merge error: ${fmtMutationError(err)}`);
+      setStatus(t("st.mergeError", { e: fmtMutationError(err) }));
     }
-  });
+  }));
   dom.mergeList.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest(".mergeRemove") as HTMLElement | null;
     if (!btn) return;
@@ -728,10 +739,10 @@ export function initEdit() {
   // Merge-tile drag to reorder
   dom.mergeList.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
-    const t = (e.target as HTMLElement | null)?.closest(".mergeTile") as HTMLElement | null;
-    if (!t) return;
+    const tile = (e.target as HTMLElement | null)?.closest(".mergeTile") as HTMLElement | null;
+    if (!tile) return;
     if ((e.target as HTMLElement).closest(".mergeRemove")) return;
-    const idx = parseInt(t.dataset.idx || "-1", 10);
+    const idx = parseInt(tile.dataset.idx || "-1", 10);
     if (idx < 0) return;
     state.mdrag = {
       tracking: true, active: false, startX: e.clientX, startY: e.clientY,
@@ -749,7 +760,7 @@ export function initEdit() {
       tile?.classList.add("dragging");
       const prev = document.createElement("div");
       prev.className = "dragPreview";
-      prev.textContent = state.mergeFiles[state.mdrag.startIdx]?.name ?? "file";
+      prev.textContent = state.mergeFiles[state.mdrag.startIdx]?.name ?? "PDF";
       document.body.appendChild(prev);
       state.mdrag.preview = prev;
     }
@@ -789,36 +800,36 @@ export function initEdit() {
     renderMergeList();
   });
   window.addEventListener("pointercancel", resetMdrag);
-  window.addEventListener("contextmenu", (e) => e.preventDefault());
+  // No browser context menu (reload / inspect) on the app chrome — but keep
+  // cut/copy/paste in text fields.
+  window.addEventListener("contextmenu", (e) => {
+    if (!(e.target as HTMLElement | null)?.closest("input, textarea")) e.preventDefault();
+  });
 
-  // Thumb click (Edit / Reader)
+  // Sidebar thumbnail click (outside the page grid): jump to that page.
   dom.thumbsPanel.addEventListener(
     "pointerdown",
     (e) => {
-      const t = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
-      if (!t) return;
-      const idx = parseInt(t.dataset.page || "-1", 10);
-      if (idx < 0) return;
       if (state.ribbonTab === "organize") return;
+      const thumb = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
+      if (!thumb) return;
+      const idx = parseInt(thumb.dataset.page || "-1", 10);
+      if (idx < 0) return;
       e.preventDefault();
       e.stopPropagation();
-      if (state.ribbonTab === "edit") {
-        handleThumbSelect(idx, e);
-      } else {
-        // Lazy import to avoid cycle; navigateTo lives in viewer.
-        document.dispatchEvent(new CustomEvent("rustpdf:goto-page", { detail: { page: idx } }));
-      }
+      // Lazy route to avoid a viewer<->edit import cycle.
+      document.dispatchEvent(new CustomEvent("rustpdf:goto-page", { detail: { page: idx } }));
     },
     true,
   );
 
-  // Organize-mode drag-to-reorder
+  // Page grid (Pages tab): drag to reorder
   dom.thumbsPanel.addEventListener("pointerdown", (e) => {
     if (state.ribbonTab !== "organize") return;
     if (e.button !== 0) return;
-    const t = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
-    if (!t) return;
-    const idx = parseInt(t.dataset.page || "-1", 10);
+    const thumb = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
+    if (!thumb) return;
+    const idx = parseInt(thumb.dataset.page || "-1", 10);
     if (idx < 0) return;
     state.pdrag = {
       tracking: true, active: false, startX: e.clientX, startY: e.clientY,
@@ -845,10 +856,21 @@ export function initEdit() {
       state.thumbWraps.forEach((w, i) => {
         if (pageSet.has(i)) w.classList.add("dragging");
       });
+      // Ghost: picture of the grabbed page + "move N pages" badge.
       const prev = document.createElement("div");
-      prev.className = "dragPreview";
-      prev.textContent = `Move ${state.pdrag.pages.length} page${state.pdrag.pages.length === 1 ? "" : "s"}`;
+      prev.className = "dragPreview pageGhost";
+      const src = state.thumbEls[state.pdrag.startIdx]?.getAttribute("src");
+      if (src) {
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = "";
+        prev.appendChild(img);
+      }
+      const badge = document.createElement("span");
+      badge.textContent = t("drag.move", { n: state.pdrag.pages.length });
+      prev.appendChild(badge);
       document.body.appendChild(prev);
+      document.body.classList.add("pageDragging");
       state.pdrag.preview = prev;
     }
     if (state.pdrag.preview) {
@@ -856,7 +878,8 @@ export function initEdit() {
       state.pdrag.preview.style.top = `${e.clientY + 14}px`;
     }
     const hit = findDropTarget(e.clientX, e.clientY);
-    const target = hit?.el ?? null;
+    // Hovering one of the moved pages themselves means "no move".
+    const target = hit && !hit.el.classList.contains("dragging") ? hit.el : null;
     if (state.pdrag.target && state.pdrag.target !== target) {
       state.pdrag.target.classList.remove("dropBefore");
       state.pdrag.target.classList.remove("dropAfter");
@@ -879,20 +902,14 @@ export function initEdit() {
     state.lastWasDrag = true;
     setTimeout(() => { state.lastWasDrag = false; }, 0);
     if (pages.length === 0) return;
+    // Released over the moved pages themselves (or nowhere): nothing to do.
+    if (!target) return;
     const dragSet = new Set(pages);
+    const tIdx = parseInt(target.dataset.page || "-1", 10);
+    if (tIdx < 0 || dragSet.has(tIdx)) return;
     const remaining = [...Array(state.pageCount).keys()].filter((i) => !dragSet.has(i));
-    let insertAt: number;
-    if (!target) {
-      insertAt = remaining.length;
-    } else {
-      const tIdx = parseInt(target.dataset.page || "-1", 10);
-      if (dragSet.has(tIdx)) {
-        insertAt = remaining.length;
-      } else {
-        insertAt = remaining.indexOf(tIdx);
-        if (after) insertAt += 1;
-      }
-    }
+    let insertAt = remaining.indexOf(tIdx);
+    if (after) insertAt += 1;
     const newOrder = [
       ...remaining.slice(0, insertAt),
       ...pages,
@@ -900,7 +917,7 @@ export function initEdit() {
     ];
     if (newOrder.length !== state.pageCount) return;
     if (newOrder.every((v, i) => v === i)) return;
-    setStatus(`Reordering ${pages.length} page${pages.length === 1 ? "" : "s"}…`);
+    setStatus(t("st.reordering", { n: pages.length }));
     try {
       const snap = await invoke<DocSnapshot>("reorder_pages", {
         document: state.currentDoc,
@@ -908,20 +925,20 @@ export function initEdit() {
       });
       clearSelection();
       applyDocSnapshot(snap);
-      setStatus(`Reordered ${pages.length} page${pages.length === 1 ? "" : "s"}`);
+      setStatus(t("st.reordered", { n: pages.length }));
     } catch (err) {
-      setStatus(`Reorder error: ${err}`);
+      setStatus(t("st.reorderError", { e: String(err) }));
     }
   });
   window.addEventListener("pointercancel", () => resetPdrag());
 
-  // Organize click selection (suppressed if a drag just completed)
+  // Page grid click selection (suppressed if a drag just completed)
   dom.thumbsPanel.addEventListener("click", (e) => {
     if (state.ribbonTab !== "organize") return;
     if (state.lastWasDrag) return;
-    const t = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
-    if (!t) return;
-    const idx = parseInt(t.dataset.page || "-1", 10);
+    const thumb = (e.target as HTMLElement | null)?.closest(".thumb") as HTMLElement | null;
+    if (!thumb) return;
+    const idx = parseInt(thumb.dataset.page || "-1", 10);
     if (idx < 0) return;
     handleThumbSelect(idx, e);
   });

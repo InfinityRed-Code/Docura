@@ -139,47 +139,43 @@ struct ParsedAnnot {
 }
 
 fn xml_unescape(s: &str) -> String {
+    // Works on `&str` slices so multi-byte UTF-8 text (umlauts, …) is copied
+    // intact; '&' and ';' are ASCII, so the slice bounds are char boundaries.
     let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'&' {
-            if let Some(end) = bytes[i..].iter().position(|&b| b == b';') {
-                let entity = &s[i + 1..i + end];
-                match entity {
-                    "lt" => out.push('<'),
-                    "gt" => out.push('>'),
-                    "amp" => out.push('&'),
-                    "quot" => out.push('"'),
-                    "apos" => out.push('\''),
-                    e if e.starts_with("#x") || e.starts_with("#X") => {
-                        if let Ok(n) = u32::from_str_radix(&e[2..], 16) {
-                            if let Some(ch) = char::from_u32(n) {
-                                out.push(ch);
-                            }
-                        }
-                    }
-                    e if e.starts_with('#') => {
-                        if let Ok(n) = e[1..].parse::<u32>() {
-                            if let Some(ch) = char::from_u32(n) {
-                                out.push(ch);
-                            }
-                        }
-                    }
-                    _ => {
-                        out.push('&');
-                        out.push_str(entity);
-                        out.push(';');
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        let Some(end) = tail.find(';') else {
+            out.push_str(tail);
+            return out;
+        };
+        let entity = &tail[1..end];
+        match entity {
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            "amp" => out.push('&'),
+            "quot" => out.push('"'),
+            "apos" => out.push('\''),
+            e if e.starts_with("#x") || e.starts_with("#X") => {
+                if let Ok(n) = u32::from_str_radix(&e[2..], 16) {
+                    if let Some(ch) = char::from_u32(n) {
+                        out.push(ch);
                     }
                 }
-                i += end + 1;
-                continue;
             }
+            e if e.starts_with('#') => {
+                if let Ok(n) = e[1..].parse::<u32>() {
+                    if let Some(ch) = char::from_u32(n) {
+                        out.push(ch);
+                    }
+                }
+            }
+            _ => out.push_str(&tail[..=end]),
         }
-        let ch = bytes[i] as char;
-        out.push(ch);
-        i += 1;
+        rest = &tail[end + 1..];
     }
+    out.push_str(rest);
     out
 }
 
@@ -221,7 +217,7 @@ fn parse_attrs(body: &str) -> Vec<(String, String)> {
     let bytes = body.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
         if i >= bytes.len() || bytes[i] == b'/' || bytes[i] == b'>' {
@@ -230,19 +226,19 @@ fn parse_attrs(body: &str) -> Vec<(String, String)> {
         let name_start = i;
         while i < bytes.len()
             && bytes[i] != b'='
-            && !(bytes[i] as char).is_whitespace()
+            && !bytes[i].is_ascii_whitespace()
         {
             i += 1;
         }
         let name = &body[name_start..i];
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
         if i >= bytes.len() || bytes[i] != b'=' {
             continue;
         }
         i += 1;
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
         if i >= bytes.len() {
@@ -381,10 +377,13 @@ fn parse_xfdf(xml: &[u8]) -> MutateResult<Vec<ParsedAnnot>> {
             }
             i = tag_end + 1;
         } else {
+            // Copy the text run up to the next tag as a whole `&str` slice;
+            // pushing bytes one by one as chars would mangle UTF-8.
+            let next = text[i..].find('<').map_or(bytes.len(), |p| i + p);
             if in_contents {
-                contents_buf.push(bytes[i] as char);
+                contents_buf.push_str(&text[i..next]);
             }
-            i += 1;
+            i = next;
         }
     }
     Ok(annots)
@@ -399,10 +398,11 @@ fn write_one(doc: &mut Document, ann: &ParsedAnnot) -> MutateResult<()> {
     let print = ann.print.unwrap_or(true);
     let color = ann.color.unwrap_or([1.0, 0.93, 0.0]);
     match ann.tag.as_str() {
-        "highlight" | "underline" | "strikeout" => {
+        "highlight" | "underline" | "strikeout" | "squiggly" => {
             let kind = match ann.tag.as_str() {
                 "underline" => MarkupKind::Underline,
                 "strikeout" => MarkupKind::StrikeOut,
+                "squiggly" => MarkupKind::Squiggly,
                 _ => MarkupKind::Highlight,
             };
             let m = MarkupAnnotation {
@@ -515,7 +515,7 @@ fn write_one(doc: &mut Document, ann: &ParsedAnnot) -> MutateResult<()> {
             };
             annotations::add_text_note_annotation(doc, ann.page, &n)?;
         }
-        // stamp / squiggly: skip silently (no round-trip path yet).
+        // stamp: skip silently (no round-trip path yet).
         _ => {}
     }
     Ok(())
@@ -533,4 +533,33 @@ pub fn import(doc: &mut Document, xml: &[u8]) -> MutateResult<usize> {
     }
     tracing::info!("xfdf::import: {} annotations written", count);
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unescape_keeps_multibyte_text() {
+        assert_eq!(
+            xml_unescape("Gr\u{fc}\u{df}e &amp; K\u{fc}sse &#x20AC;5 &unknown; &"),
+            "Gr\u{fc}\u{df}e & K\u{fc}sse \u{20ac}5 &unknown; &"
+        );
+    }
+
+    #[test]
+    fn parse_keeps_non_ascii_contents_and_attributes() {
+        // The second element's attribute name contains U+00E0, whose UTF-8
+        // continuation byte 0xA0 used to be taken for whitespace (panic).
+        let xml = "<?xml version=\"1.0\"?><xfdf><annots>\
+            <squiggly page=\"0\" rect=\"1,2,3,4\" title=\"J\u{fc}rgen\">\
+            <contents>Gr\u{fc}\u{df}e &amp; mehr</contents></squiggly>\
+            <text page=\"0\" rect=\"1,2,3,4\" na\u{e0}me=\"x\"/>\
+            </annots></xfdf>";
+        let annots = parse_xfdf(xml.as_bytes()).unwrap();
+        assert_eq!(annots.len(), 2);
+        assert_eq!(annots[0].tag, "squiggly");
+        assert_eq!(annots[0].title.as_deref(), Some("J\u{fc}rgen"));
+        assert_eq!(annots[0].contents.as_deref(), Some("Gr\u{fc}\u{df}e & mehr"));
+    }
 }

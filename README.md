@@ -9,26 +9,34 @@ traits so the same binary plan applies once the Linux PDFium binary is in place.
 > The application is branded **Docura PDF** (`com.docura.pdf`). The repository,
 > crates, and internal keys stay named `rustpdf` for historical reasons.
 
-Current status: **v1.0.1** — milestones v0.1 through v1.0 (Reader, Navigation,
+Current status: **v1.1.0** — milestones v0.1 through v1.0 (Reader, Navigation,
 Organise, Export & Virtual printer, Annotation, Forms, Fill & Sign, Security &
-Redaction, Export & Conversion, OCR) are all shipped. Work is now on the v1.1
-"Performance & Polish" milestone. The full inventory lives in
-[`docs/roadmap.md`](docs/roadmap.md).
+Redaction, Export & Conversion, OCR) are shipped; v1.1 "Performance & Polish"
+is largely done (simplified UI, render pool, caches, tray, accessibility —
+open: progressive rendering, MSI installer, auto-update, crash reporting). The
+full inventory lives in [`docs/roadmap.md`](docs/roadmap.md).
 
 ## What's in the box today
 
+- **Simple, task-oriented UI.** Seven ribbon tabs — Start, Kommentieren,
+  Seiten, Bearbeiten, Ausfüllen & Signieren, Konvertieren, Schützen — with
+  captioned groups; a status bar for messages, page navigation and zoom; a
+  welcome screen with "Open PDF", recent files and quick conversions. Save
+  (Ctrl+S) / Save as with an unsaved-changes prompt before closing or opening
+  another file.
 - **Reader.** Open via dialog, drop, recent files, file association, or the
   virtual printer. Continuous scroll, single page, two-page spread,
   fit-width/fit-page, rotate (per page / whole document), dark/invert mode,
   fullscreen, presentation mode. Configurable default zoom and render-cache
   budget in Settings.
 - **Navigation.** Thumbnail strip, outline / bookmarks, attachments panel,
-  history back/forward via internal links, external link opener, Ctrl+G goto,
-  Ctrl+F find (current page + whole document with hit markers), text selection
-  and copy.
-- **Organise.** Delete, extract, rotate (persistent), reorder (drag), insert
-  from another PDF, merge multiple PDFs, split by page ranges, undo/redo across
-  all organise operations. Watermark (text + image), header/footer + page
+  history back/forward via internal links, external link opener, page box in
+  the status bar (Ctrl+G), Ctrl+F find (current page + whole document with hit
+  markers), text selection and copy.
+- **Organise.** Page grid with multi-select: delete, extract, rotate
+  (persistent), reorder (drag), insert from another PDF, merge multiple PDFs,
+  split every N pages or by page ranges, undo/redo across all organise
+  operations. Watermark (text + image), header/footer + page
   numbers.
 - **Annotate.** Highlight, underline, strikeout, squiggly, sticky notes, free-hand ink,
   shapes (rect / circle / line / arrow), stamps (image), free text. Comment

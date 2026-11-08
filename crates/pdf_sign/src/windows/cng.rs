@@ -243,8 +243,8 @@ fn key_alg_from_cert(cert_der: &[u8]) -> SignResult<SigAlg> {
 
 /// Convert a fixed-width ECDSA signature (`r || s`) to DER `SEQUENCE { r, s }`.
 fn ecdsa_raw_to_der(raw: &[u8]) -> SignResult<Vec<u8>> {
-    if !raw.len().is_multiple_of(2) {
-        return Err(SignError::Windows("odd ECDSA signature length".into()));
+    if raw.is_empty() || !raw.len().is_multiple_of(2) {
+        return Err(SignError::Windows("bad ECDSA signature length".into()));
     }
     let (r, s) = raw.split_at(raw.len() / 2);
     let r = der_uint(r);
@@ -293,7 +293,9 @@ fn push_len(out: &mut Vec<u8>, len: usize) {
 
 fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if !s.len().is_multiple_of(2) {
+    // Byte-offset slicing below needs ASCII (a thumbprint copied from the
+    // Windows certificate dialog carries an invisible U+200E prefix).
+    if !s.is_ascii() || !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())

@@ -5,28 +5,66 @@ import type {
 } from "./types";
 import { state, callbacks } from "./state";
 import { dom, setStatus } from "./dom";
+import { t } from "./i18n";
 
-const ZOOM_PRESETS = [0.1, 0.5, 0.8, 1, 1.2, 1.5, 2];
+// Entries of the status-bar zoom dropdown.
+const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
+// Stops used by the zoom-in / zoom-out buttons and Ctrl +/-.
+const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
 const EVICT_DIST = 10;
 const MAX_RENDER_DIST = 6;
 
 export function syncZoomUi() {
   const pct = Math.round(state.zoom * 100);
   dom.zoomCustomOpt.textContent = `${pct}%`;
-  const hit = ZOOM_PRESETS.find((v) => Math.abs(v - state.zoom) < 0.005);
+  // A fit mode always shows the effective percentage; a preset is only
+  // selected when the user picked an exact zoom.
+  const hit = state.fitMode === "custom"
+    ? ZOOM_PRESETS.find((v) => Math.abs(v - state.zoom) < 0.005)
+    : undefined;
   dom.zoomSelect.value = hit !== undefined ? String(hit) : "custom";
+  document.getElementById("fitWidthBtn")?.classList.toggle("active", state.fitMode === "width");
+  document.getElementById("fitPageBtn")?.classList.toggle("active", state.fitMode === "page");
 }
 
+/** Switch to a fit mode (or "custom") and re-layout. */
+export function setFitMode(mode: FitMode) {
+  state.fitMode = mode;
+  if (state.currentDoc) reflow();
+  else syncZoomUi();
+}
+
+/** Step the zoom to the next/previous stop (buttons, Ctrl +/-). */
+export function stepZoom(dir: 1 | -1) {
+  const z = state.zoom;
+  const next = dir > 0
+    ? ZOOM_STEPS.find((v) => v > z + 0.001) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1]
+    : [...ZOOM_STEPS].reverse().find((v) => v < z - 0.001) ?? ZOOM_STEPS[0];
+  state.fitMode = "custom";
+  state.zoom = clampZoom(next);
+  reflow();
+}
+
+let titleLabel: string | null = null;
+
 /** Show the document name in the custom title bar and keep the native
- * window title (taskbar / alt-tab) in sync. */
+ * window title (taskbar / alt-tab) in sync. A leading "•" marks unsaved
+ * changes. */
 export function setWindowTitle(label: string | null) {
+  titleLabel = label;
+  refreshWindowTitle();
+}
+
+export function refreshWindowTitle() {
   const span = document.getElementById("titlebarTitle");
-  const text = label ? `${label} — Docura PDF` : "Docura PDF";
+  const name = titleLabel ? `${state.dirty ? "• " : ""}${titleLabel}` : null;
+  const text = name ? `${name} — Docura PDF` : "Docura PDF";
   if (span) span.textContent = text;
   getCurrentWindow().setTitle(text).catch(() => {});
 }
 
 export function updateChrome() {
+  document.body.classList.toggle("hasDoc", !!state.currentDoc);
   if (!state.currentDoc) {
     dom.pageInput.value = "1";
     dom.pageTotal.textContent = "/ 0";
@@ -84,7 +122,7 @@ export function makeSlot(pageIdx: number): Slot {
   wrap.dataset.page = String(pageIdx);
   const img = document.createElement("img");
   img.className = "page";
-  img.alt = `Page ${pageIdx + 1}`;
+  img.alt = t("page.one", { n: pageIdx + 1 });
   const selectLayer = document.createElement("div");
   selectLayer.className = "selectLayer";
   const highlightLayer = document.createElement("div");
@@ -296,7 +334,8 @@ async function renderSlot(idx: number) {
     callbacks.renderRedactsFor(idx);
     callbacks.renderFormFor(idx);
   } catch (e) {
-    setStatus(`Render error p${idx + 1}: ${e}`);
+    // A render for a document that has since been closed is not news.
+    if (docAtStart === state.currentDoc) setStatus(t("st.error", { e: `${t("page.one", { n: idx + 1 })}: ${e}` }));
   } finally {
     slot.renderingZoom = null;
   }
@@ -308,15 +347,15 @@ async function ensureTextLayer(idx: number) {
   if (!slot) return;
   let runs = state.textRunsCache.get(idx);
   if (!runs) {
+    const doc = state.currentDoc;
+    const gen = state.contentGen;
     try {
-      runs = await invoke<TextRun[]>("page_text_layout_cmd", {
-        document: state.currentDoc,
-        page: idx,
-      });
-      state.textRunsCache.set(idx, runs);
+      runs = await invoke<TextRun[]>("page_text_layout_cmd", { document: doc, page: idx });
     } catch {
       runs = [];
     }
+    if (doc !== state.currentDoc || gen !== state.contentGen) return;
+    state.textRunsCache.set(idx, runs);
   }
   const sz = state.pageSizes[idx];
   if (!sz) return;
@@ -391,15 +430,15 @@ async function ensureLinkLayer(idx: number) {
   slot.linkLayer.innerHTML = "";
   let links = state.linksCache.get(idx);
   if (!links) {
+    const doc = state.currentDoc;
+    const gen = state.contentGen;
     try {
-      links = await invoke<PageLink[]>("page_links_cmd", {
-        document: state.currentDoc,
-        page: idx,
-      });
-      state.linksCache.set(idx, links);
+      links = await invoke<PageLink[]>("page_links_cmd", { document: doc, page: idx });
     } catch {
       links = [];
     }
+    if (doc !== state.currentDoc || gen !== state.contentGen) return;
+    state.linksCache.set(idx, links);
   }
   const sz = state.pageSizes[idx];
   if (!sz || links.length === 0) return;
@@ -414,7 +453,7 @@ async function ensureLinkLayer(idx: number) {
     a.style.height = `${box.height}px`;
     if (link.target.kind === "Page") {
       const targetPage = link.target.value;
-      a.title = `Page ${targetPage + 1}`;
+      a.title = t("page.one", { n: targetPage + 1 });
       a.href = `#page-${targetPage + 1}`;
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
@@ -429,7 +468,7 @@ async function ensureLinkLayer(idx: number) {
         try {
           await invoke("open_external", { url });
         } catch (err) {
-          setStatus(`Open link error: ${err}`);
+          setStatus(t("st.error", { e: String(err) }));
         }
       });
     }
@@ -558,6 +597,7 @@ export function rotate(delta: number, docWide: boolean) {
 export function setDarkMode(on: boolean) {
   state.darkMode = on;
   document.body.classList.toggle("dark", state.darkMode);
+  document.getElementById("darkToggle")?.classList.toggle("active", on);
 }
 
 function findSlotAtClient(clientX: number, clientY: number): { slot: Slot; idx: number } | null {
@@ -592,7 +632,6 @@ export function applyZoomAround(newZoom: number, clientX: number, clientY: numbe
     anchorSlot = anchor.slot;
   }
   state.fitMode = "custom";
-  dom.fitSelect.value = "custom";
   state.zoom = clamped;
   invalidateRenders();
   sizeSlots();
@@ -649,39 +688,38 @@ export function toggleSidebar() {
 }
 
 export function initViewer() {
-  // Page nav
+  // Page nav (status bar)
   document.getElementById("prevPage")!.addEventListener("click", () => goToPage(state.currentPage - 1));
   document.getElementById("nextPage")!.addEventListener("click", () => goToPage(state.currentPage + 1));
-  dom.pageInput.addEventListener("change", () => {
+  const commitPageInput = () => {
     const v = parseInt(dom.pageInput.value, 10);
     if (!isNaN(v)) goToPage(v - 1);
+    else updateChrome();
+  };
+  dom.pageInput.addEventListener("change", commitPageInput);
+  dom.pageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitPageInput();
+      dom.pageInput.blur();
+    } else if (e.key === "Escape") {
+      updateChrome();
+      dom.pageInput.blur();
+    }
   });
 
-  // Zoom buttons / dropdowns
-  document.getElementById("zoomIn")!.addEventListener("click", () => {
-    state.fitMode = "custom";
-    dom.fitSelect.value = "custom";
-    state.zoom = clampZoom(state.zoom + 0.1);
-    reflow();
-  });
-  document.getElementById("zoomOut")!.addEventListener("click", () => {
-    state.fitMode = "custom";
-    dom.fitSelect.value = "custom";
-    state.zoom = clampZoom(state.zoom - 0.1);
-    reflow();
-  });
-  dom.fitSelect.addEventListener("change", () => {
-    state.fitMode = dom.fitSelect.value as FitMode;
-    reflow();
-  });
-  dom.fitSelect.value = state.fitMode;
+  // Zoom (status bar)
+  document.getElementById("zoomIn")!.addEventListener("click", () => stepZoom(1));
+  document.getElementById("zoomOut")!.addEventListener("click", () => stepZoom(-1));
+  document.getElementById("fitWidthBtn")!.addEventListener("click", () => setFitMode("width"));
+  document.getElementById("fitPageBtn")!.addEventListener("click", () => setFitMode("page"));
   dom.zoomSelect.addEventListener("change", () => {
     const v = dom.zoomSelect.value;
     if (v === "custom") { syncZoomUi(); return; }
+    if (v === "width" || v === "page") { setFitMode(v); return; }
     const z = parseFloat(v);
     if (!isFinite(z)) return;
     state.fitMode = "custom";
-    dom.fitSelect.value = "custom";
     state.zoom = clampZoom(z);
     reflow();
   });

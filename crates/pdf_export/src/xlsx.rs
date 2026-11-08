@@ -35,6 +35,15 @@ fn column_for(cols: &[f32], x0: f32) -> usize {
         .unwrap_or(0)
 }
 
+/// Cell text that should be written as a number. Decimal comma accepted.
+/// Only finite values: Rust's float parser also accepts "inf", "NaN",
+/// "infinity" (and "1e999" overflows to inf), which rust_xlsxwriter would
+/// write as the error strings "#DIV/0" / "#NUM!" instead of the text.
+fn parse_cell_number(text: &str) -> Option<f64> {
+    let num = text.replace(',', ".").trim().parse::<f64>().ok()?;
+    num.is_finite().then_some(num)
+}
+
 /// Build an .xlsx from per-page text runs. Returns the file bytes.
 pub fn build_xlsx(pages: &[Vec<TextRun>]) -> Result<Vec<u8>, ExportError> {
     let mut wb = Workbook::new();
@@ -71,8 +80,7 @@ pub fn build_xlsx(pages: &[Vec<TextRun>]) -> Result<Vec<u8>, ExportError> {
             }
             for (col, text) in cells {
                 // Numbers as numbers so Excel can calculate with them.
-                let normalized = text.replace(',', ".");
-                if let Ok(num) = normalized.trim().parse::<f64>() {
+                if let Some(num) = parse_cell_number(&text) {
                     sheet
                         .write_number(row, col as u16, num)
                         .map_err(|e| ExportError::Build(format!("xlsx cell: {e}")))?;
@@ -120,5 +128,16 @@ mod tests {
             run("c", 220.0, 0.0),
         ]);
         assert_eq!(cols.len(), 2);
+    }
+
+    #[test]
+    fn only_finite_numbers_become_number_cells() {
+        assert_eq!(parse_cell_number("1200"), Some(1200.0));
+        assert_eq!(parse_cell_number(" 3,5 "), Some(3.5));
+        assert_eq!(parse_cell_number("Inf"), None);
+        assert_eq!(parse_cell_number("NaN"), None);
+        assert_eq!(parse_cell_number("infinity"), None);
+        assert_eq!(parse_cell_number("1e999"), None);
+        assert_eq!(parse_cell_number("Miete"), None);
     }
 }

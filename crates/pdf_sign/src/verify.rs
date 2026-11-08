@@ -17,6 +17,7 @@ const OID_CN: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
 const OID_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 const OID_RSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
 const OID_ECDSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+const OID_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
 
 /// Outcome of the cryptographic check on a single signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -84,12 +85,17 @@ fn verify_one(pdf: &[u8], sig: &lopdf::Dictionary) -> SignatureReport {
         rep.detail = "malformed ByteRange".into();
         return rep;
     }
-    let (a, b, c, d) = (br[0] as usize, br[1] as usize, br[2] as usize, br[3] as usize);
-    if a + b > pdf.len() || c + d > pdf.len() {
+    // Untrusted input: negative values or sums past the file must not wrap
+    // into a bogus (panicking) slice range.
+    let in_file = |off: i64, len: i64| -> Option<(usize, usize)> {
+        let (off, len) = (usize::try_from(off).ok()?, usize::try_from(len).ok()?);
+        (off.checked_add(len)? <= pdf.len()).then_some((off, len))
+    };
+    let (Some((a, b)), Some((c, d))) = (in_file(br[0], br[1]), in_file(br[2], br[3])) else {
         rep.detail = "ByteRange exceeds file".into();
         rep.status = SignatureStatus::Invalid;
         return rep;
-    }
+    };
     rep.covers_whole_document = a == 0 && c + d == pdf.len();
 
     // SHA-256 over the two signed ranges.
@@ -131,6 +137,14 @@ fn verify_cms(cms_der: &[u8], digest: &[u8], rep: &mut SignatureReport) -> SignR
         .as_slice()
         .first()
         .ok_or_else(|| SignError::Verify("no SignerInfo".into()))?;
+    // `digest` is SHA-256; comparing it against a SHA-1/-384/-512 message
+    // digest would report a valid third-party signature as tampered.
+    if si.digest_alg.oid != OID_SHA256 {
+        return Err(SignError::Verify(format!(
+            "unsupported digest algorithm {}",
+            si.digest_alg.oid
+        )));
+    }
 
     rep.has_timestamp = si
         .unsigned_attrs
@@ -250,16 +264,45 @@ fn trim_der(bytes: &[u8]) -> Option<usize> {
         return None;
     }
     let b1 = bytes[1];
-    if b1 & 0x80 == 0 {
-        return Some(2 + b1 as usize);
+    let end = if b1 & 0x80 == 0 {
+        2 + b1 as usize
+    } else {
+        let n = (b1 & 0x7f) as usize;
+        if n == 0 || n > 4 || bytes.len() < 2 + n {
+            return None;
+        }
+        let mut len = 0usize;
+        for &byte in &bytes[2..2 + n] {
+            len = (len << 8) | byte as usize;
+        }
+        2 + n + len
+    };
+    // A length running past /Contents means truncated or garbage data; the
+    // caller slices with this value.
+    (end <= bytes.len()).then_some(end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::Dictionary;
+
+    #[test]
+    fn trim_der_rejects_lengths_past_the_buffer() {
+        assert_eq!(trim_der(&[0x30, 0x02, 0x05, 0x00, 0x00, 0x00]), Some(4));
+        assert_eq!(trim_der(&[0x30, 0x7F, 0x00]), None);
+        assert_eq!(trim_der(&[0x30, 0x84, 0x7F, 0xFF, 0xFF, 0xFF, 0x00]), None);
     }
-    let n = (b1 & 0x7f) as usize;
-    if n == 0 || n > 4 || bytes.len() < 2 + n {
-        return None;
+
+    #[test]
+    fn malformed_byte_range_is_invalid_not_a_panic() {
+        let pdf = vec![b'x'; 100];
+        for br in [[5, -1, 10, 10], [0, 10, i64::MAX, 2], [0, 50, 60, 41]] {
+            let mut sig = Dictionary::new();
+            sig.set("ByteRange", Object::Array(br.iter().map(|&v| Object::Integer(v)).collect()));
+            sig.set("Contents", Object::string_literal(vec![0x30, 0x00]));
+            let rep = verify_one(&pdf, &sig);
+            assert_eq!(rep.status, SignatureStatus::Invalid, "{br:?}");
+        }
     }
-    let mut len = 0usize;
-    for &byte in &bytes[2..2 + n] {
-        len = (len << 8) | byte as usize;
-    }
-    Some(2 + n + len)
 }

@@ -11,9 +11,90 @@ scope each tag landed.
 
 ## [Unreleased]
 
-Work on the v1.1 "Performance & Polish" milestone.
+## [1.1.0] — 2026-11-08
+
+The v1.1 "Performance & Polish" milestone: a simpler, more intuitive UI, save
+with unsaved-changes protection, and a broad bug-fix pass over the UI, the
+Tauri backend and the PDF crates.
+
+### Changed — simpler UI
+- **Seven task-oriented tabs instead of nine.** Start (view tools), Kommentieren,
+  Seiten (page grid: rotate / delete / extract / insert / merge / split),
+  Bearbeiten (text, image, watermark, header/footer), Ausfüllen & Signieren
+  (forms + signatures + digital ID), Konvertieren (Word/Excel/images/text/HTML,
+  create PDF, PDF/A, OCR) and Schützen. Duplicated commands (OCR, Office
+  export, extract, rotate, text box) now live in exactly one place, and every
+  ribbon group carries a caption.
+- **Status bar.** Status messages, page navigation and zoom (zoom steps,
+  presets, fit width / fit page) moved into a bottom status bar; the go-to
+  popup is replaced by the page box (Ctrl+G focuses it).
+- **Welcome screen.** Without a document the window shows a large "PDF öffnen"
+  button, the drag-and-drop hint, shortcuts to merge / images → PDF /
+  Office → PDF and the recently opened files.
+- Commands that need a document are greyed out until one is open; the
+  Konvertieren tab no longer hides the document (batch PDF/A opens on demand).
+- Delete mode removed: select pages in the Seiten grid and delete (with
+  confirmation, undoable).
+- Split got a real dialog ("every N pages" or page ranges, with a live
+  preview) — the old `window.prompt` never worked inside the WebView.
+- Page drag & drop in the Seiten grid shows a clear insertion bar, a ghost of
+  the grabbed page and dashed outlines on the pages being moved; dropping a
+  page onto itself no longer moves it to the end.
+- **Restricted PDFs stay restricted.** Protecting with permissions but no owner
+  password now uses a random owner password instead of the user password
+  (which made every user an owner and voided the restrictions).
 
 ### Added
+- **Save (Ctrl+S) and unsaved-changes protection.** "Speichern" writes back to
+  the opened file (temp documents such as merge results ask for a location);
+  a "•" in the title marks unsaved changes, and opening another file, changing
+  the language or closing the window asks to save, discard or cancel.
+- Escape closes the topmost dialog (else the search bar / presentation, else
+  disarms the active tool); every dialog closes on a backdrop click.
+
+### Fixed
+- **Script injection from PDF content (security).** Annotation subtypes,
+  signer names and verification details from a PDF were inserted as HTML with
+  CSP disabled; they are now escaped / set as text.
+- Pending redaction marks are discarded when pages change (delete, reorder,
+  insert, undo) instead of blacking out the wrong page; the ✕ on a mark no
+  longer removes a different mark.
+- Page tools (markup, shapes, eraser, sign marks, hand) are mutually exclusive
+  and disarmed when switching tabs; clicks inside a text box / note editor no
+  longer start a new one.
+- Radio-button groups: every option renders and can be selected.
+- Form "next/previous field" works from the ribbon and waits for the target
+  page to render; filling a field enables Undo.
+- Late results (OCR, digital signing, redaction, text/link layers, thumbnails,
+  comment lists) are dropped when the document changed meanwhile.
+- Double clicks no longer sign / merge / convert / redact twice.
+- Missing translations (e.g. the "Schutz anwenden" button showed its raw key)
+  and ~150 hard-coded English status messages are now localized.
+- Saving writes to a temp file and renames it over the target, so a failure
+  mid-write can't destroy the original.
+
+### Fixed — PDF processing (`pdf_mutate`, `pdf_sign`, `pdf_pdfium`, …)
+- **Redaction removed content for real**: original images, XObjects, fonts and
+  the page thumbnail of a redacted page were still in the file; shared content
+  streams of other pages were blanked. Deleted / unextracted pages and
+  sanitized metadata no longer linger in the saved PDF either.
+- A second digital signature corrupted the first (ByteRange placeholder search
+  hit the old signature); signing no longer drops inline AcroForm fields, and
+  non-ASCII reason / name / location are written as proper PDF text.
+- Watermark, header/footer and OCR no longer wipe fonts and images of pages
+  that inherit `/Resources`; adding a text box no longer wipes form fields.
+- Reorder / insert keep inherited MediaBox, Resources, CropBox and Rotate.
+- Rotated pages: header/footer, watermarks, annotation positions (eraser,
+  notes, XFDF) and region export now use the displayed orientation.
+- Malformed PDFs: `/Parent` / `/Kids` cycles, bad ByteRanges and truncated DER
+  no longer hang or crash; XFDF import keeps umlauts and imports squiggly.
+- Case-insensitive search matches umlauts; permissions report the print and
+  fill-forms bits correctly; a second image watermark keeps the first one;
+  transparent PNG watermarks keep their alpha.
+- Ghostscript (PDF/A, virtual printer) works with `%` in file names; temp
+  files are cleaned up on errors; a document that fails to open is released.
+
+### Added (earlier in this cycle)
 - **Foxit-style ribbon redesign.** Three-tier chrome: a title bar with the app
   icon + a compact icon-only quick-access toolbar (open/save/print/undo/redo/
   page-nav), a flat text tab strip with an accent underline on the active tab,

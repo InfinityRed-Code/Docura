@@ -43,8 +43,7 @@ export type DocPermissions = {
 
 export type FitMode = "custom" | "width" | "page" | "actual";
 export type ViewMode = "single" | "continuous" | "double";
-export type RibbonTab = "reader" | "comment" | "view" | "edit" | "forms" | "sign" | "convert" | "organize" | "protect";
-export type EditMode = "select" | "delete";
+export type RibbonTab = "reader" | "comment" | "organize" | "edit" | "sign" | "convert" | "protect";
 export type InsertWhere = "before" | "after" | "end";
 export type MergeFile = { path: string; name: string };
 export type MarkupKind = "highlight" | "underline" | "strikeout" | "squiggly";

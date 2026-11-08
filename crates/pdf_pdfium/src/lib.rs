@@ -710,12 +710,14 @@ impl PdfEngine for PdfiumEngine {
         let legacy = rev <= 2; // rev 2: bits 9-12 unused, bit 3 covers all printing
         Ok(DocPermissions {
             security_handler: handler,
-            can_print_high_quality: if legacy { bit(3) } else { bit(12) },
+            // Bit 12 only refines bit 3: without bit 3 there is no printing.
+            can_print_high_quality: bit(3) && (legacy || bit(12)),
             can_print_low_quality: bit(3),
             can_modify_content: bit(4),
             can_extract_text_and_graphics: bit(5),
             can_annotate: bit(6),
-            can_fill_forms: if legacy { bit(6) } else { bit(9) },
+            // Bit 6 already allows filling; bit 9 allows it even without 6.
+            can_fill_forms: bit(6) || (!legacy && bit(9)),
             can_assemble: if legacy { bit(4) } else { bit(11) },
         })
     }
@@ -759,10 +761,14 @@ impl PdfEngine for PdfiumEngine {
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
 
+        // Case folding must be identical on both sides and keep one char per
+        // char (haystack offsets map back to `chars` by index), so fold per
+        // char with `fold_case` — `to_lowercase` on the needle but ASCII-only
+        // folding on the page text never matched e.g. "Über" against "über".
         let needle: String = if query.case_sensitive {
             query.term.clone()
         } else {
-            query.term.to_lowercase()
+            query.term.chars().map(fold_case).collect()
         };
 
         let mut hits: Vec<SearchHit> = Vec::new();
@@ -780,7 +786,7 @@ impl PdfEngine for PdfiumEngine {
             }
             let haystack: String = chars
                 .iter()
-                .map(|(c, _)| if query.case_sensitive { *c } else { c.to_ascii_lowercase() })
+                .map(|(c, _)| if query.case_sensitive { *c } else { fold_case(*c) })
                 .collect();
             let needle_len_chars = needle.chars().count();
             let mut char_positions: Vec<usize> = Vec::with_capacity(haystack.len());
@@ -807,6 +813,17 @@ impl PdfEngine for PdfiumEngine {
             }
         }
         Ok(hits)
+    }
+}
+
+/// Lowercase `c` when that yields exactly one char (true for virtually all
+/// letters, including umlauts); otherwise keep it, so text length in chars
+/// is preserved.
+fn fold_case(c: char) -> char {
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(l), None) => l,
+        _ => c,
     }
 }
 
@@ -943,5 +960,18 @@ fn map_field(
         PdfFormFieldType::PushButton => (FormFieldKind::PushButton, None, None, None, false, false),
         PdfFormFieldType::Signature => (FormFieldKind::Signature, None, None, None, false, false),
         PdfFormFieldType::Unknown => (FormFieldKind::Unknown, None, None, None, false, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fold_case;
+
+    #[test]
+    fn fold_case_handles_umlauts_and_keeps_char_count() {
+        let fold = |s: &str| s.chars().map(fold_case).collect::<String>();
+        assert_eq!(fold("ÜBER Straße"), "über straße");
+        // Multi-char lowercase mappings are left alone (1:1 char mapping).
+        assert_eq!(fold("İ").chars().count(), 1);
     }
 }

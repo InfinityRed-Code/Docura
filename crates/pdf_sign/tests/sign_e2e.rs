@@ -66,6 +66,25 @@ fn sign_with_pkcs8_then_verify_roundtrip() {
 }
 
 #[test]
+fn second_signature_keeps_the_first_valid() {
+    let signer = KeySigner::from_pkcs8(KEY_PKCS8, CERT_DER.to_vec(), vec![]).unwrap();
+    let once = sign_pdf(&tiny_pdf(), &signer, &opts(), None).unwrap();
+    let mut o2 = opts();
+    o2.signing_time_epoch += 60; // distinct field name
+    o2.location = Some("M\u{fc}nchen".into());
+    let twice = sign_pdf(&once, &signer, &o2, None).unwrap();
+    assert_eq!(&twice[..once.len()], &once[..], "first revision modified");
+
+    let reports = verify(&twice).unwrap();
+    assert_eq!(reports.len(), 2);
+    for r in &reports {
+        assert_eq!(r.status, SignatureStatus::Valid, "detail: {}", r.detail);
+    }
+    // Exactly one (the newer) covers the whole file.
+    assert_eq!(reports.iter().filter(|r| r.covers_whole_document).count(), 1);
+}
+
+#[test]
 fn tampering_breaks_verification() {
     let pdf = tiny_pdf();
     let signer = KeySigner::from_pkcs8(KEY_PKCS8, CERT_DER.to_vec(), vec![]).unwrap();

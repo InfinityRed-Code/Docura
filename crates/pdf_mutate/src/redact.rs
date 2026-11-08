@@ -29,24 +29,13 @@ pub fn replace_page_with_jpeg(
         .get(page_index as usize)
         .ok_or(MutateError::PageOutOfRange(page_index, pages.len() as u32))?;
 
-    // Collect the old content streams and annotations for deletion — lopdf
-    // writes orphaned objects back out, so merely unlinking them would leave
-    // the redacted data recoverable in the file.
+    // Annotations are deleted outright: widgets stay reachable through the
+    // AcroForm /Fields, so unlinking them from the page is not enough. The
+    // old content streams and resources are only unlinked here and then
+    // dropped by `prune_unreachable` below — deleting them by id would also
+    // break other pages sharing a stream or image with this one.
     let mut doomed: Vec<lopdf::ObjectId> = Vec::new();
     if let Ok(page) = doc.get_dictionary(page_id) {
-        if let Ok(contents) = page.get(b"Contents") {
-            match contents {
-                Object::Reference(id) => doomed.push(*id),
-                Object::Array(arr) => {
-                    for o in arr {
-                        if let Ok(id) = o.as_reference() {
-                            doomed.push(id);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
         if let Ok(annots) = page.get(b"Annots") {
             let arr = match annots {
                 Object::Reference(id) => {
@@ -109,9 +98,17 @@ pub fn replace_page_with_jpeg(
     page.remove(b"BleedBox");
     page.remove(b"ArtBox");
     page.remove(b"Annots");
+    // Embedded thumbnail = a picture of the unredacted page; PieceInfo =
+    // private application data that may hold the original content.
+    page.remove(b"Thumb");
+    page.remove(b"PieceInfo");
     for id in doomed {
         doc.objects.remove(&id);
     }
+    // lopdf writes every object it holds, so anything now unreferenced (the
+    // old content streams, images, fonts, form XObjects) must be removed or
+    // the redacted content stays recoverable from the saved file.
+    crate::prune_unreachable(doc);
     Ok(())
 }
 
@@ -164,6 +161,9 @@ pub fn sanitize_metadata(doc: &mut Document) -> MutateResult<u32> {
     for id in orphaned {
         doc.objects.remove(&id);
     }
+    // Indirect values of the removed dictionaries (e.g. `/Author 12 0 R`,
+    // PieceInfo's private data streams) would otherwise still be written.
+    crate::prune_unreachable(doc);
     Ok(removed)
 }
 
@@ -241,8 +241,74 @@ mod tests {
         let needle = |n: &[u8]| out.windows(n.len()).any(|w| w == n);
         assert!(!needle(b"top secret content"));
         assert!(needle(b"ImRedact"));
-        // Old content stream object must be gone after a full re-save?
-        // lopdf keeps orphaned objects in `objects`, so prune explicitly:
-        // (covered by renumber/save in the app path via MutableDoc::to_bytes)
+    }
+
+    #[test]
+    fn replace_page_drops_orphaned_resources_and_thumbnail() {
+        let mut d = doc_with_metadata();
+        let page_id = d.page_iter().next().unwrap();
+        // An image only this page uses (e.g. the scan being redacted) and an
+        // embedded page thumbnail: both hold the unredacted pixels.
+        let img = d.add_object(Object::Stream(Stream::new(
+            dictionary! { "Type" => "XObject", "Subtype" => "Image" },
+            b"SECRET-SCAN-PIXELS".to_vec(),
+        )));
+        let thumb = d.add_object(Object::Stream(Stream::new(
+            Dictionary::new(),
+            b"SECRET-THUMB-PIXELS".to_vec(),
+        )));
+        {
+            let page = d.get_dictionary_mut(page_id).unwrap();
+            page.set(
+                "Resources",
+                Object::Dictionary(dictionary! {
+                    "XObject" => Object::Dictionary(dictionary! { "Im1" => Object::Reference(img) }),
+                }),
+            );
+            page.set("Thumb", Object::Reference(thumb));
+        }
+        replace_page_with_jpeg(&mut d, 0, vec![0xFF, 0xD8, 0xFF, 0xE0], 10, 13, 612.0, 792.0).unwrap();
+        let mut out = Vec::new();
+        d.save_to(&mut out).unwrap();
+        let needle = |n: &[u8]| out.windows(n.len()).any(|w| w == n);
+        assert!(!needle(b"SECRET-SCAN-PIXELS"), "orphaned image still in file");
+        assert!(!needle(b"SECRET-THUMB-PIXELS"), "page thumbnail still in file");
+        assert!(!needle(b"top secret content"));
+    }
+
+    #[test]
+    fn replace_page_keeps_content_shared_with_other_pages() {
+        let mut d = doc_with_metadata();
+        let page_id = d.page_iter().next().unwrap();
+        let pages_id = d.get_dictionary(page_id).unwrap().get(b"Parent").unwrap().as_reference().unwrap();
+        let shared = d.get_dictionary(page_id).unwrap().get(b"Contents").unwrap().clone();
+        // Second page drawing the very same content stream.
+        let page2 = d.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+            "Contents" => shared.clone(),
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        });
+        {
+            let pages = d.get_dictionary_mut(pages_id).unwrap();
+            pages.set("Kids", Object::Array(vec![Object::Reference(page_id), Object::Reference(page2)]));
+            pages.set("Count", 2);
+        }
+        replace_page_with_jpeg(&mut d, 0, vec![0xFF, 0xD8, 0xFF, 0xE0], 10, 13, 612.0, 792.0).unwrap();
+        let sid = shared.as_reference().unwrap();
+        assert!(d.objects.contains_key(&sid), "page 2 lost its content stream");
+    }
+
+    #[test]
+    fn sanitize_drops_indirect_info_values() {
+        let mut d = doc_with_metadata();
+        let author = d.add_object(Object::string_literal("Indirect Secret Author"));
+        let info = d.trailer.get(b"Info").unwrap().as_reference().unwrap();
+        d.get_dictionary_mut(info).unwrap().set("Author", Object::Reference(author));
+        sanitize_metadata(&mut d).unwrap();
+        let mut out = Vec::new();
+        d.save_to(&mut out).unwrap();
+        let n = b"Indirect Secret Author";
+        assert!(!out.windows(n.len()).any(|w| w == n));
     }
 }

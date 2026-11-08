@@ -5,7 +5,6 @@ class DomRefs {
   pageList!: HTMLDivElement;
   zoomSelect!: HTMLSelectElement;
   zoomCustomOpt!: HTMLOptionElement;
-  fitSelect!: HTMLSelectElement;
   viewModeSelect!: HTMLSelectElement;
   pageInput!: HTMLInputElement;
   pageTotal!: HTMLSpanElement;
@@ -15,8 +14,6 @@ class DomRefs {
   searchInput!: HTMLInputElement;
   searchCase!: HTMLInputElement;
   searchCount!: HTMLSpanElement;
-  gotoPanel!: HTMLDivElement;
-  gotoInput!: HTMLInputElement;
   thumbsPanel!: HTMLDivElement;
   outlinePanel!: HTMLDivElement;
   recentMenu!: HTMLDivElement;
@@ -26,18 +23,11 @@ class DomRefs {
   propsInfoPanel!: HTMLDivElement;
   propsPermsPanel!: HTMLDivElement;
   sidebarEl!: HTMLElement;
-  modeHint!: HTMLSpanElement;
   ribbonBody!: HTMLDivElement;
 
   // Undo/Redo
   undoBtn!: HTMLButtonElement;
   redoBtn!: HTMLButtonElement;
-
-  // Rotate / Insert popovers
-  rotateMenuBtn!: HTMLButtonElement;
-  rotateMenu!: HTMLDivElement;
-  insertMenuBtn!: HTMLButtonElement;
-  insertMenu!: HTMLDivElement;
 
   // Watermark / Header-Footer overlays
   wmOverlay!: HTMLDivElement;
@@ -98,7 +88,6 @@ export function initDom() {
   dom.pageList = document.getElementById("pageList") as HTMLDivElement;
   dom.zoomSelect = document.getElementById("zoomSelect") as HTMLSelectElement;
   dom.zoomCustomOpt = document.getElementById("zoomCustomOpt") as HTMLOptionElement;
-  dom.fitSelect = document.getElementById("fitSelect") as HTMLSelectElement;
   dom.viewModeSelect = document.getElementById("viewModeSelect") as HTMLSelectElement;
   dom.pageInput = document.getElementById("pageInput") as HTMLInputElement;
   dom.pageTotal = document.getElementById("pageTotal") as HTMLSpanElement;
@@ -106,8 +95,6 @@ export function initDom() {
   dom.searchInput = document.getElementById("searchInput") as HTMLInputElement;
   dom.searchCase = document.getElementById("searchCase") as HTMLInputElement;
   dom.searchCount = document.getElementById("searchCount") as HTMLSpanElement;
-  dom.gotoPanel = document.getElementById("gotoPanel") as HTMLDivElement;
-  dom.gotoInput = document.getElementById("gotoInput") as HTMLInputElement;
   dom.thumbsPanel = document.getElementById("thumbsPanel") as HTMLDivElement;
   dom.outlinePanel = document.getElementById("outlinePanel") as HTMLDivElement;
   dom.recentMenu = document.getElementById("recentMenu") as HTMLDivElement;
@@ -117,16 +104,10 @@ export function initDom() {
   dom.propsInfoPanel = document.getElementById("propsInfo") as HTMLDivElement;
   dom.propsPermsPanel = document.getElementById("propsPerms") as HTMLDivElement;
   dom.sidebarEl = document.getElementById("sidebar") as HTMLElement;
-  dom.modeHint = document.getElementById("modeHint") as HTMLSpanElement;
   dom.ribbonBody = document.querySelector(".ribbonBody") as HTMLDivElement;
 
   dom.undoBtn = document.getElementById("undoBtn") as HTMLButtonElement;
   dom.redoBtn = document.getElementById("redoBtn") as HTMLButtonElement;
-
-  dom.rotateMenuBtn = document.getElementById("rotateMenuBtn") as HTMLButtonElement;
-  dom.rotateMenu = document.getElementById("rotateMenu") as HTMLDivElement;
-  dom.insertMenuBtn = document.getElementById("insertMenuBtn") as HTMLButtonElement;
-  dom.insertMenu = document.getElementById("insertMenu") as HTMLDivElement;
 
   dom.wmOverlay = document.getElementById("wmOverlay") as HTMLDivElement;
   dom.hfOverlay = document.getElementById("hfOverlay") as HTMLDivElement;

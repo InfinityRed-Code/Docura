@@ -45,6 +45,20 @@ fn lit(s: &str) -> Object {
     Object::String(s.as_bytes().to_vec(), StringFormat::Literal)
 }
 
+/// A PDF *text string* (§7.9.2.2): ASCII as-is, anything else as UTF-16BE
+/// with BOM. Raw UTF-8 bytes would be read as PDFDocEncoding and show up as
+/// mojibake (e.g. "MÃ¼nchen") in viewers' signature panels.
+fn text(s: &str) -> Object {
+    if s.is_ascii() {
+        return lit(s);
+    }
+    let mut bytes = vec![0xFE, 0xFF];
+    for u in s.encode_utf16() {
+        bytes.extend_from_slice(&u.to_be_bytes());
+    }
+    Object::String(bytes, StringFormat::Hexadecimal)
+}
+
 /// Deref an `/Annots`- or `/Fields`-style entry from the previous document into
 /// an owned `Vec<Object>` (handles inline arrays and array references).
 fn read_array(prev: &Document, entry: Option<&Object>) -> Vec<Object> {
@@ -81,12 +95,20 @@ pub fn prepare(pdf: &[u8], meta: &SigDictMeta) -> SignResult<Prepared> {
     // Snapshot existing AcroForm/Fields/Annots before mutating.
     let catalog = prev.get_object(catalog_id).and_then(Object::as_dict).map_err(pdf_err)?;
     let acroform_ref = catalog.get(b"AcroForm").and_then(Object::as_reference).ok();
-    let existing_fields: Vec<Object> = match acroform_ref {
-        Some(id) => {
+    // An inline AcroForm dictionary carries the existing /Fields (and /DR,
+    // /DA …) too; it must be extended, not replaced by a fresh one.
+    let inline_acroform: Option<Dictionary> = catalog
+        .get(b"AcroForm")
+        .and_then(Object::as_dict)
+        .ok()
+        .cloned();
+    let existing_fields: Vec<Object> = match (acroform_ref, &inline_acroform) {
+        (Some(id), _) => {
             let af = prev.get_object(id).and_then(Object::as_dict).map_err(pdf_err)?;
             read_array(&prev, af.get(b"Fields").ok())
         }
-        None => Vec::new(),
+        (None, Some(af)) => read_array(&prev, af.get(b"Fields").ok()),
+        (None, None) => Vec::new(),
     };
     let page_dict = prev.get_object(page_id).and_then(Object::as_dict).map_err(pdf_err)?;
     let mut annots = read_array(&prev, page_dict.get(b"Annots").ok());
@@ -115,10 +137,10 @@ pub fn prepare(pdf: &[u8], meta: &SigDictMeta) -> SignResult<Prepared> {
     if !meta.pdf_date.is_empty() {
         sig.set("M", lit(&format!("D:{}", meta.pdf_date.trim_start_matches("D:"))));
     }
-    if let Some(r) = &meta.reason { sig.set("Reason", lit(r)); }
-    if let Some(n) = &meta.name { sig.set("Name", lit(n)); }
-    if let Some(l) = &meta.location { sig.set("Location", lit(l)); }
-    if let Some(c) = &meta.contact { sig.set("ContactInfo", lit(c)); }
+    if let Some(r) = &meta.reason { sig.set("Reason", text(r)); }
+    if let Some(n) = &meta.name { sig.set("Name", text(n)); }
+    if let Some(l) = &meta.location { sig.set("Location", text(l)); }
+    if let Some(c) = &meta.contact { sig.set("ContactInfo", text(c)); }
     let sig_id = nd.add_object(Object::Dictionary(sig));
 
     // 2. Signature field = widget annotation.
@@ -147,7 +169,7 @@ pub fn prepare(pdf: &[u8], meta: &SigDictMeta) -> SignResult<Prepared> {
             id
         }
         None => {
-            let mut af = Dictionary::new();
+            let mut af = inline_acroform.unwrap_or_default();
             af.set("Fields", Object::Array(new_fields));
             af.set("SigFlags", Object::Integer(3));
             idoc.new_document.add_object(Object::Dictionary(af))
@@ -173,11 +195,16 @@ pub fn prepare(pdf: &[u8], meta: &SigDictMeta) -> SignResult<Prepared> {
     let mut bytes: Vec<u8> = Vec::new();
     idoc.save_to(&mut bytes).map_err(pdf_err)?;
 
-    let gap = find_contents_gap(&bytes, meta.placeholder_len)
+    // Search only the appended update: the original bytes may hold earlier
+    // signatures whose /ByteRange (or a zero-filled /Contents) would match
+    // first — patching that one would invalidate the existing signature.
+    let base = pdf.len();
+    let gap = find_contents_gap(&bytes[base..], meta.placeholder_len)
+        .map(|(s, e)| (s + base, e + base))
         .ok_or(SignError::PlaceholderNotFound)?;
     let total = bytes.len();
     let byte_range = [0usize, gap.0, gap.1, total - gap.1];
-    patch_byte_range(&mut bytes, byte_range)?;
+    patch_byte_range(&mut bytes[base..], byte_range)?;
 
     Ok(Prepared { bytes, gap, byte_range })
 }
@@ -263,6 +290,7 @@ pub fn embed(bytes: &mut [u8], gap: (usize, usize), der: &[u8]) -> SignResult<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lopdf::dictionary;
 
     // Minimal one-page PDF.
     fn tiny_pdf() -> Vec<u8> {
@@ -347,5 +375,60 @@ mod tests {
         // Overflow rejected.
         let too_big = vec![0u8; 9]; // 18 hex > 16 cap
         assert!(embed(&mut prepared.bytes, prepared.gap, &too_big).is_err());
+    }
+
+    #[test]
+    fn second_signature_leaves_the_first_untouched() {
+        let meta = SigDictMeta { placeholder_len: 64, field_seq: 1, ..Default::default() };
+        let mut first = prepare(&tiny_pdf(), &meta).unwrap();
+        embed(&mut first.bytes, first.gap, &[0x30, 0x03, 0x02, 0x01, 0x01]).unwrap();
+
+        let meta2 = SigDictMeta { field_seq: 2, ..meta };
+        let second = prepare(&first.bytes, &meta2).unwrap();
+        // The earlier revision (incl. its /ByteRange) is byte-identical…
+        assert_eq!(&second.bytes[..first.bytes.len()], &first.bytes[..]);
+        // …and the new placeholders were found/patched in the new update.
+        assert!(second.gap.0 > first.bytes.len());
+        let tail = String::from_utf8_lossy(&second.bytes[first.bytes.len()..]);
+        let br = second.byte_range;
+        assert!(tail.contains(&format!("[0 {} {} {}", br[1], br[2], br[3])), "new ByteRange not patched");
+        assert!(!tail.contains(&BYTERANGE_PH.to_string()));
+    }
+
+    #[test]
+    fn inline_acroform_fields_are_kept() {
+        let mut d = Document::load_mem(&tiny_pdf()).unwrap();
+        let field = d.add_object(dictionary! { "FT" => "Tx", "T" => lit("Name") });
+        let cat_id = d.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        d.get_dictionary_mut(cat_id).unwrap().set(
+            "AcroForm",
+            dictionary! {
+                "Fields" => Object::Array(vec![Object::Reference(field)]),
+                "DA" => lit("/Helv 0 Tf 0 g"),
+            },
+        );
+        let mut pdf = Vec::new();
+        d.save_to(&mut pdf).unwrap();
+
+        let meta = SigDictMeta { placeholder_len: 64, field_seq: 1, ..Default::default() };
+        let out = Document::load_mem(&prepare(&pdf, &meta).unwrap().bytes).unwrap();
+        let cat = out.get_dictionary(cat_id).unwrap();
+        let af = out.get_dict_in_dict(cat, b"AcroForm").unwrap();
+        let fields = af.get(b"Fields").unwrap().as_array().unwrap();
+        assert_eq!(fields.len(), 2, "existing form field dropped");
+        assert!(fields[0] == Object::Reference(field));
+        assert!(af.has(b"DA"));
+    }
+
+    #[test]
+    fn non_ascii_text_is_utf16() {
+        assert!(text("Berlin") == lit("Berlin"));
+        match text("M\u{fc}nchen") {
+            Object::String(b, _) => {
+                assert_eq!(&b[..4], &[0xFE, 0xFF, 0x00, b'M']);
+                assert_eq!(&b[4..6], &[0x00, 0xFC]);
+            }
+            _ => panic!("not a string"),
+        }
     }
 }

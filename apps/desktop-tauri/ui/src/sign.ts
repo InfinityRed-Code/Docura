@@ -9,9 +9,26 @@ import { setStatus } from "./dom";
 import { applyDocSnapshot } from "./doc";
 import { effectiveRotation } from "./viewer";
 import {
-  clearSignToolUi, findSlotFromTarget, hexToRgb01, imagePxToPagePt,
-  setShapeTool, spawnFreeTextEditor,
+  clearMarkupAndEraser, clearSignToolUi, findSlotFromTarget, hexToRgb01, imagePxToPagePt,
+  isOverlayControl, setShapeTool, spawnFreeTextEditor,
 } from "./annot";
+
+/** Localized name of a signature kind / mark tool for status messages. */
+function toolLabel(tool: string): string {
+  switch (tool) {
+    case "signature": return t("btn.signature");
+    case "initials": return t("btn.initials");
+    case "check": return t("mark.check");
+    case "cross": return t("mark.cross");
+    case "dot": return t("mark.dot");
+    case "date": return t("mark.date");
+    default: return tool;
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]!);
+}
 
 // ---------- Saved signatures ----------
 
@@ -45,7 +62,7 @@ async function armSignature(kind: "signature" | "initials") {
   // …so re-mark this button as the armed tool afterwards.
   const btnId = kind === "signature" ? "signSignatureBtn" : "signInitialsBtn";
   document.getElementById(btnId)?.classList.add("active");
-  setSignHint(t("st.dragToPlace", { kind }));
+  setSignHint(t("st.dragToPlace", { kind: toolLabel(kind) }));
 }
 
 // ---------- Click-to-place marks ----------
@@ -53,6 +70,7 @@ async function armSignature(kind: "signature" | "initials") {
 function setSignTool(tool: SignTool | null) {
   clearSignToolUi();
   setShapeTool(null);
+  clearMarkupAndEraser();
   state.signTool = tool;
   state.stampImagePath = null;
   document.querySelectorAll<HTMLButtonElement>(".signMark").forEach((b) => {
@@ -60,7 +78,7 @@ function setSignTool(tool: SignTool | null) {
   });
   document.body.classList.toggle("signMode", tool !== null);
   if (tool) {
-    setSignHint(tool === "text" ? t("st.clickToText") : t("st.clickToPlace", { tool }));
+    setSignHint(tool === "text" ? t("st.clickToText") : t("st.clickToPlace", { tool: toolLabel(tool) }));
   }
 }
 
@@ -127,7 +145,7 @@ async function placeMarkAt(slot: Slot, pageIdx: number, cx: number, cy: number) 
     await commit("add_ink", {
       page: pageIdx, strokes, color: col, width: 1.8,
       opacity: 1.0, print: state.printAnnotations,
-    }, tool);
+    }, toolLabel(tool));
     return;
   }
 
@@ -138,7 +156,7 @@ async function placeMarkAt(slot: Slot, pageIdx: number, cx: number, cy: number) 
     await commit("add_shape", {
       page: pageIdx, kind: "circle", rect, stroke: col, fill: col,
       border_width: 1.0, opacity: 1.0, print: state.printAnnotations,
-    }, "dot");
+    }, toolLabel("dot"));
     return;
   }
 
@@ -151,7 +169,7 @@ async function placeMarkAt(slot: Slot, pageIdx: number, cx: number, cy: number) 
       bg_color: [1, 1, 1, 0], font_size: 12, font_family: "Helv",
       rotation_quadrant: effectiveRotation(pageIdx), opacity: 1.0,
       print: state.printAnnotations,
-    }, "date");
+    }, toolLabel("date"));
   }
 }
 
@@ -255,7 +273,7 @@ async function saveDrawnSignature() {
     await invoke<string>("save_signature", { kind, data: bytes });
     await refreshSignatures();
     closeSignModal();
-    setStatus(t("st.sigSaved", { kind }));
+    setStatus(t("st.sigSaved", { kind: toolLabel(kind) }));
   } catch (e) {
     setStatus(t("st.saveSigError", { e: String(e) }));
   }
@@ -265,15 +283,15 @@ async function importSignatureFile() {
   const kind = (document.getElementById("sigTarget") as HTMLSelectElement).value;
   const picked = await open({
     multiple: false, directory: false,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
-    title: "Pick signature image",
+    filters: [{ name: t("lbl.images"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    title: t("btn.pickImage"),
   });
   if (!picked || typeof picked !== "string") return;
   try {
     await invoke<string>("import_signature", { kind, srcPath: picked });
     await refreshSignatures();
     closeSignModal();
-    setStatus(t("st.sigImported", { kind }));
+    setStatus(t("st.sigImported", { kind: toolLabel(kind) }));
   } catch (e) {
     setStatus(t("st.importSigError", { e: String(e) }));
   }
@@ -295,13 +313,19 @@ function setDsignTab(tab: "pfx" | "win") {
 
 async function loadWinCerts() {
   const sel = document.getElementById("dsignWinCert") as HTMLSelectElement;
-  sel.innerHTML = `<option value=''>${t("dsign.loading")}</option>`;
+  const placeholder = (text: string) => {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = text;
+    sel.replaceChildren(o);
+  };
+  placeholder(t("dsign.loading"));
   try {
     const certs = await invoke<WinCertEntry[]>("list_windows_certificates");
     winCertsLoaded = true;
     const usable = certs.filter((c) => c.has_private_key);
     if (usable.length === 0) {
-      sel.innerHTML = `<option value=''>${t("st.noSigCerts")}</option>`;
+      placeholder(t("st.noSigCerts"));
       return;
     }
     sel.innerHTML = "";
@@ -312,7 +336,7 @@ async function loadWinCerts() {
       sel.appendChild(o);
     }
   } catch (e) {
-    sel.innerHTML = `<option value=''>— ${e} —</option>`;
+    placeholder(`— ${e} —`);
   }
 }
 
@@ -331,8 +355,24 @@ function dsignMeta() {
   return { reason: val("dsignReason"), name: val("dsignName"), location: val("dsignLocation"), tsa_url: val("dsignTsa") };
 }
 
+let signing = false;
+
 async function runDigitalSign() {
+  if (!state.currentDoc || signing) return;
+  signing = true;
+  const commitBtn = document.getElementById("dsignCommit") as HTMLButtonElement;
+  commitBtn.disabled = true;
+  try {
+    await runDigitalSignInner();
+  } finally {
+    signing = false;
+    commitBtn.disabled = false;
+  }
+}
+
+async function runDigitalSignInner() {
   if (!state.currentDoc) return;
+  const doc = state.currentDoc;
   const winTab = document.querySelector("[data-dsign-tab='win']")?.classList.contains("active");
   const meta = dsignMeta();
   setStatus(t("st.signing"));
@@ -349,6 +389,7 @@ async function runDigitalSign() {
         document: state.currentDoc, pfxPath: dsignPfxPath, password, meta,
       });
     }
+    if (doc !== state.currentDoc) return;
     applyDocSnapshot(snap);
     closeDsignModal();
     setStatus(t("st.signed"));
@@ -374,9 +415,10 @@ function renderReports(reports: SignatureReport[]) {
     card.className = `sigReport ${r.status}`;
     const badge = r.status === "valid" ? t("verify.badgeValid")
       : r.status === "invalid" ? t("verify.badgeInvalid") : t("verify.badgeUnsupported");
-    const row = (label: string, v: string) => `<div class="sigRow"><b>${label}:</b> ${v}</div>`;
+    const row = (label: string, v: string) =>
+      `<div class="sigRow"><b>${escapeHtml(label)}:</b> ${escapeHtml(v)}</div>`;
     card.innerHTML =
-      `<span class="sigBadge">${badge}</span>` +
+      `<span class="sigBadge">${escapeHtml(badge)}</span>` +
       row(t("verify.signer"), r.signer_cn ?? "—") +
       row(t("verify.signed"), r.signing_time ?? "—") +
       row(t("verify.coversWhole"), r.covers_whole_document ? t("verify.yes") : t("verify.coversNo")) +
@@ -414,7 +456,7 @@ function initDigitalSign() {
     const picked = await open({
       multiple: false, directory: false,
       filters: [{ name: "PKCS#12", extensions: ["pfx", "p12"] }],
-      title: "Pick a certificate file",
+      title: t("ph.pickPfx"),
     });
     if (picked && typeof picked === "string") {
       dsignPfxPath = picked;
@@ -445,6 +487,7 @@ export function initSign() {
   document.addEventListener("click", (ev) => {
     if (!state.signTool || !state.currentDoc) return;
     if (state.lastWasDrag) return;
+    if (isOverlayControl(ev.target)) return;
     const hit = findSlotFromTarget(ev.target);
     if (!hit) return;
     const bb = hit.slot.wrap.getBoundingClientRect();

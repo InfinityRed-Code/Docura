@@ -91,7 +91,22 @@ fn read_color(doc: &Document, dict: &lopdf::Dictionary) -> Option<[f32; 3]> {
     }
 }
 
-fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4]) -> Option<RectPt> {
+/// Inverse of `crate::point_to_pdf_space`: PDF user space → displayed
+/// top-origin space (view-box offset removed, page /Rotate applied) — the
+/// space the annotation writers take and the pdfium engine reports in.
+fn pdf_to_view(px: f32, py: f32, vb: [f32; 4], rot: i32) -> (f32, f32) {
+    let w = vb[2] - vb[0];
+    let h = vb[3] - vb[1];
+    let (xu, yu) = (px - vb[0], vb[3] - py);
+    match rot {
+        90 => (h - yu, xu),
+        180 => (w - xu, h - yu),
+        270 => (yu, w - xu),
+        _ => (xu, yu),
+    }
+}
+
+fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4], rot: i32) -> Option<RectPt> {
     let obj = dict.get(b"Rect").ok()?;
     let arr = obj_as_array(doc, obj)?;
     if arr.len() != 4 {
@@ -101,11 +116,13 @@ fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4]) -> Opti
     let lly = obj_to_f32(&arr[1])?;
     let urx = obj_to_f32(&arr[2])?;
     let ury = obj_to_f32(&arr[3])?;
+    let a = pdf_to_view(llx, lly, vb, rot);
+    let b = pdf_to_view(urx, ury, vb, rot);
     Some(RectPt {
-        x0: llx.min(urx) - vb[0],
-        y0: vb[3] - lly.max(ury),
-        x1: llx.max(urx) - vb[0],
-        y1: vb[3] - lly.min(ury),
+        x0: a.0.min(b.0),
+        y0: a.1.min(b.1),
+        x1: a.0.max(b.0),
+        y1: a.1.max(b.1),
     })
 }
 
@@ -130,6 +147,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
             continue;
         };
         let vb = page_view_box(doc, page_id);
+        let rot = crate::page_rotation(doc, page_id);
         for entry in annots {
             let (annot_oid, dict) = match entry {
                 Object::Reference(r) => match doc.get_dictionary(*r) {
@@ -143,7 +161,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
                 Some(name) => String::from_utf8_lossy(name).to_string(),
                 None => continue,
             };
-            let rect_pt = match read_rect_top(doc, dict, vb) {
+            let rect_pt = match read_rect_top(doc, dict, vb, rot) {
                 Some(r) => r,
                 None => continue,
             };

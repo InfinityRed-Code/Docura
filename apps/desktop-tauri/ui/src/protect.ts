@@ -4,8 +4,7 @@ import type { DocSnapshot, RectPt } from "./types";
 import { t } from "./i18n";
 import { state, callbacks } from "./state";
 import { setStatus } from "./dom";
-import { triggerSaveAs } from "./edit";
-import { applyDocSnapshot, refreshUndoUi } from "./doc";
+import { applyDocSnapshot, markDirty, refreshUndoUi, saveDocumentAs } from "./doc";
 import { effectiveRotation, rotateRectToSlot } from "./viewer";
 
 // ---------- Protect dialog ----------
@@ -86,9 +85,10 @@ async function commitProtection() {
   }
   closeProtectDialog();
   setStatus(t("protect.applied"));
+  markDirty();
   void refreshProtectUi();
   // Protection only takes effect on disk — offer the save dialog right away.
-  await triggerSaveAs();
+  await saveDocumentAs();
 }
 
 async function removeProtection() {
@@ -100,8 +100,9 @@ async function removeProtection() {
     return;
   }
   setStatus(t("protect.removed"));
+  markDirty();
   void refreshProtectUi();
-  await triggerSaveAs();
+  await saveDocumentAs();
 }
 
 // ---------- Redaction ----------
@@ -118,7 +119,7 @@ export function renderRedactMarksFor(idx: number) {
   if (!sz) return;
   slot.redactLayer.innerHTML = "";
   const rot = effectiveRotation(idx);
-  state.pendingRedactions.forEach((m, i) => {
+  state.pendingRedactions.forEach((m) => {
     if (m.page !== idx) return;
     const box = rotateRectToSlot(m.rect, rot, sz, slot.img.width, slot.img.height);
     if (box.width <= 0 || box.height <= 0) return;
@@ -133,7 +134,8 @@ export function renderRedactMarksFor(idx: number) {
     rm.title = t("redact.removeMark");
     rm.addEventListener("click", (e) => {
       e.stopPropagation();
-      state.pendingRedactions.splice(i, 1);
+      const j = state.pendingRedactions.indexOf(m);
+      if (j >= 0) state.pendingRedactions.splice(j, 1);
       renderRedactMarksFor(idx);
       updateRedactUi();
     });
@@ -161,25 +163,32 @@ function discardRedactions() {
   updateRedactUi();
 }
 
+let redacting = false;
+
 async function applyRedactions() {
-  if (!state.currentDoc || state.pendingRedactions.length === 0) return;
+  if (!state.currentDoc || state.pendingRedactions.length === 0 || redacting) return;
   const ok = await confirmDialog(t("redact.confirmBody"), {
     title: t("redact.confirmTitle"),
     kind: "warning",
   });
   if (!ok) return;
   setStatus(t("redact.working"));
+  redacting = true;
   try {
     const regions = state.pendingRedactions.map((m) => ({ page: m.page, rect: m.rect }));
+    const doc = state.currentDoc;
     const snap = await invoke<DocSnapshot>("redact_regions", {
-      document: state.currentDoc,
+      document: doc,
       regions,
     });
+    if (doc !== state.currentDoc) return;
     discardRedactions();
     applyDocSnapshot(snap);
     setStatus(t("redact.done", { n: regions.length }));
   } catch (e) {
     setStatus(`${t("redact.error")}: ${e}`);
+  } finally {
+    redacting = false;
   }
 }
 
@@ -196,6 +205,7 @@ async function sanitizeMetadata() {
   try {
     const removed = await invoke<number>("sanitize_metadata_cmd", { document: state.currentDoc });
     setStatus(t("sanitize.done", { n: removed }));
+    markDirty();
     void refreshUndoUi();
   } catch (e) {
     setStatus(`${t("sanitize.error")}: ${e}`);
@@ -239,7 +249,7 @@ async function commitPatternSearch() {
     return;
   }
   const pattern = parts.map((p) => `(?:${p})`).join("|");
-  setStatus(t("hidden.working"));
+  setStatus(t("pattern.working"));
   try {
     const regions = await invoke<{ page: number; rect: RectPt }[]>("find_pattern_regions", {
       document: state.currentDoc,
@@ -355,6 +365,9 @@ export function initProtect() {
 
   // Redaction + sanitize
   callbacks.renderRedactsFor = renderRedactMarksFor;
+  callbacks.discardPendingRedactions = () => {
+    if (state.pendingRedactions.length > 0) discardRedactions();
+  };
   document.getElementById("redactApplyBtn")!.addEventListener("click", () => void applyRedactions());
   document.getElementById("redactDiscardBtn")!.addEventListener("click", discardRedactions);
   document.getElementById("sanitizeBtn")!.addEventListener("click", () => void sanitizeMetadata());

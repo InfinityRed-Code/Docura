@@ -76,22 +76,83 @@ pub(crate) fn resolve_view_box(doc: &Document, page_id: ObjectId) -> [f32; 4] {
     }
 }
 
-/// Persistent /Rotate of the page (inherited), normalised to 0/90/180/270.
-pub(crate) fn page_rotation(doc: &Document, page_id: ObjectId) -> i32 {
+/// Upper bound for /Parent chain walks. Real page trees are a handful of
+/// levels deep; the cap only exists so a malformed /Parent cycle cannot hang.
+const MAX_TREE_DEPTH: usize = 256;
+
+/// Page-tree attributes a page inherits from its /Pages ancestors
+/// (PDF 32000-1 §7.7.3.4).
+const INHERITABLE_PAGE_KEYS: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
+
+/// Value of `key` on the page or the nearest /Pages ancestor carrying it.
+pub(crate) fn inherited_attr(doc: &Document, page_id: ObjectId, key: &[u8]) -> Option<Object> {
     let mut cur = page_id;
-    loop {
-        if let Ok(d) = doc.get_dictionary(cur) {
-            if let Ok(r) = d.get(b"Rotate").and_then(|o| o.as_i64()) {
-                return ((r % 360 + 360) % 360) as i32;
-            }
-            if let Ok(parent) = d.get(b"Parent").and_then(|o| o.as_reference()) {
-                cur = parent;
-                continue;
+    for _ in 0..MAX_TREE_DEPTH {
+        let d = doc.get_dictionary(cur).ok()?;
+        if let Ok(v) = d.get(key) {
+            return Some(v.clone());
+        }
+        cur = d.get(b"Parent").and_then(|o| o.as_reference()).ok()?;
+    }
+    None
+}
+
+/// Copy inherited page attributes onto the page dictionary itself, so the
+/// page keeps them when it is re-parented or its /Pages ancestors are pruned.
+pub(crate) fn materialize_inherited_attrs(doc: &mut Document, page_id: ObjectId) {
+    for key in INHERITABLE_PAGE_KEYS {
+        let has_own = doc
+            .get_dictionary(page_id)
+            .map(|d| d.has(key))
+            .unwrap_or(true);
+        if has_own {
+            continue;
+        }
+        if let Some(v) = inherited_attr(doc, page_id, key) {
+            if let Ok(d) = doc.get_dictionary_mut(page_id) {
+                d.set(key.to_vec(), v);
             }
         }
-        break;
     }
-    0
+}
+
+/// Drop every object no longer reachable from the trailer. lopdf writes all
+/// objects it holds, so unlinked content (e.g. a redacted page's images or
+/// form XObjects) would otherwise still be in the saved file.
+pub(crate) fn prune_unreachable(doc: &mut Document) {
+    fn collect(obj: &Object, out: &mut Vec<ObjectId>) {
+        match obj {
+            Object::Reference(id) => out.push(*id),
+            Object::Array(a) => a.iter().for_each(|o| collect(o, out)),
+            Object::Dictionary(d) => d.iter().for_each(|(_, o)| collect(o, out)),
+            Object::Stream(s) => s.dict.iter().for_each(|(_, o)| collect(o, out)),
+            _ => {}
+        }
+    }
+    let mut seen: std::collections::HashSet<ObjectId> = std::collections::HashSet::new();
+    let mut stack: Vec<ObjectId> = Vec::new();
+    for (_, o) in doc.trailer.iter() {
+        collect(o, &mut stack);
+    }
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(o) = doc.objects.get(&id) {
+            collect(o, &mut stack);
+        }
+    }
+    doc.objects.retain(|id, _| seen.contains(id));
+}
+
+/// Persistent /Rotate of the page (inherited), normalised to 0/90/180/270.
+pub(crate) fn page_rotation(doc: &Document, page_id: ObjectId) -> i32 {
+    let rot = inherited_attr(doc, page_id, b"Rotate")
+        .and_then(|o| o.as_i64().ok().or_else(|| o.as_float().ok().map(|f| f as i64)));
+    match rot {
+        Some(r) => ((r % 360 + 360) % 360) as i32,
+        None => 0,
+    }
 }
 
 /// Map a point from displayed top-origin space (UI / pdfium bitmap, rotation
@@ -112,9 +173,14 @@ pub(crate) fn point_to_pdf_space(x: f32, y: f32, vb: [f32; 4], rot: i32) -> (f32
 
 pub(crate) fn resolve_page_box(doc: &Document, page_id: ObjectId, key: &[u8]) -> Option<[f32; 4]> {
     let mut cur = page_id;
-    loop {
+    for _ in 0..MAX_TREE_DEPTH {
         if let Ok(d) = doc.get_dictionary(cur) {
             if let Ok(mb) = d.get(key) {
+                // The box array may be an indirect object.
+                let mb = match mb {
+                    Object::Reference(r) => doc.get_object(*r).unwrap_or(mb),
+                    other => other,
+                };
                 if let Ok(arr) = mb.as_array() {
                     if arr.len() == 4 {
                         let to_f = |o: &Object| {
@@ -122,12 +188,15 @@ pub(crate) fn resolve_page_box(doc: &Document, page_id: ObjectId, key: &[u8]) ->
                                 .ok()
                                 .or_else(|| o.as_i64().ok().map(|i| i as f32))
                         };
-                        return Some([
+                        let (x0, y0, x1, y1) = (
                             to_f(&arr[0]).unwrap_or(0.0),
                             to_f(&arr[1]).unwrap_or(0.0),
                             to_f(&arr[2]).unwrap_or(612.0),
                             to_f(&arr[3]).unwrap_or(792.0),
-                        ]);
+                        );
+                        // A rectangle may name any two opposite corners
+                        // (§7.9.5); normalise to [llx lly urx ury].
+                        return Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
                     }
                 }
             }
@@ -219,6 +288,8 @@ impl MutableDoc {
             .map_err(|e| MutateError::Parse(e.to_string()))?;
 
         for &pid in &ordered_ids {
+            // Intermediate /Pages nodes are pruned below; keep what they passed down.
+            materialize_inherited_attrs(&mut self.inner, pid);
             if let Ok(d) = self.inner.get_dictionary_mut(pid) {
                 d.set("Parent", lopdf::Object::Reference(pages_id));
             }
@@ -242,8 +313,8 @@ impl MutableDoc {
     }
 
     /// Rotate pages by `degrees` relative to their current /Rotate value.
-    /// `degrees` must be a multiple of 90 (positive = clockwise). Missing or
-    /// inherited /Rotate is treated as 0. 0-indexed page list.
+    /// `degrees` must be a multiple of 90 (positive = clockwise). An inherited
+    /// /Rotate counts as the current value; missing is 0. 0-indexed page list.
     pub fn rotate_pages(&mut self, page_indices: &[u32], degrees: i32) -> MutateResult<()> {
         let t = std::time::Instant::now();
         if page_indices.is_empty() {
@@ -269,14 +340,10 @@ impl MutableDoc {
             let Some(&page_id) = pages_map.get(&page_num) else {
                 continue;
             };
-            let current = self
-                .inner
-                .get_dictionary(page_id)
-                .ok()
-                .and_then(|d| d.get(b"Rotate").ok())
-                .and_then(|o| o.as_i64().ok())
-                .unwrap_or(0) as i32;
-            let new_rot = ((current + degrees) % 360 + 360) % 360;
+            // Relative to the effective rotation, which may be inherited from
+            // a /Pages ancestor — setting it on the page overrides that value.
+            let current = page_rotation(&self.inner, page_id);
+            let new_rot = ((current + degrees % 360) % 360 + 360) % 360;
             if let Ok(d) = self.inner.get_dictionary_mut(page_id) {
                 d.set("Rotate", lopdf::Object::Integer(new_rot as i64));
             }
@@ -315,6 +382,9 @@ impl MutableDoc {
         let mut copy = self.inner.clone();
         if !delete_one_indexed.is_empty() {
             copy.delete_pages(&delete_one_indexed);
+            // lopdf only unlinks the page dictionaries; without this the
+            // dropped pages' content and images would still be in the file.
+            prune_unreachable(&mut copy);
         }
         let mut buf: Vec<u8> = Vec::new();
         {
@@ -332,9 +402,9 @@ impl MutableDoc {
     }
 
     /// Serialize a single-page PDF cropped to `rect` on `page_index`.
-    /// `rect` is in our top-origin RectPt convention (PDF points relative to
-    /// the page's *unrotated* coordinate space — same convention used for
-    /// annotation rects). MediaBox + CropBox are rewritten to the region;
+    /// `rect` is in our top-origin RectPt convention (PDF points on the page
+    /// as displayed, /Rotate applied — same convention used for annotation
+    /// rects). MediaBox + CropBox are rewritten to the region;
     /// any persistent /Rotate on the source page is preserved so the cropped
     /// page renders with the same orientation.
     pub fn extract_region_to_bytes(
@@ -360,6 +430,7 @@ impl MutableDoc {
             .collect();
         if !delete_one_indexed.is_empty() {
             copy.delete_pages(&delete_one_indexed);
+            prune_unreachable(&mut copy);
         }
         let page_id = copy
             .page_iter()
@@ -371,10 +442,14 @@ impl MutableDoc {
         let mb_bottom = mb[1];
         let mb_right = mb[2];
         let mb_top = mb[3];
-        let new_llx = (mb_left + rect.x0).max(mb_left).min(mb_right);
-        let new_urx = (mb_left + rect.x1).max(mb_left).min(mb_right);
-        let new_lly = (mb_top - rect.y1).max(mb_bottom).min(mb_top);
-        let new_ury = (mb_top - rect.y0).max(mb_bottom).min(mb_top);
+        // The rect is drawn on the displayed page, i.e. with /Rotate applied.
+        let rot = page_rotation(&copy, page_id);
+        let a = point_to_pdf_space(rect.x0, rect.y0, mb, rot);
+        let b = point_to_pdf_space(rect.x1, rect.y1, mb, rot);
+        let new_llx = a.0.min(b.0).max(mb_left).min(mb_right);
+        let new_urx = a.0.max(b.0).max(mb_left).min(mb_right);
+        let new_lly = a.1.min(b.1).max(mb_bottom).min(mb_top);
+        let new_ury = a.1.max(b.1).max(mb_bottom).min(mb_top);
         if new_urx - new_llx < 1.0 || new_ury - new_lly < 1.0 {
             return Err(MutateError::Parse(
                 "region: rect outside page bounds".into(),
@@ -430,6 +505,9 @@ impl MutableDoc {
         // lopdf uses 1-indexed page numbers.
         let one_indexed: Vec<u32> = dedup.iter().map(|p| p + 1).collect();
         self.inner.delete_pages(&one_indexed);
+        // Drop the deleted pages' now-unreferenced content streams, images
+        // and fonts, which lopdf would otherwise still write out.
+        prune_unreachable(&mut self.inner);
         Ok(self.page_count())
     }
 
@@ -490,6 +568,11 @@ impl MutableDoc {
 
         let keep_set: std::collections::HashSet<lopdf::ObjectId> =
             keep_page_ids.iter().copied().collect();
+        // The source /Pages nodes are not copied, so pages must carry the
+        // attributes (MediaBox, Resources, …) they inherited from them.
+        for &pid in &keep_page_ids {
+            materialize_inherited_attrs(&mut src, pid);
+        }
         for (oid, obj) in src.objects.into_iter() {
             let typ = obj.type_name().unwrap_or(b"").to_vec();
             match typ.as_slice() {
@@ -513,6 +596,7 @@ impl MutableDoc {
         // Flatten existing Pages tree, splice new refs at `at_index`, rewrite root Kids.
         let ordered_ids: Vec<lopdf::ObjectId> = self.inner.page_iter().collect();
         for &pid in &ordered_ids {
+            materialize_inherited_attrs(&mut self.inner, pid);
             if let Ok(d) = self.inner.get_dictionary_mut(pid) {
                 d.set("Parent", lopdf::Object::Reference(pages_id));
             }
@@ -772,5 +856,178 @@ impl MutableDoc {
         overlay::add_image_watermark(&mut self.inner, image_bytes, opts)?;
         tracing::info!("pdf_mutate::add_image_watermark in {:?}", t.elapsed());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::{dictionary, Dictionary};
+
+    /// Two pages under an intermediate /Pages node that carries the
+    /// inheritable MediaBox, Resources and Rotate; the pages have none.
+    fn nested_tree_doc() -> Document {
+        let mut d = Document::with_version("1.5");
+        let root_id = d.new_object_id();
+        let mid_id = d.new_object_id();
+        let font_id = d.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        });
+        let mut kids = Vec::new();
+        for _ in 0..2 {
+            let pid = d.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => Object::Reference(mid_id),
+            });
+            kids.push(Object::Reference(pid));
+        }
+        d.objects.insert(
+            mid_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Parent" => Object::Reference(root_id),
+                "Kids" => Object::Array(kids),
+                "Count" => 2,
+                "MediaBox" => Object::Array(vec![0.into(), 0.into(), 300.into(), 400.into()]),
+                "Rotate" => 90,
+                "Resources" => Object::Dictionary(dictionary! {
+                    "Font" => Object::Dictionary(dictionary! { "F1" => Object::Reference(font_id) }),
+                }),
+            }),
+        );
+        d.objects.insert(
+            root_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => Object::Array(vec![Object::Reference(mid_id)]),
+                "Count" => 2,
+            }),
+        );
+        let cat_id = d.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(root_id),
+        });
+        d.trailer.set("Root", Object::Reference(cat_id));
+        d
+    }
+
+    fn to_bytes(mut d: Document) -> Vec<u8> {
+        let mut out = Vec::new();
+        d.save_to(&mut out).unwrap();
+        out
+    }
+
+    fn page_font_f1(doc: &Document, page_id: ObjectId) -> bool {
+        let res = match inherited_attr(doc, page_id, b"Resources") {
+            Some(Object::Dictionary(r)) => r,
+            Some(Object::Reference(id)) => doc.get_dictionary(id).unwrap().clone(),
+            _ => return false,
+        };
+        res.get(b"Font")
+            .and_then(Object::as_dict)
+            .map(|f| f.has(b"F1"))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn reorder_keeps_attributes_inherited_from_pruned_pages_node() {
+        let mut m = MutableDoc::from_bytes(&to_bytes(nested_tree_doc())).unwrap();
+        m.reorder_pages(&[1, 0]).unwrap();
+        let out = Document::load_mem(&m.to_bytes().unwrap()).unwrap();
+        for pid in out.page_iter() {
+            assert_eq!(resolve_media_box(&out, pid), Some([0.0, 0.0, 300.0, 400.0]));
+            assert_eq!(page_rotation(&out, pid), 90);
+            assert!(page_font_f1(&out, pid), "page lost its inherited /Resources");
+        }
+    }
+
+    #[test]
+    fn insert_pdf_keeps_attributes_inherited_in_source() {
+        let src = to_bytes(nested_tree_doc());
+        let mut m = MutableDoc::from_bytes(&src).unwrap();
+        m.insert_pdf(&src, Some(&[0]), 2).unwrap();
+        let out = Document::load_mem(&m.to_bytes().unwrap()).unwrap();
+        let pages: Vec<_> = out.page_iter().collect();
+        assert_eq!(pages.len(), 3);
+        let inserted = pages[2];
+        assert_eq!(resolve_media_box(&out, inserted), Some([0.0, 0.0, 300.0, 400.0]));
+        assert_eq!(page_rotation(&out, inserted), 90);
+        assert!(page_font_f1(&out, inserted));
+    }
+
+    #[test]
+    fn rotate_is_relative_to_inherited_rotation() {
+        let mut m = MutableDoc::from_bytes(&to_bytes(nested_tree_doc())).unwrap();
+        m.rotate_pages(&[0], 90).unwrap();
+        let pid = m.inner.page_iter().next().unwrap();
+        // Inherited 90 + 90, not 0 + 90 (which would be a visual no-op).
+        assert_eq!(page_rotation(&m.inner, pid), 180);
+    }
+
+    #[test]
+    fn region_rect_is_taken_in_displayed_rotated_space() {
+        let m = MutableDoc::from_bytes(&to_bytes(nested_tree_doc())).unwrap();
+        // 300x400 page with inherited /Rotate 90 displays as 400x300; the
+        // displayed top-left 100x50 corner is PDF-space [0 0 50 100].
+        let rect = RectPt { x0: 0.0, y0: 0.0, x1: 100.0, y1: 50.0 };
+        let out = Document::load_mem(&m.extract_region_to_bytes(0, rect).unwrap()).unwrap();
+        let pid = out.page_iter().next().unwrap();
+        assert_eq!(resolve_media_box(&out, pid), Some([0.0, 0.0, 50.0, 100.0]));
+        assert_eq!(page_rotation(&out, pid), 90);
+    }
+
+    #[test]
+    fn deleted_and_unextracted_pages_leave_no_content_behind() {
+        let mut d = nested_tree_doc();
+        let pages: Vec<ObjectId> = d.page_iter().collect();
+        for (i, pid) in pages.iter().enumerate() {
+            let content = format!("BT (PAGE-{i}-SECRET) Tj ET").into_bytes();
+            let sid = d.add_object(Object::Stream(lopdf::Stream::new(Dictionary::new(), content)));
+            d.get_dictionary_mut(*pid).unwrap().set("Contents", Object::Reference(sid));
+        }
+        let bytes = to_bytes(d);
+        let has = |hay: &[u8], n: &[u8]| hay.windows(n.len()).any(|w| w == n);
+
+        let m = MutableDoc::from_bytes(&bytes).unwrap();
+        let extracted = m.extract_to_bytes(&[0]).unwrap();
+        assert!(has(&extracted, b"PAGE-0-SECRET"));
+        assert!(!has(&extracted, b"PAGE-1-SECRET"), "unextracted page content leaked");
+        let region = m
+            .extract_region_to_bytes(0, RectPt { x0: 0.0, y0: 0.0, x1: 100.0, y1: 100.0 })
+            .unwrap();
+        assert!(!has(&region, b"PAGE-1-SECRET"), "region export leaked other pages");
+
+        let mut m = MutableDoc::from_bytes(&bytes).unwrap();
+        m.delete_page(1).unwrap();
+        let out = m.to_bytes().unwrap();
+        assert!(has(&out, b"PAGE-0-SECRET"));
+        assert!(!has(&out, b"PAGE-1-SECRET"), "deleted page content still in file");
+    }
+
+    #[test]
+    fn parent_cycle_and_inverted_box_are_handled() {
+        let mut d = Document::with_version("1.5");
+        let pages_id = d.new_object_id();
+        let page_id = d.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+        });
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Kids", Object::Array(vec![Object::Reference(page_id)]));
+        pages.set("Count", 1);
+        // Malformed: the root names itself as parent.
+        pages.set("Parent", Object::Reference(pages_id));
+        d.objects.insert(pages_id, Object::Dictionary(pages));
+        // Terminates instead of spinning on the /Parent loop.
+        assert_eq!(page_rotation(&d, page_id), 0);
+        assert_eq!(resolve_media_box(&d, page_id), None);
+
+        // Corners given in the "wrong" order are normalised.
+        d.get_dictionary_mut(page_id).unwrap().set(
+            "MediaBox",
+            Object::Array(vec![612.into(), 792.into(), 0.into(), 0.into()]),
+        );
+        assert_eq!(resolve_media_box(&d, page_id), Some([0.0, 0.0, 612.0, 792.0]));
     }
 }

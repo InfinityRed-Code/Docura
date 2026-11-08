@@ -86,5 +86,6 @@ fn main() {
     let enc = pdf_mutate::encrypt_pdf(&plain, &user_pw, &owner_pw, perms).expect("encrypt");
     std::fs::write(&out, &enc).expect("write");
     println!("wrote {out} (user-pw: {user_pw:?}, owner-pw: {:?}, perms: {perms:?})",
-        if owner_pw.is_empty() { &user_pw } else { &owner_pw });
+        // Restricted perms + empty owner password => encrypt_pdf picks a random one.
+        if owner_pw.is_empty() { "<random>" } else { owner_pw.as_str() });
 }

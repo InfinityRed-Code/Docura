@@ -179,7 +179,7 @@ fn process_one(app: &AppHandle, ps: &Path) {
             cmd.arg("-sProcessColorModel=DeviceRGB");
         }
     }
-    cmd.arg(format!("-sOutputFile={}", out_pdf.display()));
+    cmd.arg(crate::gs_output_file_arg(&out_pdf.to_string_lossy()));
     cmd.arg(&work);
     let status = crate::no_window(&mut cmd).status();
     match status {
@@ -218,13 +218,16 @@ pub async fn virtual_printer_status() -> VirtualPrinterInfo {
     } else {
         false
     };
-    let (gs_ok, gs_ver) = match crate::find_ghostscript() {
+    // Probing spawns several processes; keep it off the async workers.
+    let (gs_ok, gs_ver) = tokio::task::spawn_blocking(|| match crate::find_ghostscript() {
         Some(p) => {
             let ver = crate::probe_ghostscript_version(Path::new(&p));
             (true, ver)
         }
         None => (false, None),
-    };
+    })
+    .await
+    .unwrap_or((false, None));
     VirtualPrinterInfo {
         installed,
         printer_name: PRINTER_NAME.to_string(),

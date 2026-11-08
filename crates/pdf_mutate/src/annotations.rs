@@ -375,9 +375,15 @@ fn page_id_for(doc: &Document, page_index: u32) -> MutateResult<ObjectId> {
 /// The stable id read::list_annotations reports for an annotation: its `NM`
 /// name string, falling back to `obj-<num>-<gen>`. Must mirror that logic so
 /// the frontend can address an annotation for deletion.
-fn annot_id_string(dict: &Dictionary, oid: Option<ObjectId>) -> String {
-    if let Ok(s) = dict.get(b"NM").and_then(|o| o.as_str()) {
-        let dec = String::from_utf8_lossy(s).to_string();
+fn annot_id_string(doc: &Document, dict: &Dictionary, oid: Option<ObjectId>) -> String {
+    // Same resolution + text decoding as read::list_annotations (indirect
+    // /NM, UTF-16BE / PDFDocEncoding), or non-ASCII ids never match.
+    let nm = dict.get(b"NM").ok().and_then(|o| match o {
+        Object::Reference(r) => doc.get_object(*r).ok(),
+        other => Some(other),
+    });
+    if let Some(Ok(s)) = nm.map(|o| o.as_str()) {
+        let dec = crate::read::decode_pdf_string(s);
         if !dec.is_empty() {
             return dec;
         }
@@ -422,7 +428,7 @@ pub fn delete_annotation(doc: &mut Document, page_index: u32, id: &str) -> Mutat
             Object::Dictionary(d) => (None, d),
             _ => continue,
         };
-        if annot_id_string(dict, oid) == id {
+        if annot_id_string(doc, dict, oid) == id {
             remove_at = Some(i);
             remove_oid = oid;
             break;
@@ -760,7 +766,9 @@ pub struct FreeTextAnnotation {
 
 /// Ensures the document catalog has an /AcroForm /DR /Font /Helv entry pointing
 /// at a Helvetica Type1 font. Returns the font's object id (may be reused for
-/// later annotations). Idempotent.
+/// later annotations). Idempotent. An existing AcroForm (inline or indirect)
+/// and its /DR fonts are extended, never replaced — the AcroForm carries the
+/// document's form /Fields.
 fn ensure_helv_font(doc: &mut Document) -> MutateResult<ObjectId> {
     let root_id = doc
         .trailer
@@ -769,75 +777,77 @@ fn ensure_helv_font(doc: &mut Document) -> MutateResult<ObjectId> {
         .as_reference()
         .map_err(|e| MutateError::Parse(e.to_string()))?;
 
-    // Check existing AcroForm/DR/Font/Helv chain.
-    if let Ok(catalog) = doc.get_dictionary(root_id) {
-        if let Ok(af) = catalog.get(b"AcroForm") {
-            let af_id = match af {
-                Object::Reference(r) => Some(*r),
-                _ => None,
-            };
-            if let Some(af_id) = af_id {
-                if let Ok(af_dict) = doc.get_dictionary(af_id) {
-                    if let Ok(dr) = af_dict.get(b"DR") {
-                        let dr_dict = match dr {
-                            Object::Dictionary(d) => Some(d.clone()),
-                            Object::Reference(r) => doc.get_dictionary(*r).ok().cloned(),
-                            _ => None,
-                        };
-                        if let Some(dr_dict) = dr_dict {
-                            if let Ok(font) = dr_dict.get(b"Font") {
-                                let font_dict = match font {
-                                    Object::Dictionary(d) => Some(d.clone()),
-                                    Object::Reference(r) => doc.get_dictionary(*r).ok().cloned(),
-                                    _ => None,
-                                };
-                                if let Some(font_dict) = font_dict {
-                                    if let Ok(Object::Reference(helv_id)) = font_dict.get(b"Helv") {
-                                        return Ok(*helv_id);
-                                    }
-                                }
-                            }
-                        }
-                    }
+    // AcroForm as an indirect object; an inline one is promoted as-is.
+    let af_entry = doc
+        .get_dictionary(root_id)
+        .map_err(|e| MutateError::Parse(e.to_string()))?
+        .get(b"AcroForm")
+        .ok()
+        .cloned();
+    let af_id = match af_entry {
+        Some(Object::Reference(r)) if doc.get_dictionary(r).is_ok() => r,
+        other => {
+            let af = match other {
+                Some(Object::Dictionary(d)) => d,
+                _ => {
+                    let mut d = Dictionary::new();
+                    d.set("Fields", Object::Array(Vec::new()));
+                    d
                 }
+            };
+            let id = doc.add_object(Object::Dictionary(af));
+            if let Ok(catalog) = doc.get_dictionary_mut(root_id) {
+                catalog.set("AcroForm", Object::Reference(id));
             }
+            id
         }
+    };
+
+    // /DR and its /Font sub-dictionary may each be inline or indirect.
+    let resolve = |doc: &Document, o: Option<Object>| -> (Option<ObjectId>, Dictionary) {
+        match o {
+            Some(Object::Reference(r)) => {
+                (Some(r), doc.get_dictionary(r).cloned().unwrap_or_default())
+            }
+            Some(Object::Dictionary(d)) => (None, d),
+            _ => (None, Dictionary::new()),
+        }
+    };
+    let dr_entry = doc.get_dictionary(af_id).ok().and_then(|d| d.get(b"DR").ok().cloned());
+    let (dr_ref, mut dr) = resolve(doc, dr_entry);
+    let (font_ref, mut fonts) = resolve(doc, dr.get(b"Font").ok().cloned());
+    if let Ok(Object::Reference(helv_id)) = fonts.get(b"Helv") {
+        return Ok(*helv_id);
     }
 
-    // Create Helvetica font.
+    // Create Helvetica font and register it next to the existing ones.
     let helv_id = doc.add_object(dictionary! {
         "Type" => "Font",
         "Subtype" => "Type1",
         "BaseFont" => "Helvetica",
         "Encoding" => "WinAnsiEncoding",
     });
-    let mut font_dict = Dictionary::new();
-    font_dict.set("Helv", Object::Reference(helv_id));
-    let font_id = doc.add_object(Object::Dictionary(font_dict));
-    let mut dr_dict = Dictionary::new();
-    dr_dict.set("Font", Object::Reference(font_id));
-    let dr_id = doc.add_object(Object::Dictionary(dr_dict));
-
-    // Insert/update AcroForm.
-    let af_id = match doc
-        .get_dictionary(root_id)
-        .ok()
-        .and_then(|c| c.get(b"AcroForm").ok().cloned())
-    {
-        Some(Object::Reference(r)) => Some(r),
-        _ => None,
-    };
-    if let Some(af_id) = af_id {
-        if let Ok(af_dict) = doc.get_dictionary_mut(af_id) {
-            af_dict.set("DR", Object::Reference(dr_id));
+    fonts.set("Helv", Object::Reference(helv_id));
+    match font_ref {
+        Some(r) => {
+            if let Ok(o) = doc.get_object_mut(r) {
+                *o = Object::Dictionary(fonts);
+            }
         }
-    } else {
-        let mut af = Dictionary::new();
-        af.set("DR", Object::Reference(dr_id));
-        af.set("Fields", Object::Array(Vec::new()));
-        let af_new = doc.add_object(Object::Dictionary(af));
-        if let Ok(catalog) = doc.get_dictionary_mut(root_id) {
-            catalog.set("AcroForm", Object::Reference(af_new));
+        None => {
+            dr.set("Font", Object::Dictionary(fonts));
+            match dr_ref {
+                Some(r) => {
+                    if let Ok(o) = doc.get_object_mut(r) {
+                        *o = Object::Dictionary(dr);
+                    }
+                }
+                None => {
+                    if let Ok(af) = doc.get_dictionary_mut(af_id) {
+                        af.set("DR", Object::Dictionary(dr));
+                    }
+                }
+            }
         }
     }
     Ok(helv_id)
@@ -1390,5 +1400,94 @@ mod tests {
         let (_form, content) = markup_ap_stream(&doc, id);
         let s = String::from_utf8_lossy(&content);
         assert!(s.contains(" m ") && s.contains(" l S"), "content: {s}");
+    }
+
+    fn freetext(text: &str) -> FreeTextAnnotation {
+        FreeTextAnnotation {
+            rect: RectPt { x0: 72.0, y0: 72.0, x1: 200.0, y1: 100.0 },
+            text: text.into(),
+            color: [0.0, 0.0, 0.0],
+            bg_color: [1.0, 1.0, 1.0, 0.0],
+            font_size: 12.0,
+            font_family: "Helv".into(),
+            rotation_quadrant: 0,
+            opacity: 1.0,
+            author: None,
+            print: true,
+        }
+    }
+
+    #[test]
+    fn freetext_keeps_inline_acroform_fields_and_fonts() {
+        let mut doc = one_page_doc();
+        let field = doc.add_object(dictionary! { "FT" => "Tx", "T" => Object::string_literal("Name") });
+        let zadb = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "ZapfDingbats" });
+        let cat_id = doc.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        doc.get_dictionary_mut(cat_id).unwrap().set(
+            "AcroForm",
+            Object::Dictionary(dictionary! {
+                "Fields" => Object::Array(vec![Object::Reference(field)]),
+                "DR" => Object::Dictionary(dictionary! {
+                    "Font" => Object::Dictionary(dictionary! { "ZaDb" => Object::Reference(zadb) }),
+                }),
+            }),
+        );
+        add_freetext_annotation(&mut doc, 0, &freetext("hi")).unwrap();
+        // Idempotent: a second call reuses the registered font.
+        add_freetext_annotation(&mut doc, 0, &freetext("again")).unwrap();
+
+        let af = match doc.get_dictionary(cat_id).unwrap().get(b"AcroForm").unwrap() {
+            Object::Reference(r) => doc.get_dictionary(*r).unwrap().clone(),
+            o => o.as_dict().unwrap().clone(),
+        };
+        let fields = af.get(b"Fields").unwrap().as_array().unwrap();
+        assert_eq!(fields, &vec![Object::Reference(field)], "form fields dropped");
+        let fonts = af.get(b"DR").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        assert!(fonts.has(b"ZaDb"), "existing DR font dropped: {fonts:?}");
+        assert!(fonts.has(b"Helv"));
+    }
+
+    #[test]
+    fn delete_annotation_matches_listed_utf16_id() {
+        let mut doc = one_page_doc();
+        let annot = MarkupAnnotation {
+            kind: MarkupKind::Underline,
+            rects: vec![RectPt { x0: 72.0, y0: 100.0, x1: 200.0, y1: 120.0 }],
+            color: [0.0, 0.0, 1.0],
+            opacity: 1.0,
+            contents: None,
+            author: None,
+            print: true,
+        };
+        let aid = add_markup_annotation(&mut doc, 0, &annot).unwrap();
+        // /NM written by another tool as a UTF-16BE text string.
+        doc.get_dictionary_mut(aid).unwrap().set("NM", pdf_string_utf16be("Kommentar-Ä1"));
+        let listed = crate::read::list_annotations(&doc);
+        assert_eq!(listed[0].id, "Kommentar-Ä1");
+        assert!(delete_annotation(&mut doc, 0, &listed[0].id).unwrap());
+        assert!(crate::read::list_annotations(&doc).is_empty());
+    }
+
+    #[test]
+    fn listed_rect_matches_written_rect_on_rotated_page() {
+        let mut doc = one_page_doc();
+        let page_id = doc.page_iter().next().unwrap();
+        doc.get_dictionary_mut(page_id).unwrap().set("Rotate", Object::Integer(90));
+        // Displayed (rotated) top-origin space, as the UI sends it.
+        let r = RectPt { x0: 100.0, y0: 50.0, x1: 300.0, y1: 80.0 };
+        let annot = MarkupAnnotation {
+            kind: MarkupKind::Highlight,
+            rects: vec![r],
+            color: [1.0, 1.0, 0.0],
+            opacity: 0.5,
+            contents: None,
+            author: None,
+            print: true,
+        };
+        add_markup_annotation(&mut doc, 0, &annot).unwrap();
+        let got = crate::read::list_annotations(&doc)[0].rect_pt;
+        for (a, b) in [(got.x0, r.x0), (got.y0, r.y0), (got.x1, r.x1), (got.y1, r.y1)] {
+            assert!((a - b).abs() < 0.01, "wrote {r:?}, listed {got:?}");
+        }
     }
 }

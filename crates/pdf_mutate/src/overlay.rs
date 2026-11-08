@@ -63,7 +63,9 @@ pub(crate) struct OverlayContext {
     font_id: ObjectId,
     gstate_id: Option<ObjectId>,
     font_alias: &'static [u8],
-    gs_alias: &'static [u8],
+    /// Unique per call: a page watermarked twice with different opacities
+    /// must not have the second ExtGState replace the first one's.
+    gs_alias: Vec<u8>,
     gray: f32,
 }
 
@@ -88,7 +90,7 @@ impl OverlayContext {
             font_id,
             gstate_id,
             font_alias: b"FRPDF",
-            gs_alias: b"GRPDF",
+            gs_alias: format!("GRPDF{}", gstate_id.map_or(0, |id| id.0)).into_bytes(),
             gray: gray.clamp(0.0, 1.0),
         }
     }
@@ -115,8 +117,15 @@ pub(crate) fn ensure_own_resources(doc: &mut Document, page_id: ObjectId) -> Mut
             Ok(rid)
         }
         _ => {
-            // No resources at all — inherit-or-empty. Start with empty.
-            let rid = doc.add_object(Object::Dictionary(Dictionary::new()));
+            // No own /Resources: the page inherits them from a /Pages
+            // ancestor. Start from a copy of those — an empty dictionary on
+            // the page would shadow them and drop every font/image it uses.
+            let inherited = match crate::inherited_attr(doc, page_id, b"Resources") {
+                Some(Object::Dictionary(d)) => d,
+                Some(Object::Reference(r)) => doc.get_dictionary(r).cloned().unwrap_or_default(),
+                _ => Dictionary::new(),
+            };
+            let rid = doc.add_object(Object::Dictionary(inherited));
             if let Ok(pd) = doc.get_dictionary_mut(page_id) {
                 pd.set("Resources", Object::Reference(rid));
             }
@@ -164,34 +173,31 @@ pub(crate) fn register_alias(
     Ok(())
 }
 
-fn get_page_box(doc: &Document, page_id: ObjectId) -> (f32, f32) {
-    // Returns (width, height) of the displayed page region in points.
-    let vb = crate::resolve_view_box(doc, page_id);
-    ((vb[2] - vb[0]).abs(), (vb[3] - vb[1]).abs())
+/// The page as displayed: the view box (CropBox ∩ MediaBox, possibly not at
+/// the origin) with its persistent /Rotate applied. Overlays are laid out in
+/// this top-origin space — so a header sits at the top of what the reader
+/// sees, also on rotated (e.g. landscape-scanned) pages — and then mapped
+/// into PDF user space with `to_pdf`, turning text by `rot` to stay upright.
+struct PageLayout {
+    vb: [f32; 4],
+    rot: i32,
+    /// Displayed width/height in points.
+    w: f32,
+    h: f32,
 }
 
-/// Origin (lower-left) of the displayed page region in PDF user space.
-/// Overlay content placed relative to the visible page must add this.
-fn get_page_origin(doc: &Document, page_id: ObjectId) -> (f32, f32) {
-    let vb = crate::resolve_view_box(doc, page_id);
-    (vb[0], vb[1])
-}
-
-fn page_rotation(doc: &Document, page_id: ObjectId) -> i32 {
-    let mut cur = page_id;
-    loop {
-        if let Ok(d) = doc.get_dictionary(cur) {
-            if let Ok(r) = d.get(b"Rotate").and_then(|o| o.as_i64()) {
-                return ((r % 360 + 360) % 360) as i32;
-            }
-            if let Ok(parent) = d.get(b"Parent").and_then(|o| o.as_reference()) {
-                cur = parent;
-                continue;
-            }
-        }
-        break;
+impl PageLayout {
+    fn of(doc: &Document, page_id: ObjectId) -> Self {
+        let vb = crate::resolve_view_box(doc, page_id);
+        let rot = crate::page_rotation(doc, page_id);
+        let (bw, bh) = (vb[2] - vb[0], vb[3] - vb[1]);
+        let (w, h) = if rot == 90 || rot == 270 { (bh, bw) } else { (bw, bh) };
+        Self { vb, rot, w, h }
     }
-    0
+
+    fn to_pdf(&self, x: f32, y: f32) -> (f32, f32) {
+        crate::point_to_pdf_space(x, y, self.vb, self.rot)
+    }
 }
 
 // Helvetica character widths (in 1/1000 em units) for the WinAnsi range we use.
@@ -283,7 +289,7 @@ fn build_page_stream(items: &[TextItem<'_>], ctx: &OverlayContext) -> Vec<u8> {
     buf.extend_from_slice(b"q\n");
     if ctx.gstate_id.is_some() {
         buf.extend_from_slice(b"/");
-        buf.extend_from_slice(ctx.gs_alias);
+        buf.extend_from_slice(&ctx.gs_alias);
         buf.extend_from_slice(b" gs\n");
     }
     let _ = write!(&mut buf, "{:.3} g\n", ctx.gray);
@@ -372,7 +378,13 @@ pub(crate) fn append_content_stream(
                 doc.add_object(Object::Stream(Stream::new(Dictionary::new(), restored)));
             let mut arr = vec![Object::Reference(save_id)];
             match existing {
-                Object::Reference(r) => arr.push(Object::Reference(r)),
+                // /Contents may be an indirect *array* of streams; splice its
+                // entries — an array nested in the array is not a stream and
+                // viewers would drop the original page content.
+                Object::Reference(r) => match doc.get_object(r) {
+                    Ok(Object::Array(a)) => arr.extend(a.iter().cloned()),
+                    _ => arr.push(Object::Reference(r)),
+                },
                 Object::Array(a) => arr.extend(a),
                 other => {
                     // Inline stream — promote to indirect.
@@ -395,7 +407,7 @@ fn register_resources(doc: &mut Document, page_id: ObjectId, ctx: &OverlayContex
     let rid = ensure_own_resources(doc, page_id)?;
     register_alias(doc, rid, b"Font", ctx.font_alias, ctx.font_id)?;
     if let Some(gs) = ctx.gstate_id {
-        register_alias(doc, rid, b"ExtGState", ctx.gs_alias, gs)?;
+        register_alias(doc, rid, b"ExtGState", &ctx.gs_alias, gs)?;
     }
     Ok(())
 }
@@ -411,13 +423,13 @@ pub fn add_text_watermark(
     let ctx = OverlayContext::new(doc, opts.opacity, opts.gray);
     let pages: Vec<ObjectId> = doc.page_iter().collect();
     for page_id in pages {
-        let (w, h) = get_page_box(doc, page_id);
-        let (ox, oy) = get_page_origin(doc, page_id);
+        let pl = PageLayout::of(doc, page_id);
+        let (x, y) = pl.to_pdf(pl.w / 2.0, pl.h / 2.0);
         let item = TextItem {
             text,
-            x: ox + w / 2.0,
-            y: oy + h / 2.0,
-            angle_deg: opts.rotation_deg,
+            x,
+            y,
+            angle_deg: opts.rotation_deg + pl.rot as f32,
             font_size: opts.font_size,
             align: HAlign::Center,
         };
@@ -454,30 +466,29 @@ pub fn add_header_footer(
     let margin = if opts.margin_pt > 0.0 { opts.margin_pt } else { 24.0 };
     let fs = if opts.font_size > 0.0 { opts.font_size } else { 10.0 };
     for (idx, page_id) in pages.into_iter().enumerate() {
-        let (w, h) = get_page_box(doc, page_id);
-        let (ox, oy) = get_page_origin(doc, page_id);
-        let rot = page_rotation(doc, page_id);
-        // Place overlay in the page's unrotated coordinate space (MediaBox);
-        // rotation is applied by viewers to the full page contents.
-        let _ = rot;
+        // Baselines in the displayed page (top-origin): header `margin` below
+        // the top edge, footer `margin` above the bottom edge.
+        let pl = PageLayout::of(doc, page_id);
+        let (w, h) = (pl.w, pl.h);
         let page_num = first_num + idx as u32;
         let mut items_owned: Vec<(String, HAlign, f32, f32)> = Vec::new();
-        let hy = oy + h - margin;
-        let fy = oy + margin;
+        let hy = margin;
+        let fy = h - margin;
         let slots: [(&str, HAlign, f32, f32); 6] = [
-            (&opts.header_left, HAlign::Left, ox + margin, hy),
-            (&opts.header_center, HAlign::Center, ox + w / 2.0, hy),
-            (&opts.header_right, HAlign::Right, ox + w - margin, hy),
-            (&opts.footer_left, HAlign::Left, ox + margin, fy),
-            (&opts.footer_center, HAlign::Center, ox + w / 2.0, fy),
-            (&opts.footer_right, HAlign::Right, ox + w - margin, fy),
+            (&opts.header_left, HAlign::Left, margin, hy),
+            (&opts.header_center, HAlign::Center, w / 2.0, hy),
+            (&opts.header_right, HAlign::Right, w - margin, hy),
+            (&opts.footer_left, HAlign::Left, margin, fy),
+            (&opts.footer_center, HAlign::Center, w / 2.0, fy),
+            (&opts.footer_right, HAlign::Right, w - margin, fy),
         ];
         for (tpl, align, x, y) in slots {
             if tpl.is_empty() {
                 continue;
             }
             let s = render_slot(tpl, page_num, total);
-            items_owned.push((s, align, x, y));
+            let (px, py) = pl.to_pdf(x, y);
+            items_owned.push((s, align, px, py));
         }
         let items: Vec<TextItem<'_>> = items_owned
             .iter()
@@ -485,7 +496,7 @@ pub fn add_header_footer(
                 text: s.as_str(),
                 x: *x,
                 y: *y,
-                angle_deg: 0.0,
+                angle_deg: pl.rot as f32,
                 font_size: fs,
                 align: *align,
             })
@@ -532,19 +543,69 @@ impl Default for ImageWatermarkOptions {
     }
 }
 
-fn prepare_image_jpeg(bytes: &[u8]) -> MutateResult<(Vec<u8>, u32, u32)> {
+/// Embed the watermark image as an image XObject; returns (id, width, height).
+/// Images with an alpha channel keep their transparency through an /SMask —
+/// flattening to RGB would paint a transparent logo's background (usually
+/// black) as an opaque box. Opaque images are stored as JPEG.
+fn embed_watermark_image(doc: &mut Document, bytes: &[u8]) -> MutateResult<(ObjectId, u32, u32)> {
     let img = image::load_from_memory(bytes)
         .map_err(|e| MutateError::Parse(format!("image decode: {e}")))?;
+    let (w, h) = (img.width(), img.height());
+    if img.color().has_alpha() {
+        let rgba = img.to_rgba8();
+        let n = (w as usize) * (h as usize);
+        let mut rgb: Vec<u8> = Vec::with_capacity(n * 3);
+        let mut alpha: Vec<u8> = Vec::with_capacity(n);
+        for px in rgba.pixels() {
+            rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+            alpha.push(px[3]);
+        }
+        let mut smask = Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => w as i64,
+                "Height" => h as i64,
+                "ColorSpace" => "DeviceGray",
+                "BitsPerComponent" => 8,
+            },
+            alpha,
+        );
+        let _ = smask.compress();
+        let smask_id = doc.add_object(Object::Stream(smask));
+        let mut img_stream = Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => w as i64,
+                "Height" => h as i64,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "SMask" => Object::Reference(smask_id),
+            },
+            rgb,
+        );
+        let _ = img_stream.compress();
+        return Ok((doc.add_object(Object::Stream(img_stream)), w, h));
+    }
     let rgb = img.to_rgb8();
-    let (w, h) = (rgb.width(), rgb.height());
-    let mut jpeg: Vec<u8> = Vec::with_capacity((w * h) as usize);
+    let mut jpeg: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize));
     {
         let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85);
         encoder
             .encode(rgb.as_raw(), w, h, image::ExtendedColorType::Rgb8)
             .map_err(|e| MutateError::Parse(format!("jpeg encode: {e}")))?;
     }
-    Ok((jpeg, w, h))
+    let image_dict = lopdf::dictionary! {
+        "Type" => "XObject",
+        "Subtype" => "Image",
+        "Width" => w as i64,
+        "Height" => h as i64,
+        "ColorSpace" => "DeviceRGB",
+        "BitsPerComponent" => 8,
+        "Filter" => "DCTDecode",
+    };
+    Ok((doc.add_object(Object::Stream(Stream::new(image_dict, jpeg))), w, h))
 }
 
 pub fn add_image_watermark(
@@ -555,17 +616,7 @@ pub fn add_image_watermark(
     if image_bytes.is_empty() {
         return Err(MutateError::Parse("image_watermark: empty input".into()));
     }
-    let (jpeg, iw, ih) = prepare_image_jpeg(image_bytes)?;
-    let image_dict = lopdf::dictionary! {
-        "Type" => "XObject",
-        "Subtype" => "Image",
-        "Width" => iw as i64,
-        "Height" => ih as i64,
-        "ColorSpace" => "DeviceRGB",
-        "BitsPerComponent" => 8,
-        "Filter" => "DCTDecode",
-    };
-    let image_id = doc.add_object(Object::Stream(Stream::new(image_dict, jpeg)));
+    let (image_id, iw, ih) = embed_watermark_image(doc, image_bytes)?;
 
     let gstate_id = if (opts.opacity - 1.0).abs() > 0.001 {
         Some(doc.add_object(dictionary! {
@@ -577,27 +628,31 @@ pub fn add_image_watermark(
         None
     };
 
-    let img_alias: &[u8] = b"ImRPDF";
-    let gs_alias: &[u8] = b"GIRPDF";
+    // Unique per call: a second image watermark must not re-point the first
+    // one's resource names at the new image (or its opacity state).
+    let img_alias = format!("ImRPDF{}", image_id.0).into_bytes();
+    let gs_alias = format!("GIRPDF{}", gstate_id.map_or(0, |id| id.0)).into_bytes();
     let scale = opts.scale_frac.clamp(0.01, 2.0);
     let margin = opts.margin_pt.max(0.0);
 
     let pages: Vec<ObjectId> = doc.page_iter().collect();
     for page_id in pages {
-        let (pw, ph) = get_page_box(doc, page_id);
-        let (ox, oy) = get_page_origin(doc, page_id);
+        let pl = PageLayout::of(doc, page_id);
+        let (pw, ph) = (pl.w, pl.h);
         let target_w = pw * scale;
         let target_h = target_w * (ih as f32) / (iw as f32);
 
-        let (cx, cy) = match opts.anchor {
-            ImageAnchor::Center => (ox + pw / 2.0, oy + ph / 2.0),
-            ImageAnchor::TopLeft => (ox + margin + target_w / 2.0, oy + ph - margin - target_h / 2.0),
-            ImageAnchor::TopRight => (ox + pw - margin - target_w / 2.0, oy + ph - margin - target_h / 2.0),
-            ImageAnchor::BottomLeft => (ox + margin + target_w / 2.0, oy + margin + target_h / 2.0),
-            ImageAnchor::BottomRight => (ox + pw - margin - target_w / 2.0, oy + margin + target_h / 2.0),
+        // Anchor in the displayed page (top-origin), then map to PDF space.
+        let (ax, ay) = match opts.anchor {
+            ImageAnchor::Center => (pw / 2.0, ph / 2.0),
+            ImageAnchor::TopLeft => (margin + target_w / 2.0, margin + target_h / 2.0),
+            ImageAnchor::TopRight => (pw - margin - target_w / 2.0, margin + target_h / 2.0),
+            ImageAnchor::BottomLeft => (margin + target_w / 2.0, ph - margin - target_h / 2.0),
+            ImageAnchor::BottomRight => (pw - margin - target_w / 2.0, ph - margin - target_h / 2.0),
         };
+        let (cx, cy) = pl.to_pdf(ax, ay);
 
-        let theta = opts.rotation_deg.to_radians();
+        let theta = (opts.rotation_deg + pl.rot as f32).to_radians();
         let (s, c) = (theta.sin(), theta.cos());
         // Image XObject draws into unit square (0..1, 0..1). cm maps that to
         // a rotated rectangle centered at (cx, cy) with size (target_w, target_h).
@@ -612,22 +667,160 @@ pub fn add_image_watermark(
         stream.extend_from_slice(b"q\n");
         if gstate_id.is_some() {
             stream.extend_from_slice(b"/");
-            stream.extend_from_slice(gs_alias);
+            stream.extend_from_slice(&gs_alias);
             stream.extend_from_slice(b" gs\n");
         }
         let _ = write!(
             &mut stream,
             "{:.5} {:.5} {:.5} {:.5} {:.3} {:.3} cm\n/{} Do\nQ\n",
             a, b, cc, d, e, f,
-            std::str::from_utf8(img_alias).unwrap_or("Im"),
+            std::str::from_utf8(&img_alias).unwrap_or("Im"),
         );
 
         let rid = ensure_own_resources(doc, page_id)?;
-        register_alias(doc, rid, b"XObject", img_alias, image_id)?;
+        register_alias(doc, rid, b"XObject", &img_alias, image_id)?;
         if let Some(gs) = gstate_id {
-            register_alias(doc, rid, b"ExtGState", gs_alias, gs)?;
+            register_alias(doc, rid, b"ExtGState", &gs_alias, gs)?;
         }
         append_content_stream(doc, page_id, stream)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One 612×792 page. `inherit_resources`: the page has no /Resources and
+    /// inherits a font from the /Pages root. `rotate`: page /Rotate.
+    fn doc(inherit_resources: bool, rotate: i64) -> (Document, ObjectId) {
+        let mut d = Document::with_version("1.5");
+        let pages_id = d.new_object_id();
+        let font_id = d.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Times-Roman",
+        });
+        let mut page = dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+            "MediaBox" => Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+            "Rotate" => rotate,
+        };
+        let res = dictionary! {
+            "Font" => Object::Dictionary(dictionary! { "F1" => Object::Reference(font_id) }),
+        };
+        if !inherit_resources {
+            page.set("Resources", Object::Dictionary(res.clone()));
+        }
+        let page_id = d.add_object(Object::Dictionary(page));
+        let mut pages = dictionary! {
+            "Type" => "Pages",
+            "Kids" => Object::Array(vec![Object::Reference(page_id)]),
+            "Count" => 1,
+        };
+        if inherit_resources {
+            pages.set("Resources", Object::Dictionary(res));
+        }
+        d.objects.insert(pages_id, Object::Dictionary(pages));
+        let cat_id = d.add_object(dictionary! { "Type" => "Catalog", "Pages" => Object::Reference(pages_id) });
+        d.trailer.set("Root", Object::Reference(cat_id));
+        (d, page_id)
+    }
+
+    fn page_resources(d: &Document, page_id: ObjectId) -> Dictionary {
+        let rid = d.get_dictionary(page_id).unwrap().get(b"Resources").unwrap().as_reference().unwrap();
+        d.get_dictionary(rid).unwrap().clone()
+    }
+
+    fn sub_dict(d: &Document, res: &Dictionary, key: &[u8]) -> Dictionary {
+        match res.get(key).unwrap() {
+            Object::Reference(r) => d.get_dictionary(*r).unwrap().clone(),
+            o => o.as_dict().unwrap().clone(),
+        }
+    }
+
+    fn png(rgba: bool) -> Vec<u8> {
+        let img = if rgba {
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(4, 2, image::Rgba([255, 0, 0, 0])))
+        } else {
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 2, image::Rgb([255, 0, 0])))
+        };
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn watermark_keeps_inherited_resources() {
+        let (mut d, page_id) = doc(true, 0);
+        add_text_watermark(&mut d, "DRAFT", &WatermarkOptions::default()).unwrap();
+        let fonts = sub_dict(&d, &page_resources(&d, page_id), b"Font");
+        assert!(fonts.has(b"F1"), "inherited font shadowed: {fonts:?}");
+        assert!(fonts.has(b"FRPDF"));
+    }
+
+    #[test]
+    fn second_image_watermark_keeps_the_first_image() {
+        let (mut d, page_id) = doc(false, 0);
+        let opts = ImageWatermarkOptions::default();
+        add_image_watermark(&mut d, &png(false), &opts).unwrap();
+        add_image_watermark(&mut d, &png(false), &opts).unwrap();
+        let res = page_resources(&d, page_id);
+        let xobjects = sub_dict(&d, &res, b"XObject");
+        let targets: std::collections::HashSet<ObjectId> =
+            xobjects.iter().map(|(_, v)| v.as_reference().unwrap()).collect();
+        assert_eq!(targets.len(), 2, "both watermarks must keep their own image: {xobjects:?}");
+        assert_eq!(sub_dict(&d, &res, b"ExtGState").len(), 2);
+    }
+
+    #[test]
+    fn transparent_png_watermark_keeps_alpha() {
+        let (mut d, page_id) = doc(false, 0);
+        add_image_watermark(&mut d, &png(true), &ImageWatermarkOptions::default()).unwrap();
+        let xobjects = sub_dict(&d, &page_resources(&d, page_id), b"XObject");
+        let (_, img_ref) = xobjects.iter().next().unwrap();
+        let img = d.get_object(img_ref.as_reference().unwrap()).unwrap().as_stream().unwrap();
+        assert!(img.dict.has(b"SMask"), "alpha dropped: {:?}", img.dict);
+    }
+
+    #[test]
+    fn indirect_contents_array_is_spliced() {
+        let (mut d, page_id) = doc(false, 0);
+        let s = d.add_object(Object::Stream(Stream::new(Dictionary::new(), b"0 0 m".to_vec())));
+        let arr = d.add_object(Object::Array(vec![Object::Reference(s)]));
+        d.get_dictionary_mut(page_id).unwrap().set("Contents", Object::Reference(arr));
+        add_text_watermark(&mut d, "DRAFT", &WatermarkOptions::default()).unwrap();
+        let contents = d.get_dictionary(page_id).unwrap().get(b"Contents").unwrap().as_array().unwrap();
+        for c in contents {
+            let id = c.as_reference().unwrap();
+            assert!(d.get_object(id).unwrap().as_stream().is_ok(), "non-stream in /Contents: {id:?}");
+        }
+        assert!(contents.contains(&Object::Reference(s)));
+    }
+
+    #[test]
+    fn header_sits_at_displayed_top_of_rotated_page() {
+        let (mut d, page_id) = doc(false, 90);
+        let opts = HeaderFooterOptions {
+            header_left: "H".into(),
+            margin_pt: 24.0,
+            font_size: 10.0,
+            ..Default::default()
+        };
+        add_header_footer(&mut d, &opts).unwrap();
+        let content = d.get_page_content(page_id).unwrap();
+        let s = String::from_utf8_lossy(&content);
+        let tm: Vec<f32> = s
+            .lines()
+            .find(|l| l.ends_with(" Tm"))
+            .unwrap()
+            .split_whitespace()
+            .take(6)
+            .map(|v| v.parse().unwrap())
+            .collect();
+        // /Rotate 90 shows PDF x=0 as the top edge and PDF y=0 as the left
+        // edge: the header-left baseline starts at x = margin, y = margin,
+        // with text running along +y so it reads upright.
+        assert!(tm[0].abs() < 1e-3 && (tm[1] - 1.0).abs() < 1e-3, "matrix {tm:?}");
+        assert!((tm[4] - 24.0).abs() < 0.01 && (tm[5] - 24.0).abs() < 0.01, "origin {tm:?}");
+    }
 }

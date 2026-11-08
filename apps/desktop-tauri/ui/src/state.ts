@@ -1,7 +1,7 @@
 import type {
   AnnotationInfo, DrawState, FitMode, FormFieldInfo, GhostscriptInfo,
   MDrag, MarkupKind, MergeFile, OutlineNode, PDrag, PageLink, PageSize,
-  PanState, RectPt, RibbonTab, EditMode, SearchHit, ShapeKindUi, SignTool,
+  PanState, RectPt, RibbonTab, SearchHit, ShapeKindUi, SignTool,
   SignatureEntry, Slot, TextRun, ViewMode,
 } from "./types";
 
@@ -9,6 +9,12 @@ export const state = {
   // Document
   currentDoc: null as string | null,
   currentDocPath: null as string | null,
+  // True when the open document only lives in a temp file (merge result,
+  // images/Office → PDF): "Save" must ask for a destination.
+  docIsTemp: false,
+  // Unsaved changes since open / last save (drives the title marker and the
+  // "discard changes?" prompt before closing or opening another file).
+  dirty: false,
   pageCount: 0,
   pageSizes: [] as PageSize[],
   outline: [] as OutlineNode[],
@@ -16,7 +22,6 @@ export const state = {
 
   // View
   ribbonTab: "reader" as RibbonTab,
-  editMode: "select" as EditMode,
   zoom: 1.0,
   fitMode: "page" as FitMode,
   viewMode: "continuous" as ViewMode,
@@ -40,6 +45,9 @@ export const state = {
   // Bumped on every invalidateRenders(); a render whose epoch is stale when it
   // returns is dropped instead of painting an outdated bitmap.
   renderEpoch: 0,
+  // Bumped whenever the document content/page order changes (open, edit,
+  // undo). Async text/link/thumbnail lookups compare it before caching.
+  contentGen: 0,
   textRunsCache: new Map<number, TextRun[]>(),
   linksCache: new Map<number, PageLink[]>(),
 
@@ -113,6 +121,7 @@ export const callbacks = {
   renderFormFor: (_idx: number) => {},
   renderNotesFor: (_idx: number) => {},
   renderRedactsFor: (_idx: number) => {},
+  discardPendingRedactions: () => {},
   notifyAnnotationsChanged: async () => {},
   refreshFormFields: async () => {},
   refreshComments: async () => {},

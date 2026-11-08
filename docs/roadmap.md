@@ -233,7 +233,8 @@ Harter Schnitt: alles flüssig, stabil, mitnehmbar.
 - [ ] MSI-Installer inkl. WebView2 Bootstrapper [X: WiX]
 - [ ] Auto-Update (Tauri Updater Plugin) [X]
 - [ ] Crash-Reporting opt-in (Sentry oder eigenes) [X]
-- [ ] Lokalisierung: de / en mindestens [U]
+- [x] Lokalisierung: de / en mindestens [U] — `i18n.ts` (Deutsch Standard, Englisch); v1.1.0 hat die restlichen hart kodierten englischen Status-/Dialogtexte übersetzt
+- [x] Vereinfachte Bedienung (v1.1.0) [U] — 7 aufgabenorientierte Tabs statt 9 (keine doppelten Befehle, Gruppen-Beschriftungen), Statusleiste mit Seiten-/Zoom-Steuerung, Startbildschirm (PDF öffnen, zuletzt geöffnet), Speichern (Strg+S) mit Rückfrage bei ungespeicherten Änderungen, Teilen-Dialog, Seitenraster mit Einfügemarke beim Ziehen
 - [x] Accessibility: Keyboard-Nav, Screenreader-Labels, High-Contrast [U] — High-Contrast-Theme (schwarz/weiß + gelber Akzent, solide Rahmen), globaler `:focus-visible`-Outline, `aria-label` aus Tooltips für Icon-only-Buttons gespiegelt, `<html lang>` gesetzt
 - [x] Erweitertes Settings-Fenster (Standard-Zoom, Theme, Sprache, Cache-Größe)
 - [x] Tray-App / Autostart für Hintergrund-Spool-Watcher (Print-to-PDF ohne geöffnete Haupt-App) — System-Tray-Icon (Menü: Öffnen/Beenden); Setting „im Tray weiterlaufen" → Fenster-Schließen blendet aus statt zu beenden, Spool-Watcher bleibt aktiv; Autostart-Toggle via `tauri-plugin-autostart`

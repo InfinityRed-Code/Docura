@@ -90,6 +90,13 @@ import {
   ScanText,
   Shapes,
   SlidersHorizontal,
+  ClipboardCheck,
+  Files,
+  Hand,
+  ImagePlus,
+  MoveHorizontal,
+  RectangleVertical,
+  SaveAll,
 } from "lucide";
 
 const icons = {
@@ -179,6 +186,13 @@ const icons = {
   ScanText,
   Shapes,
   SlidersHorizontal,
+  ClipboardCheck,
+  Files,
+  Hand,
+  ImagePlus,
+  MoveHorizontal,
+  RectangleVertical,
+  SaveAll,
 };
 
 /** Replace all `data-lucide` placeholders in the document with SVGs.

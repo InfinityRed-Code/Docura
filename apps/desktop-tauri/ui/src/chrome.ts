@@ -11,12 +11,14 @@ import { getLang, setLang, t, type Lang } from "./i18n";
 import { refreshIcons } from "./icons";
 import { dom, setStatus } from "./dom";
 import {
-  applyViewMode, goToPage, reflow, renderAllHighlights,
+  applyViewMode, goToPage, reflow, renderAllHighlights, setFitMode, stepZoom, toggleSidebar,
 } from "./viewer";
-import { openByPath, closeProperties, doRedo, doUndo } from "./doc";
 import {
-  confirmFormsLostInPdfa, deleteSelectedPages, triggerPrint, triggerSaveAs,
-} from "./edit";
+  confirmDiscardChanges, confirmFormsLostInPdfa, docBaseName, doRedo, doUndo,
+  openByPath, openWithDialog, saveDocument, saveDocumentAs,
+} from "./doc";
+import { deleteSelectedPages, triggerPrint } from "./edit";
+import { disarmAllTools } from "./annot";
 
 // ---------- Window controls (custom title bar) ----------
 //
@@ -47,6 +49,18 @@ function initWindowControls() {
   // Covers maximize via drag-region double-click, snap and Win+arrow keys.
   void win.onResized(() => void syncMaximizeButton());
   void syncMaximizeButton();
+
+  // Closing (button, Alt+F4, taskbar): never lose unsaved edits silently.
+  // With "run in background" the Rust side only hides the window, so there
+  // is nothing to ask.
+  void win.onCloseRequested(async (event) => {
+    const runInBackground = await invoke<boolean>("get_run_in_background").catch(() => false);
+    if (runInBackground) {
+      event.preventDefault();
+      return;
+    }
+    if (!(await confirmDiscardChanges())) event.preventDefault();
+  });
 }
 
 // ---------- Search ----------
@@ -76,17 +90,24 @@ async function runSearch() {
     renderAllHighlights();
     return;
   }
+  const doc = state.currentDoc;
   try {
-    state.hits = await invoke<SearchHit[]>("search_document", {
-      document: state.currentDoc,
+    const hits = await invoke<SearchHit[]>("search_document", {
+      document: doc,
       term,
       caseSensitive: dom.searchCase.checked,
     });
+    // Stale answer (document switched or the term changed meanwhile).
+    if (doc !== state.currentDoc || term !== dom.searchInput.value.trim()) return;
+    state.hits = hits;
     state.currentHit = state.hits.length > 0 ? 0 : -1;
-    dom.searchCount.textContent = state.hits.length === 0 ? "No matches" : `${state.hits.length} matches`;
+    dom.searchCount.textContent = state.hits.length === 0
+      ? t("st.noMatches")
+      : t("st.matches", { n: state.hits.length });
     if (state.currentHit >= 0) jumpToHit(0);
+    else renderAllHighlights();
   } catch (e) {
-    dom.searchCount.textContent = `Error: ${e}`;
+    dom.searchCount.textContent = t("st.error", { e: String(e) });
   }
 }
 
@@ -97,31 +118,8 @@ function jumpToHit(idx: number) {
   const target = state.hits[state.currentHit].page;
   if (target !== state.currentPage) {
     goToPage(target);
-  } else {
-    renderAllHighlights();
   }
-}
-
-// ---------- Go-to ----------
-
-function openGoto() {
-  if (!state.currentDoc) return;
-  dom.gotoPanel.classList.remove("hidden");
-  dom.gotoInput.value = String(state.currentPage + 1);
-  dom.gotoInput.max = String(state.pageCount);
-  dom.gotoInput.min = "1";
-  dom.gotoInput.focus();
-  dom.gotoInput.select();
-}
-
-function closeGoto() {
-  dom.gotoPanel.classList.add("hidden");
-}
-
-function submitGoto() {
-  const v = parseInt(dom.gotoInput.value, 10);
-  if (!isNaN(v)) goToPage(v - 1);
-  closeGoto();
+  renderAllHighlights();
 }
 
 // ---------- Fullscreen / Presentation ----------
@@ -132,11 +130,12 @@ async function toggleFullscreen() {
     const full = await win.isFullscreen();
     await win.setFullscreen(!full);
   } catch (e) {
-    setStatus(`Fullscreen error: ${e}`);
+    setStatus(t("st.fullscreenError", { e: String(e) }));
   }
 }
 
 async function togglePresentation() {
+  if (!state.currentDoc && !state.presentationActive) return;
   state.presentationActive = !state.presentationActive;
   document.body.classList.toggle("presentation", state.presentationActive);
   try {
@@ -146,13 +145,15 @@ async function togglePresentation() {
     state.viewMode = "single";
     dom.viewModeSelect.value = "single";
     state.fitMode = "page";
-    dom.fitSelect.value = "page";
     applyViewMode();
-    reflow();
   }
+  reflow();
 }
 
 // ---------- Settings (Ghostscript + Virtual Printer) ----------
+
+const OK_COLOR = "var(--ok, #2c7a2c)";
+const BAD_COLOR = "var(--danger)";
 
 async function loadDefaultPdfa() {
   try {
@@ -162,92 +163,109 @@ async function loadDefaultPdfa() {
 }
 
 async function refreshGhostscript() {
-  dom.gsStatusEl.textContent = "Checking Ghostscript…";
+  dom.gsStatusEl.textContent = t("set.gsChecking");
+  dom.gsStatusEl.style.color = "";
   dom.gsInstallEl.classList.add("hidden");
   try {
     state.gsInfo = await invoke<GhostscriptInfo>("check_ghostscript");
     if (state.gsInfo.available) {
-      dom.gsStatusEl.textContent = `Ghostscript ${state.gsInfo.version ?? ""} — ${state.gsInfo.path ?? ""}`;
-      dom.gsStatusEl.style.color = "#8fcf8f";
+      dom.gsStatusEl.textContent = t("gs.found", {
+        version: state.gsInfo.version ?? "", path: state.gsInfo.path ?? "",
+      });
+      dom.gsStatusEl.style.color = OK_COLOR;
     } else {
-      dom.gsStatusEl.textContent = "Ghostscript not detected.";
-      dom.gsStatusEl.style.color = "#d98a8a";
+      dom.gsStatusEl.textContent = t("gs.notFound");
+      dom.gsStatusEl.style.color = BAD_COLOR;
       dom.gsInstallEl.classList.remove("hidden");
     }
   } catch (e) {
-    dom.gsStatusEl.textContent = `Detection error: ${e}`;
-    dom.gsStatusEl.style.color = "#d98a8a";
+    dom.gsStatusEl.textContent = t("gs.error", { e: String(e) });
+    dom.gsStatusEl.style.color = BAD_COLOR;
   }
 }
 
+/** Save a PDF/A copy of the open document (Convert tab + Settings). */
 async function runSaveAsPdfa() {
-  if (!state.currentDoc) { setStatus("Open a PDF first"); return; }
+  if (!state.currentDoc) { setStatus(t("st.openFirst")); return; }
+  if (!state.gsInfo.available) await refreshGhostscript();
   if (!state.gsInfo.available) {
-    setStatus("Ghostscript required — install it first");
+    setStatus(t("st.gsRequired"));
     return;
   }
   const level = dom.pdfaLevelEl.value === "off" ? "2b" : dom.pdfaLevelEl.value;
-  const base = state.currentDocPath
-    ? state.currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
-    : "document";
   const dest = await save({
-    defaultPath: `${base}_pdfa-${level}.pdf`,
+    defaultPath: `${docBaseName()}_pdfa-${level}.pdf`,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
-    title: `Save as PDF/A-${level}`,
+    title: t("lbl.saveAsPdfa"),
   });
   if (!dest || typeof dest !== "string") return;
   if (!(await confirmFormsLostInPdfa(level))) {
-    setStatus("Save cancelled");
+    setStatus(t("st.cancelled"));
     return;
   }
   dom.settingsOverlay.classList.add("hidden");
-  setStatus(`Converting to PDF/A-${level}…`);
+  setStatus(t("st.savingPdfa", { level }));
   try {
     const label = await invoke<string>("save_as_pdfa", {
       document: state.currentDoc,
       args: { path: dest, level },
     });
-    setStatus(`Saved as ${label}`);
+    setStatus(t("st.savedPdfa", { label, path: dest }));
   } catch (e) {
-    setStatus(`PDF/A export error: ${e}`);
+    setStatus(t("st.pdfaError", { e: String(e) }));
   }
 }
 
 async function refreshVirtualPrinter() {
-  dom.vpStatusEl.textContent = "Checking virtual printer…";
-  dom.vpStatusEl.style.color = "#bbb";
+  dom.vpStatusEl.textContent = t("set.vpChecking");
+  dom.vpStatusEl.style.color = "";
   dom.vpPathRowEl.classList.add("hidden");
   dom.vpWarnEl.classList.add("hidden");
   try {
     const info = await invoke<VirtualPrinterInfo>("virtual_printer_status");
     if (!info.supported) {
-      dom.vpStatusEl.textContent = "Virtual printer is only available on Windows.";
-      dom.vpStatusEl.style.color = "#d98a8a";
+      dom.vpStatusEl.textContent = t("vp.onlyWindows");
+      dom.vpStatusEl.style.color = BAD_COLOR;
       dom.vpInstallBtn.disabled = true;
       dom.vpUninstallBtn.disabled = true;
       return;
     }
     if (info.installed) {
-      dom.vpStatusEl.textContent = `Installed as "${info.printer_name}".`;
-      dom.vpStatusEl.style.color = "#8fcf8f";
+      dom.vpStatusEl.textContent = t("vp.installed", { name: info.printer_name });
+      dom.vpStatusEl.style.color = OK_COLOR;
       dom.vpInstallBtn.disabled = true;
       dom.vpUninstallBtn.disabled = false;
     } else {
-      dom.vpStatusEl.textContent = "Not installed.";
-      dom.vpStatusEl.style.color = "#d98a8a";
+      dom.vpStatusEl.textContent = t("vp.notInstalled");
+      dom.vpStatusEl.style.color = BAD_COLOR;
       dom.vpInstallBtn.disabled = false;
       dom.vpUninstallBtn.disabled = true;
     }
-    dom.vpPathRowEl.textContent = `Port file: ${info.port_path}`;
+    dom.vpPathRowEl.textContent = t("vp.port", { path: info.port_path });
     dom.vpPathRowEl.classList.remove("hidden");
-    dom.vpOutRowEl.textContent = `Output folder: ${info.output_dir}`;
+    dom.vpOutRowEl.textContent = t("vp.out", { path: info.output_dir });
     if (!info.ghostscript_available) {
       dom.vpWarnEl.classList.remove("hidden");
     }
   } catch (e) {
-    dom.vpStatusEl.textContent = `Detection error: ${e}`;
-    dom.vpStatusEl.style.color = "#d98a8a";
+    dom.vpStatusEl.textContent = t("gs.error", { e: String(e) });
+    dom.vpStatusEl.style.color = BAD_COLOR;
   }
+}
+
+// ---------- Modal helpers ----------
+
+/** Topmost open dialog (overlays are appended in DOM order). */
+function openOverlay(): HTMLElement | null {
+  const open = document.querySelectorAll<HTMLElement>(".propsOverlay:not(.hidden)");
+  return open.length > 0 ? open[open.length - 1] : null;
+}
+
+/** Close a dialog through its own ✕ so module-specific cleanup runs. */
+function closeOverlay(o: HTMLElement) {
+  const btn = o.querySelector<HTMLElement>(".propsHeader .propsClose, .propsClose");
+  if (btn) btn.click();
+  else o.classList.add("hidden");
 }
 
 // ---------- Init ----------
@@ -266,34 +284,26 @@ export function initChrome() {
   dom.searchInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (state.hits.length === 0) runSearch();
+      if (state.hits.length === 0) void runSearch();
       else jumpToHit(state.currentHit + (e.shiftKey ? -1 : 1));
     } else if (e.key === "Escape") {
+      e.stopPropagation();
       closeSearch();
     }
   });
-  dom.searchCase.addEventListener("change", runSearch);
+  dom.searchCase.addEventListener("change", () => void runSearch());
   document.getElementById("searchPrev")!.addEventListener("click", () => jumpToHit(state.currentHit - 1));
   document.getElementById("searchNext")!.addEventListener("click", () => jumpToHit(state.currentHit + 1));
-
-  // Goto panel
-  document.getElementById("gotoBtn")!.addEventListener("click", openGoto);
-  document.getElementById("gotoGo")!.addEventListener("click", submitGoto);
-  document.getElementById("gotoClose")!.addEventListener("click", closeGoto);
-  dom.gotoInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      submitGoto();
-    } else if (e.key === "Escape") {
-      closeGoto();
-    }
-  });
 
   // Fullscreen / Presentation
   document.getElementById("fullscreenBtn")!.addEventListener("click", toggleFullscreen);
   document.getElementById("presentBtn")!.addEventListener("click", togglePresentation);
+  document.getElementById("sidebarBtn")!.addEventListener("click", () => {
+    toggleSidebar();
+    document.getElementById("sidebarBtn")!.classList.toggle("active", !dom.sidebarEl.classList.contains("hidden"));
+  });
 
-  // Theme (light / dark) — persisted in localStorage.
+  // Theme — persisted in localStorage.
   const themeSelect = document.getElementById("themeSelect") as HTMLSelectElement;
   const applyTheme = (theme: string) => {
     document.body.classList.toggle("theme-dark", theme === "dark");
@@ -321,9 +331,14 @@ export function initChrome() {
   });
 
   // Language — changing it re-renders the whole UI, so reload after persisting.
+  // Reloading drops the open document, so unsaved work is offered first.
   const langSelect = document.getElementById("langSelect") as HTMLSelectElement;
   langSelect.value = getLang();
-  langSelect.addEventListener("change", () => {
+  langSelect.addEventListener("change", async () => {
+    if (!(await confirmDiscardChanges())) {
+      langSelect.value = getLang();
+      return;
+    }
     setLang(langSelect.value as Lang);
     location.reload();
   });
@@ -333,8 +348,7 @@ export function initChrome() {
   const defaultZoomSelect = document.getElementById("defaultZoomSelect") as HTMLSelectElement;
   const applyDefaultZoom = (v: string) => {
     const mode = (["page", "width", "actual"].includes(v) ? v : "page") as FitMode;
-    state.fitMode = mode;
-    dom.fitSelect.value = mode;
+    setFitMode(mode);
   };
   const savedZoom = localStorage.getItem("docura-default-zoom") ?? "page";
   defaultZoomSelect.value = savedZoom;
@@ -342,7 +356,6 @@ export function initChrome() {
   defaultZoomSelect.addEventListener("change", () => {
     localStorage.setItem("docura-default-zoom", defaultZoomSelect.value);
     applyDefaultZoom(defaultZoomSelect.value);
-    if (state.currentDoc) reflow();
   });
 
   // Render-cache budget (MB) — read the effective value from the backend and
@@ -389,9 +402,6 @@ export function initChrome() {
     void refreshVirtualPrinter();
   });
   document.getElementById("settingsClose")!.addEventListener("click", () => dom.settingsOverlay.classList.add("hidden"));
-  dom.settingsOverlay.addEventListener("click", (e) => {
-    if (e.target === dom.settingsOverlay) dom.settingsOverlay.classList.add("hidden");
-  });
 
   // Settings nav rail: clicking a tab scrolls its section into the body;
   // a scrollspy keeps the active tab in sync while scrolling.
@@ -426,27 +436,28 @@ export function initChrome() {
     void invoke("open_external", { url: "https://ghostscript.com/releases/gsdnld.html" });
   });
   document.getElementById("pdfaSaveBtn")!.addEventListener("click", () => void runSaveAsPdfa());
+  document.getElementById("pdfaSaveTabBtn")!.addEventListener("click", () => void runSaveAsPdfa());
 
   // Virtual printer buttons
   dom.vpInstallBtn.addEventListener("click", async () => {
     dom.vpInstallBtn.disabled = true;
-    setStatus("Installing virtual printer (admin prompt will appear)…");
+    setStatus(t("vp.installing"));
     try {
       await invoke("install_virtual_printer");
-      setStatus("Virtual printer installed");
+      setStatus(t("vp.installedOk"));
     } catch (e) {
-      setStatus(`Install failed: ${e}`);
+      setStatus(t("vp.installFail", { e: String(e) }));
     }
     await refreshVirtualPrinter();
   });
   dom.vpUninstallBtn.addEventListener("click", async () => {
     dom.vpUninstallBtn.disabled = true;
-    setStatus("Removing virtual printer (admin prompt will appear)…");
+    setStatus(t("vp.removing"));
     try {
       await invoke("uninstall_virtual_printer");
-      setStatus("Virtual printer removed");
+      setStatus(t("vp.removed"));
     } catch (e) {
-      setStatus(`Uninstall failed: ${e}`);
+      setStatus(t("vp.removeFail", { e: String(e) }));
     }
     await refreshVirtualPrinter();
   });
@@ -454,68 +465,81 @@ export function initChrome() {
     try {
       await invoke("open_print_output_folder");
     } catch (e) {
-      setStatus(`Open folder failed: ${e}`);
+      setStatus(t("vp.openFail", { e: String(e) }));
     }
   });
 
   // Auto-open newly printed PDFs from virtual printer
   void listen<{ path: string }>("print-job-ready", async (ev) => {
     const path = ev.payload.path;
-    setStatus(`Print job ready — opening ${path}`);
+    setStatus(t("vp.jobReady", { path }));
     await openByPath(path);
   });
   void listen<{ message: string }>("print-job-failed", (ev) => {
-    setStatus(`Print job failed: ${ev.payload.message}`);
+    setStatus(t("vp.jobFailed", { e: ev.payload.message }));
   });
+
+  // Every dialog closes on a click on its dimmed backdrop.
+  document.querySelectorAll<HTMLElement>(".propsOverlay").forEach((o) => {
+    o.addEventListener("click", (e) => {
+      if (e.target === o) closeOverlay(o);
+    });
+  });
+
+  // Escape: close the topmost dialog, else the search bar, else leave the
+  // presentation, else disarm the active page tool. Capture phase so it
+  // wins over inputs inside the dialog.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const o = openOverlay();
+    if (o) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeOverlay(o);
+      return;
+    }
+    if (!dom.searchPanel.classList.contains("hidden")) { closeSearch(); return; }
+    if (state.presentationActive) { void togglePresentation(); return; }
+    disarmAllTools();
+  }, true);
 
   // Global keyboard shortcuts
   window.addEventListener("keydown", (e) => {
-    const inField = document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName);
-    if (e.key === "F11") { e.preventDefault(); toggleFullscreen(); return; }
-    if (e.key === "F5") { e.preventDefault(); togglePresentation(); return; }
+    if (e.key === "Escape") return; // handled above
+    const ae = document.activeElement as HTMLElement | null;
+    const inField = !!ae && (/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) || ae.isContentEditable);
+    // While a dialog is open only the dialog gets the keyboard.
+    if (openOverlay()) return;
+    const key = e.key.toLowerCase();
+    if (e.key === "F11") { e.preventDefault(); void toggleFullscreen(); return; }
+    if (e.key === "F5") { e.preventDefault(); void togglePresentation(); return; }
     if (e.key === "F4") {
       e.preventDefault();
       document.getElementById("sidebarBtn")!.click();
       return;
     }
-    if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
+    if (e.ctrlKey && key === "o") { e.preventDefault(); void openWithDialog(); return; }
+    if (e.ctrlKey && key === "s") {
       e.preventDefault();
-      (document.getElementById("open") as HTMLButtonElement).click();
+      void (e.shiftKey ? saveDocumentAs() : saveDocument());
       return;
     }
-    if (e.ctrlKey && (e.key === "f" || e.key === "F")) {
+    if (e.ctrlKey && key === "f") { e.preventDefault(); openSearch(); return; }
+    if (e.ctrlKey && key === "g") {
       e.preventDefault();
-      openSearch();
+      if (state.currentDoc) { dom.pageInput.focus(); dom.pageInput.select(); }
       return;
     }
-    if (e.ctrlKey && (e.key === "g" || e.key === "G")) {
-      e.preventDefault();
-      openGoto();
-      return;
-    }
-    if (e.ctrlKey && (e.key === "p" || e.key === "P")) {
-      e.preventDefault();
-      triggerPrint();
-      return;
-    }
-    if (e.ctrlKey && e.shiftKey && (e.key === "s" || e.key === "S")) {
-      e.preventDefault();
-      triggerSaveAs();
-      return;
-    }
-    if (!inField && e.ctrlKey && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
-      e.preventDefault();
-      void doUndo();
-      return;
-    }
-    if (!inField && e.ctrlKey && ((e.key === "y" || e.key === "Y") || (e.shiftKey && (e.key === "z" || e.key === "Z")))) {
+    if (e.ctrlKey && key === "p") { e.preventDefault(); void triggerPrint(); return; }
+    if (!inField && e.ctrlKey && !e.shiftKey && key === "z") { e.preventDefault(); void doUndo(); return; }
+    if (!inField && e.ctrlKey && (key === "y" || (e.shiftKey && key === "z"))) {
       e.preventDefault();
       void doRedo();
       return;
     }
-    if (!inField && state.ribbonTab === "edit" && (e.key === "Delete" || e.key === "Del")) {
+    if (!inField && state.ribbonTab === "organize" && e.key === "Delete") {
       e.preventDefault();
-      if (state.selectedPages.size > 0) deleteSelectedPages();
+      if (state.selectedPages.size > 0) void deleteSelectedPages();
       return;
     }
     if (e.key === "F3") {
@@ -523,37 +547,11 @@ export function initChrome() {
       if (state.hits.length > 0) jumpToHit(state.currentHit + (e.shiftKey ? -1 : 1));
       return;
     }
-    if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
-      e.preventDefault();
-      (document.getElementById("zoomIn") as HTMLButtonElement).click();
-      return;
-    }
-    if (e.ctrlKey && e.key === "-") {
-      e.preventDefault();
-      (document.getElementById("zoomOut") as HTMLButtonElement).click();
-      return;
-    }
-    if (e.ctrlKey && e.key === "0") {
-      e.preventDefault();
-      state.fitMode = "actual";
-      dom.fitSelect.value = "actual";
-      reflow();
-      return;
-    }
-    if (e.ctrlKey && e.key === "1") {
-      e.preventDefault();
-      state.fitMode = "page";
-      dom.fitSelect.value = "page";
-      reflow();
-      return;
-    }
-    if (e.ctrlKey && e.key === "2") {
-      e.preventDefault();
-      state.fitMode = "width" as FitMode;
-      dom.fitSelect.value = "width";
-      reflow();
-      return;
-    }
+    if (e.ctrlKey && (e.key === "+" || e.key === "=")) { e.preventDefault(); if (state.currentDoc) stepZoom(1); return; }
+    if (e.ctrlKey && e.key === "-") { e.preventDefault(); if (state.currentDoc) stepZoom(-1); return; }
+    if (e.ctrlKey && e.key === "0") { e.preventDefault(); setFitMode("actual"); return; }
+    if (e.ctrlKey && e.key === "1") { e.preventDefault(); setFitMode("page"); return; }
+    if (e.ctrlKey && e.key === "2") { e.preventDefault(); setFitMode("width"); return; }
     if (inField) return;
     if (!state.currentDoc) return;
     if (e.key === "ArrowDown" || e.key === "PageDown") {
@@ -562,17 +560,18 @@ export function initChrome() {
     } else if (e.key === "ArrowUp" || e.key === "PageUp") {
       e.preventDefault();
       goToPage(state.currentPage - 1);
+    } else if (e.key === "ArrowRight" && state.viewMode === "single") {
+      e.preventDefault();
+      goToPage(state.currentPage + 1);
+    } else if (e.key === "ArrowLeft" && state.viewMode === "single") {
+      e.preventDefault();
+      goToPage(state.currentPage - 1);
     } else if (e.key === "Home") {
       e.preventDefault();
       goToPage(0);
     } else if (e.key === "End") {
       e.preventDefault();
       goToPage(state.pageCount - 1);
-    } else if (e.key === "Escape") {
-      if (!dom.propsOverlay.classList.contains("hidden")) closeProperties();
-      else if (!dom.searchPanel.classList.contains("hidden")) closeSearch();
-      else if (!dom.gotoPanel.classList.contains("hidden")) closeGoto();
-      else if (state.presentationActive) togglePresentation();
     }
   });
 }

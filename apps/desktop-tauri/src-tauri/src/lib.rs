@@ -220,17 +220,19 @@ async fn open_pdf_inner(
             }
         }
         let t_parse = t0.elapsed();
+        // From here on a failure must close the engine document: the id is
+        // never returned to the UI, so nothing else would ever free it.
+        let fail = |e: CoreError| {
+            let _ = engine.close(id);
+            OpenError::Other(e.to_string())
+        };
         let t_pc0 = std::time::Instant::now();
-        let page_count = engine
-            .page_count(id)
-            .map_err(|e| OpenError::Other(e.to_string()))?;
+        let page_count = engine.page_count(id).map_err(fail)?;
         let t_page_count = t_pc0.elapsed();
         let t_sz0 = std::time::Instant::now();
         let mut page_sizes = Vec::with_capacity(page_count as usize);
         for i in 0..page_count {
-            let sz = engine
-                .page_size(id, PageIndex(i))
-                .map_err(|e| OpenError::Other(e.to_string()))?;
+            let sz = engine.page_size(id, PageIndex(i)).map_err(fail)?;
             page_sizes.push(sz);
         }
         let t_sizes = t_sz0.elapsed();
@@ -452,12 +454,15 @@ async fn render_thumbnail(
         Some(h) => Some(h),
         None => {
             let engine = state.engine.clone();
-            match tokio::task::spawn_blocking(move || engine.document_bytes(document))
-                .await
-                .map_err(|e| e.to_string())?
+            // Hash on the blocking pool too: hashing a large document on an
+            // async worker stalls every other in-flight command.
+            match tokio::task::spawn_blocking(move || {
+                engine.document_bytes(document).map(|bytes| content_hash(&bytes))
+            })
+            .await
+            .map_err(|e| e.to_string())?
             {
-                Ok(bytes) => {
-                    let h = content_hash(&bytes);
+                Ok(h) => {
                     state.cache.lock().set_thumb_id(document, h);
                     Some(h)
                 }
@@ -600,10 +605,43 @@ async fn save_pdf_as(
     })
     .await
     .map_err(|e| e.to_string())??;
-    tokio::fs::write(&path, &bytes)
+    let len = bytes.len();
+    let dest = PathBuf::from(&path);
+    tokio::task::spawn_blocking(move || write_file_atomic(&dest, &bytes))
         .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| format!("write {path}: {e}"))?;
-    tracing::info!("save_pdf_as: wrote {} bytes to {}", bytes.len(), path);
+    tracing::info!("save_pdf_as: wrote {len} bytes to {path}");
+    Ok(())
+}
+
+/// Write `bytes` to `dest` without ever leaving a half-written file behind:
+/// the data goes to a sibling temp file first and is then renamed over the
+/// target. "Save" overwrites the user's original, so a crash or full disk
+/// mid-write must not destroy it. Falls back to a direct write when the
+/// folder doesn't allow creating the temp file.
+fn write_file_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document.pdf".into());
+    let tmp = dest.with_file_name(format!(".{name}.docura-tmp"));
+    let mut f = match std::fs::File::create(&tmp) {
+        Ok(f) => f,
+        Err(_) => return std::fs::write(dest, bytes),
+    };
+    let written = f.write_all(bytes).and_then(|_| f.sync_all());
+    drop(f);
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    // std::fs::rename replaces an existing target on Windows too.
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -1070,6 +1108,11 @@ async fn sanitize_metadata_cmd(
         })
         .await
         .map_err(|e| e.to_string())??;
+    if removed == 0 {
+        // Nothing stripped: don't push a no-op undo step (which would also
+        // wipe the redo stack).
+        return Ok(0);
+    }
 
     state.cache.lock().remove_document(document);
     let engine = state.engine.clone();
@@ -2561,6 +2604,13 @@ pub(crate) fn probe_ghostscript_version(path: &Path) -> Option<String> {
     probe_ghostscript(path).map(|(_, v)| v)
 }
 
+/// `-sOutputFile=` argument for Ghostscript. GS treats `%` in the output
+/// name as a page-number template (`%d`) and rejects any other `%` sequence,
+/// so a literal `%` (e.g. "Invoice%202024.pdf", "100% done") must be `%%`.
+pub(crate) fn gs_output_file_arg(path: &str) -> String {
+    format!("-sOutputFile={}", path.replace('%', "%%"))
+}
+
 #[tauri::command]
 async fn check_ghostscript() -> GhostscriptInfo {
     tokio::task::spawn_blocking(|| {
@@ -2627,7 +2677,11 @@ async fn save_as_pdfa(
         {
             let mut f = std::fs::File::create(&src)
                 .map_err(|e| format!("temp create {}: {e}", src.display()))?;
-            f.write_all(&bytes).map_err(|e| format!("temp write: {e}"))?;
+            if let Err(e) = f.write_all(&bytes) {
+                drop(f);
+                let _ = std::fs::remove_file(&src);
+                return Err(format!("temp write: {e}"));
+            }
         }
 
         let mut cmd = std::process::Command::new(&gs_path);
@@ -2641,11 +2695,12 @@ async fn save_as_pdfa(
         cmd.arg("-dPDFACompatibilityPolicy=1");
         cmd.arg("-sColorConversionStrategy=RGB");
         cmd.arg("-sProcessColorModel=DeviceRGB");
-        cmd.arg(format!("-sOutputFile={out_path}"));
+        cmd.arg(gs_output_file_arg(&out_path));
         cmd.arg(&src);
 
-        let output = no_window(&mut cmd).output().map_err(|e| format!("gs spawn: {e}"))?;
+        let output = no_window(&mut cmd).output();
         let _ = std::fs::remove_file(&src);
+        let output = output.map_err(|e| format!("gs spawn: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("gs failed: {}", stderr.trim()));
@@ -2703,7 +2758,7 @@ async fn convert_files_to_pdfa(
             cmd.arg("-dPDFACompatibilityPolicy=1");
             cmd.arg("-sColorConversionStrategy=RGB");
             cmd.arg("-sProcessColorModel=DeviceRGB");
-            cmd.arg(format!("-sOutputFile={}", out.display()));
+            cmd.arg(gs_output_file_arg(&out.to_string_lossy()));
             cmd.arg(&src);
             match no_window(&mut cmd).output() {
                 Ok(o) if o.status.success() => {
@@ -3705,6 +3760,32 @@ mod pattern_tests {
         assert!((rects[0].x0 - 9.0).abs() < 0.01);
         assert!((rects[0].x1 - 23.0).abs() < 0.01);
         assert!((rects[1].y0 - 119.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("docura-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("out file.pdf");
+        std::fs::write(&dest, b"old contents that are longer").unwrap();
+        write_file_atomic(&dest, b"new").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".docura-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gs_output_file_escapes_percent() {
+        assert_eq!(
+            gs_output_file_arg(r"C:\Docs\100% Invoice%202024.pdf"),
+            r"-sOutputFile=C:\Docs\100%% Invoice%%202024.pdf"
+        );
+        assert_eq!(gs_output_file_arg(r"C:\a b\x.pdf"), r"-sOutputFile=C:\a b\x.pdf");
     }
 
     #[test]

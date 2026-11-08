@@ -82,7 +82,8 @@ pub fn is_encrypted_pdf(bytes: &[u8]) -> bool {
 }
 
 /// Encrypt plaintext PDF bytes with AES-256 (PDF 2.0, security handler V5/R6).
-/// `owner_password` falls back to the user password when empty.
+/// An empty `owner_password` falls back to the user password when nothing is
+/// restricted; with restrictions it becomes a random secret instead (see below).
 pub fn encrypt_pdf(
     bytes: &[u8],
     user_password: &str,
@@ -93,7 +94,20 @@ pub fn encrypt_pdf(
     if doc.is_encrypted() {
         return Err(MutateError::Crypt("document is already encrypted".into()));
     }
-    let owner = if owner_password.is_empty() { user_password } else { owner_password };
+    let random_owner;
+    let unrestricted = permissions.print && permissions.modify && permissions.copy && permissions.annotate;
+    let owner = if !owner_password.is_empty() {
+        owner_password
+    } else if unrestricted {
+        user_password
+    } else {
+        // owner == user would let anyone holding the user password open the
+        // file *as owner*, voiding every restriction. Nobody knows this one.
+        let mut raw = [0u8; 24];
+        getrandom::fill(&mut raw).map_err(|e| MutateError::Crypt(format!("rng: {e}")))?;
+        random_owner = raw.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        random_owner.as_str()
+    };
     strip_structural_streams(&mut doc);
 
     let mut file_encryption_key = [0u8; 32];
@@ -179,6 +193,21 @@ pub(crate) mod tests {
         doc.authenticate_password("user-pw").unwrap();
         doc.authenticate_password("owner-pw").unwrap();
         assert!(doc.authenticate_password("wrong").is_err());
+    }
+
+    #[test]
+    fn restrictions_without_owner_password_stay_enforced() {
+        let perms = PermissionOptions { print: false, modify: false, copy: true, annotate: true };
+        let enc = encrypt_pdf(&tiny_pdf(), "user-pw", "", perms).unwrap();
+        let doc = Document::load_mem(&enc).unwrap();
+        doc.authenticate_user_password("user-pw").unwrap();
+        // The user password must not double as the owner password.
+        assert!(doc.authenticate_owner_password("user-pw").is_err());
+
+        // Nothing restricted: previous behaviour (owner = user) is kept.
+        let enc = encrypt_pdf(&tiny_pdf(), "user-pw", "", PermissionOptions::default()).unwrap();
+        let doc = Document::load_mem(&enc).unwrap();
+        doc.authenticate_owner_password("user-pw").unwrap();
     }
 
     #[test]

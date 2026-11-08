@@ -8,8 +8,8 @@ import { state, callbacks } from "./state";
 import { t } from "./i18n";
 import { dom, setStatus } from "./dom";
 import { refreshIcons } from "./icons";
-import { applyDocSnapshot } from "./doc";
-import { effectiveRotation, goToPage, navigateTo, rotateRectToSlot } from "./viewer";
+import { applyDocSnapshot, markDirty, refreshUndoUi } from "./doc";
+import { effectiveRotation, goToPage, navigateTo, rotateRectToSlot, setWheelZoomMode } from "./viewer";
 
 // ---------- Annotation tools (markup + shapes) ----------
 
@@ -23,9 +23,26 @@ export function clearSignToolUi() {
   document.body.classList.remove("signMode");
 }
 
+/** Disarm every page tool (markup, shapes, eraser, fill & sign marks). */
+export function disarmAllTools() {
+  setAnnotTool(null);
+  setShapeTool(null);
+  clearEraseMode();
+  clearSignToolUi();
+}
+
+/** Clear the markup tool and eraser (used when a sign mark gets armed). */
+export function clearMarkupAndEraser() {
+  setAnnotTool(null);
+  clearEraseMode();
+}
+
 function setAnnotTool(k: MarkupKind | null) {
   state.annotTool = k;
-  if (k !== null) { state.shapeTool = null; clearSignToolUi(); clearEraseMode(); }
+  if (k !== null) {
+    state.shapeTool = null; clearSignToolUi(); clearEraseMode();
+    if (state.wheelZoomMode) setWheelZoomMode(false);
+  }
   document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.annot === k);
   });
@@ -38,7 +55,10 @@ function setAnnotTool(k: MarkupKind | null) {
 
 export function setShapeTool(k: ShapeKindUi | null) {
   state.shapeTool = k;
-  if (k !== null) { state.annotTool = null; clearSignToolUi(); clearEraseMode(); }
+  if (k !== null) {
+    state.annotTool = null; clearSignToolUi(); clearEraseMode();
+    if (state.wheelZoomMode) setWheelZoomMode(false);
+  }
   document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.shape === k);
   });
@@ -59,6 +79,7 @@ export function clearEraseMode() {
 function setEraseMode(on: boolean) {
   state.eraseMode = on;
   if (on) {
+    if (state.wheelZoomMode) setWheelZoomMode(false);
     state.annotTool = null;
     state.shapeTool = null;
     clearSignToolUi();
@@ -87,7 +108,7 @@ function annotationAtPagePoint(pageIdx: number, px: number, py: number): Annotat
 
 async function eraseAnnotation(a: AnnotationInfo) {
   if (!state.currentDoc) return;
-  setStatus("Removing annotation…");
+  setStatus(t("annot.removing"));
   try {
     const snap = await invoke<DocSnapshot>("delete_annotation", {
       document: state.currentDoc,
@@ -96,9 +117,9 @@ async function eraseAnnotation(a: AnnotationInfo) {
     });
     applyDocSnapshot(snap);
     await refreshComments();
-    setStatus("Annotation removed");
+    setStatus(t("annot.removed"));
   } catch (e) {
-    setStatus(`Erase error: ${e}`);
+    setStatus(t("annot.removeError", { e: String(e) }));
   }
 }
 
@@ -217,7 +238,8 @@ async function applyAnnotationFromSelection() {
   const opacity = state.annotTool === "highlight" ? 0.4 : 1.0;
   const kind = state.annotTool;
   const pages = Array.from(byPage.keys()).sort((a, b) => a - b);
-  setStatus(`Applying ${kind}…`);
+  const label = toolNoun(kind);
+  setStatus(t("st.adding", { label }));
   try {
     let snap: DocSnapshot | null = null;
     for (const page of pages) {
@@ -229,9 +251,9 @@ async function applyAnnotationFromSelection() {
     }
     sel.removeAllRanges();
     if (snap) applyDocSnapshot(snap);
-    setStatus(`${kind} applied`);
+    setStatus(t("st.added", { label }));
   } catch (e) {
-    setStatus(`${kind} error: ${e}`);
+    setStatus(t("st.addError", { label, e: String(e) }));
   }
 }
 
@@ -357,6 +379,27 @@ export function imagePxToPagePt(slot: Slot, pageIdx: number, x: number, y: numbe
   }
 }
 
+const TOOL_KIND: Record<string, string> = {
+  highlight: "Highlight", underline: "Underline", strikeout: "StrikeOut", squiggly: "Squiggly",
+  freetext: "FreeText", note: "Text", ink: "Ink", stamp: "Stamp",
+  rect: "Square", circle: "Circle", line: "Line",
+};
+
+/** Localized noun for an annotation tool ("Hervorhebung", "Rechteck", …). */
+function toolNoun(tool: string | null): string {
+  if (tool === "arrow") return t("tip.arrow");
+  const kind = tool ? TOOL_KIND[tool] : undefined;
+  return kind ? t(`kind.${kind}`) : (tool ?? "");
+}
+
+/** True for controls layered over a page (editors, buttons, form fields)
+ * that must receive their own clicks instead of the active page tool. */
+export function isOverlayControl(target: EventTarget | null): boolean {
+  return !!(target as Element | null)?.closest?.(
+    "textarea, input, select, button, .stickyNote, .formField, .redactMark, .noteHotspot",
+  );
+}
+
 export function findSlotFromTarget(target: EventTarget | null): { slot: Slot; idx: number } | null {
   let node: HTMLElement | null = target as HTMLElement | null;
   while (node && node !== document.body) {
@@ -419,7 +462,7 @@ export function spawnFreeTextEditor(
       x1: Math.max(tl.x, br.x),
       y1: Math.max(tl.y, br.y),
     };
-    setStatus("Adding text…");
+    setStatus(t("st.adding", { label: toolNoun("freetext") }));
     try {
       const fg = (document.getElementById("textFgColor") as HTMLInputElement | null)?.value || "#000000";
       const bg = (document.getElementById("textBgColor") as HTMLInputElement | null)?.value || "#ffffff";
@@ -444,9 +487,9 @@ export function spawnFreeTextEditor(
         },
       });
       applyDocSnapshot(snap);
-      setStatus("Text added");
+      setStatus(t("st.added", { label: toolNoun("freetext") }));
     } catch (e) {
-      setStatus(`text error: ${e}`);
+      setStatus(t("st.addError", { label: toolNoun("freetext"), e: String(e) }));
     }
   };
   ed.addEventListener("blur", () => { void commit(); });
@@ -487,7 +530,7 @@ function spawnTextNoteEditor(
     const text = ed.value.trim();
     cleanup();
     if (!text || !state.currentDoc) return;
-    setStatus("Adding note…");
+    setStatus(t("st.adding", { label: toolNoun("note") }));
     try {
       const snap = await invoke<DocSnapshot>("add_text_note", {
         document: state.currentDoc,
@@ -501,9 +544,9 @@ function spawnTextNoteEditor(
         },
       });
       applyDocSnapshot(snap);
-      setStatus("Note added");
+      setStatus(t("st.added", { label: toolNoun("note") }));
     } catch (e) {
-      setStatus(`note error: ${e}`);
+      setStatus(t("st.addError", { label: toolNoun("note"), e: String(e) }));
     }
   };
   ed.addEventListener("blur", () => { void commit(); });
@@ -548,7 +591,10 @@ function renderComments() {
     return true;
   });
   if (filtered.length === 0) {
-    dom.commentListEl.innerHTML = `<div style="color:#777;padding:0.5rem;font-size:0.85rem;">No annotations${state.cachedAnnotations.length > 0 ? " match the filters" : ""}.</div>`;
+    const empty = document.createElement("div");
+    empty.className = "attachEmpty";
+    empty.textContent = state.cachedAnnotations.length > 0 ? t("comments.noMatch") : t("comments.none");
+    dom.commentListEl.replaceChildren(empty);
     return;
   }
   const byPage = new Map<number, AnnotationInfo[]>();
@@ -560,16 +606,18 @@ function renderComments() {
   const pages = Array.from(byPage.keys()).sort((a, b) => a - b);
   const out: string[] = [];
   for (const p of pages) {
-    out.push(`<div class="commentGroup"><div class="commentGroupHead">Page ${p + 1}</div>`);
+    out.push(`<div class="commentGroup"><div class="commentGroupHead">${escapeHtml(t("page.one", { n: p + 1 }))}</div>`);
     for (const a of byPage.get(p)!) {
-      const icon = `<i data-lucide="${SUBTYPE_ICON[a.subtype] ?? "dot"}"></i>`;
+      const icon = `<i data-lucide="${Object.hasOwn(SUBTYPE_ICON, a.subtype) ? SUBTYPE_ICON[a.subtype] : "dot"}"></i>`;
+      const kindKey = `kind.${a.subtype}`;
+      const kindLabel = t(kindKey) === kindKey ? a.subtype : t(kindKey);
       const author = a.author ? `<span class="author">${escapeHtml(a.author)}</span>` : "";
       const date = a.modified ? `<span class="date">${escapeHtml(formatPdfDate(a.modified))}</span>` : "";
-      const noprint = a.print ? "" : `<span class="nopaint">no-print</span>`;
+      const noprint = a.print ? "" : `<span class="nopaint">${escapeHtml(t("comments.noPrint"))}</span>`;
       const body = a.contents ? `<div class="body">${escapeHtml(a.contents)}</div>` : "";
       out.push(
         `<div class="commentItem" data-page="${p}" data-id="${escapeHtml(a.id)}">` +
-          `<div class="row1"><span class="kind">${icon} ${a.subtype}</span>${author}${noprint}${date}</div>` +
+          `<div class="row1"><span class="kind">${icon} ${escapeHtml(kindLabel)}</span>${author}${noprint}${date}</div>` +
           body +
         `</div>`,
       );
@@ -597,12 +645,18 @@ async function refreshComments() {
     renderNotesAllSlots();
     return;
   }
+  const doc = state.currentDoc;
+  let list: AnnotationInfo[];
   try {
-    state.cachedAnnotations = await invoke<AnnotationInfo[]>("list_annotations", { document: state.currentDoc });
+    list = await invoke<AnnotationInfo[]>("list_annotations", { document: doc });
   } catch (e) {
-    setStatus(`comments error: ${e}`);
-    state.cachedAnnotations = [];
+    setStatus(t("st.error", { e: String(e) }));
+    list = [];
   }
+  // A slow lookup for a document that has since been replaced must not
+  // overwrite the cache (the eraser hit-tests against it).
+  if (doc !== state.currentDoc) return;
+  state.cachedAnnotations = list;
   renderComments();
   renderNotesAllSlots();
 }
@@ -730,16 +784,7 @@ function validateForm() {
     return;
   }
   setStatus(t("form.missing", { count: missing.length, id: missing[0].id }));
-  const first = missing[0];
-  const slot = state.slots[first.page];
-  if (slot) {
-    slot.wrap.scrollIntoView({ block: "center", behavior: "smooth" });
-    const wrap = slot.formLayer.querySelector(
-      `.formField[data-field-id="${CSS.escape(first.id)}"]`,
-    ) as HTMLElement | null;
-    const ed = wrap?.querySelector("input, textarea, select") as HTMLElement | null;
-    ed?.focus();
-  }
+  focusField(missing[0]);
 }
 
 async function runResetForm() {
@@ -813,25 +858,32 @@ function updateFormHint() {
   dom.formNextBtn.disabled = noFields;
 }
 
+let lastFieldKey: string | null = null;
+
 function focusField(f: FormFieldInfo) {
+  lastFieldKey = fieldKey(f);
   goToPage(f.page);
-  requestAnimationFrame(() => {
+  let tries = 0;
+  const attempt = () => {
     const wrap = document.querySelector(
-      `.formField[data-field-id="${CSS.escape(f.id)}"]`,
+      `.formField[data-field-key="${CSS.escape(fieldKey(f))}"]`,
     ) as HTMLElement | null;
-    if (!wrap) return;
+    if (!wrap) {
+      // Page not rendered yet — try again for ~1 s.
+      if (++tries < 60) requestAnimationFrame(attempt);
+      return;
+    }
     wrap.scrollIntoView({ block: "center", behavior: "smooth" });
     const ed = wrap.querySelector("input, textarea, select") as HTMLElement | null;
-    ed?.focus();
-  });
+    ed?.focus({ preventScroll: true });
+  };
+  requestAnimationFrame(attempt);
 }
 
 function navigateField(dir: 1 | -1) {
   const fields = orderedFillableFields();
   if (fields.length === 0) return;
-  const active = document.activeElement as HTMLElement | null;
-  const curId = active?.closest(".formField")?.getAttribute("data-field-id") ?? null;
-  let idx = curId ? fields.findIndex((f) => f.id === curId) : -1;
+  let idx = lastFieldKey ? fields.findIndex((f) => fieldKey(f) === lastFieldKey) : -1;
   idx = idx < 0
     ? (dir === 1 ? 0 : fields.length - 1)
     : (idx + dir + fields.length) % fields.length;
@@ -846,7 +898,7 @@ function toggleFormHighlight() {
 function renderAllForms() {
   const active = document.activeElement as HTMLElement | null;
   const activeWrap = active?.closest(".formField") as HTMLElement | null;
-  const activeFieldId = activeWrap?.dataset.fieldId ?? null;
+  const activeFieldKey = activeWrap?.dataset.fieldKey ?? null;
   let caretStart: number | null = null;
   let caretEnd: number | null = null;
   if (active && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) {
@@ -854,9 +906,9 @@ function renderAllForms() {
     caretEnd = active.selectionEnd;
   }
   for (let i = 0; i < state.slots.length; i++) renderFormFor(i);
-  if (activeFieldId) {
+  if (activeFieldKey) {
     const wrap = document.querySelector(
-      `.formField[data-field-id="${CSS.escape(activeFieldId)}"]`,
+      `.formField[data-field-key="${CSS.escape(activeFieldKey)}"]`,
     ) as HTMLElement | null;
     const ed = wrap?.querySelector("input, textarea, select") as HTMLElement | null;
     if (ed) {
@@ -875,6 +927,12 @@ function renderAllForms() {
   }
 }
 
+/** DOM key of a field widget. Radio buttons of one group share the field
+ * name, so their group index is part of the key. */
+function fieldKey(f: FormFieldInfo): string {
+  return f.kind === "radio" ? `${f.id}#${f.export_value ?? ""}` : f.id;
+}
+
 function renderFormFor(pageIdx: number) {
   const slot = state.slots[pageIdx];
   if (!slot) return;
@@ -886,8 +944,8 @@ function renderFormFor(pageIdx: number) {
   }
   const existing = new Map<string, HTMLElement>();
   for (const w of Array.from(slot.formLayer.children) as HTMLElement[]) {
-    const id = w.dataset.fieldId;
-    if (id) existing.set(id, w);
+    const key = w.dataset.fieldKey;
+    if (key) existing.set(key, w);
     else w.remove();
   }
   const seen = new Set<string>();
@@ -895,8 +953,9 @@ function renderFormFor(pageIdx: number) {
   for (const f of list) {
     const box = rotateRectToSlot(f.rect_pt, rot, sz, slot.img.width, slot.img.height);
     if (box.width <= 0 || box.height <= 0) continue;
-    seen.add(f.id);
-    let wrap = existing.get(f.id);
+    const key = fieldKey(f);
+    seen.add(key);
+    let wrap = existing.get(key);
     if (!wrap) {
       wrap = buildFormFieldWrap(f);
       slot.formLayer.appendChild(wrap);
@@ -908,8 +967,8 @@ function renderFormFor(pageIdx: number) {
     wrap.style.width = `${box.width}px`;
     wrap.style.height = `${box.height}px`;
   }
-  for (const [id, w] of existing) {
-    if (!seen.has(id)) w.remove();
+  for (const [key, w] of existing) {
+    if (!seen.has(key)) w.remove();
   }
 }
 
@@ -917,11 +976,12 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "formField";
   wrap.dataset.fieldId = f.id;
+  wrap.dataset.fieldKey = fieldKey(f);
   wrap.dataset.kind = f.kind;
   if (f.readonly) wrap.classList.add("readonly");
   if (f.required) wrap.classList.add("required");
   if (state.invalidFieldIds.has(f.id)) wrap.classList.add("invalid");
-  wrap.title = `${f.id}${f.required ? " *required" : ""}`;
+  wrap.title = `${f.id}${f.required ? ` (${t("form.requiredMark")})` : ""}`;
   if (f.kind === "text") {
     const ed = f.multiline
       ? document.createElement("textarea")
@@ -957,8 +1017,13 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
     cb.disabled = f.readonly;
     cb.addEventListener("change", () => {
       if (wrap.classList.contains("readonly")) return;
-      const onValue = f.kind === "checkbox" ? "Yes" : "On";
-      void writeFormField(f.id, cb.checked ? onValue : "Off");
+      if (f.kind === "radio") {
+        // Turn on exactly this option of the group ("radio:<index>").
+        if (!cb.checked) { cb.checked = true; return; }
+        void writeFormField(f.id, `radio:${f.export_value ?? "0"}`, true);
+        return;
+      }
+      void writeFormField(f.id, cb.checked ? "Yes" : "Off");
     });
     wrap.appendChild(cb);
   } else if (f.kind === "combobox" || f.kind === "listbox") {
@@ -983,7 +1048,7 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
     wrap.appendChild(sel);
   } else if (f.kind === "signature") {
     wrap.classList.add("signature");
-    wrap.textContent = "Signature";
+    wrap.textContent = t("btn.signature");
   }
   return wrap;
 }
@@ -992,7 +1057,7 @@ function updateFormFieldWrap(wrap: HTMLElement, f: FormFieldInfo) {
   wrap.classList.toggle("readonly", f.readonly);
   wrap.classList.toggle("required", f.required);
   wrap.classList.toggle("invalid", state.invalidFieldIds.has(f.id));
-  wrap.title = `${f.id}${f.required ? " *required" : ""}`;
+  wrap.title = `${f.id}${f.required ? ` (${t("form.requiredMark")})` : ""}`;
   const active = document.activeElement;
   if (f.kind === "text") {
     const ed = wrap.querySelector("input, textarea") as
@@ -1013,7 +1078,7 @@ function updateFormFieldWrap(wrap: HTMLElement, f: FormFieldInfo) {
   }
 }
 
-async function writeFormField(name: string, value: string) {
+async function writeFormField(name: string, value: string, reloadAll = false) {
   if (!state.currentDoc) return;
   setStatus(t("form.setting", { name }));
   try {
@@ -1035,6 +1100,10 @@ async function writeFormField(name: string, value: string) {
       }
       renderFormFor(updated.page);
     }
+    // A radio choice flips its siblings too — reload every widget state.
+    if (reloadAll) await refreshFormFields();
+    markDirty();
+    void refreshUndoUi();
     setStatus(t("form.fieldSaved", { name }));
   } catch (e) {
     setStatus(t("form.error", { e: String(e) }));
@@ -1048,10 +1117,7 @@ export function initAnnot() {
   dom.printToggleBtn.addEventListener("click", () => {
     state.printAnnotations = !state.printAnnotations;
     dom.printToggleBtn.classList.toggle("active", state.printAnnotations);
-    dom.printToggleBtn.title = state.printAnnotations
-      ? "Include new annotations when printing (toggle)"
-      : "Skip new annotations when printing (toggle)";
-    setStatus(state.printAnnotations ? "New annotations will print" : "New annotations will NOT print");
+    setStatus(state.printAnnotations ? t("st.annotPrintOn") : t("st.annotPrintOff"));
   });
 
   // Markup tool buttons
@@ -1074,8 +1140,8 @@ export function initAnnot() {
         const picked = await open({
           multiple: false,
           directory: false,
-          filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
-          title: "Pick stamp image",
+          filters: [{ name: t("lbl.images"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+          title: t("btn.pickImage"),
         });
         if (!picked || typeof picked !== "string") return;
         state.stampImagePath = picked;
@@ -1093,6 +1159,7 @@ export function initAnnot() {
   document.addEventListener("pointerdown", (ev) => {
     if (!state.eraseMode || !state.currentDoc) return;
     if (ev.button !== 0) return;
+    if (isOverlayControl(ev.target)) return;
     const hit = findSlotFromTarget(ev.target);
     if (!hit) return;
     const ipx = imagePxFromEvent(hit.slot, ev);
@@ -1116,6 +1183,7 @@ export function initAnnot() {
   document.addEventListener("pointerdown", (ev) => {
     if (!state.shapeTool || !state.currentDoc) return;
     if (ev.button !== 0) return;
+    if (isOverlayControl(ev.target)) return;
     const hit = findSlotFromTarget(ev.target);
     if (!hit) return;
     ev.preventDefault();
@@ -1180,7 +1248,7 @@ export function initAnnot() {
         stroke.push(pt.x, pt.y);
       }
       if (stroke.length < 4) return;
-      setStatus("Adding ink…");
+      setStatus(t("st.adding", { label: toolNoun("ink") }));
       try {
         const snap = await invoke<DocSnapshot>("add_ink", {
           document: state.currentDoc,
@@ -1194,9 +1262,9 @@ export function initAnnot() {
           },
         });
         applyDocSnapshot(snap);
-        setStatus("Ink added");
+        setStatus(t("st.added", { label: toolNoun("ink") }));
       } catch (e) {
-        setStatus(`ink error: ${e}`);
+        setStatus(t("st.addError", { label: toolNoun("ink"), e: String(e) }));
       }
       return;
     }
@@ -1239,12 +1307,12 @@ export function initAnnot() {
         : "document";
       const defaultName = `${base}_page_${ds.pageIdx + 1}_region.pdf`;
       const path = await save({
-        title: "Save region as…",
+        title: t("lbl.region"),
         defaultPath: defaultName,
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
       if (!path || typeof path !== "string") return;
-      setStatus("Saving region…");
+      setStatus(t("st.saving"));
       try {
         await invoke("save_region", {
           document: state.currentDoc,
@@ -1252,9 +1320,9 @@ export function initAnnot() {
           rect,
           path,
         });
-        setStatus(`Region saved → ${path}`);
+        setStatus(t("st.saved", { path }));
       } catch (e) {
-        setStatus(`Region error: ${e}`);
+        setStatus(t("st.saveError", { e: String(e) }));
       }
       return;
     }
@@ -1275,7 +1343,7 @@ export function initAnnot() {
 
     if (tool === "stamp") {
       if (!state.stampImagePath) {
-        setStatus("Pick a stamp image first");
+        setStatus(t("st.pickImageFirst"));
         return;
       }
       const rect: RectPt = {
@@ -1284,16 +1352,16 @@ export function initAnnot() {
         x1: Math.max(start.x, end.x),
         y1: Math.max(start.y, end.y),
       };
-      setStatus("Stamping…");
+      setStatus(t("st.adding", { label: toolNoun("stamp") }));
       try {
         const snap = await invoke<DocSnapshot>("add_stamp", {
           document: state.currentDoc,
           args: { page: ds.pageIdx, rect, image_path: state.stampImagePath, opacity: 1.0, print: state.printAnnotations },
         });
         applyDocSnapshot(snap);
-        setStatus("Stamp added");
+        setStatus(t("st.added", { label: toolNoun("stamp") }));
       } catch (e) {
-        setStatus(`stamp error: ${e}`);
+        setStatus(t("st.addError", { label: toolNoun("stamp"), e: String(e) }));
       }
       return;
     }
@@ -1311,7 +1379,7 @@ export function initAnnot() {
       };
     }
     const stroke = hexToRgb01(dom.annotColorInput.value);
-    setStatus(`Adding ${tool}…`);
+    setStatus(t("st.adding", { label: toolNoun(tool) }));
     try {
       const snap = await invoke<DocSnapshot>("add_shape", {
         document: state.currentDoc,
@@ -1326,9 +1394,9 @@ export function initAnnot() {
         },
       });
       applyDocSnapshot(snap);
-      setStatus(`${tool} added`);
+      setStatus(t("st.added", { label: toolNoun(tool) }));
     } catch (e) {
-      setStatus(`shape error: ${e}`);
+      setStatus(t("st.addError", { label: toolNoun(tool), e: String(e) }));
     }
   });
 
@@ -1346,17 +1414,18 @@ export function initAnnot() {
       ? state.currentDocPath.replace(/\\/g, "/").split("/").pop()!.replace(/\.pdf$/i, "")
       : "annotations";
     const path = await save({
-      title: "Export annotations as XFDF",
+      title: t("tip.exportXfdf"),
       defaultPath: `${base}.xfdf`,
       filters: [{ name: "XFDF", extensions: ["xfdf", "xml"] }],
     });
     if (!path || typeof path !== "string") return;
-    setStatus("Exporting XFDF…");
+    setStatus(t("st.saving"));
     try {
       const len = await invoke<number>("export_annotations_xfdf", { document: state.currentDoc, path });
-      setStatus(`Exported ${len} bytes → ${path}`);
+      void len;
+      setStatus(t("st.saved", { path }));
     } catch (e) {
-      setStatus(`xfdf export error: ${e}`);
+      setStatus(t("st.error", { e: String(e) }));
     }
   });
 
@@ -1366,20 +1435,20 @@ export function initAnnot() {
       multiple: false,
       directory: false,
       filters: [{ name: "XFDF", extensions: ["xfdf", "xml"] }],
-      title: "Import XFDF",
+      title: t("tip.importXfdf"),
     });
     if (!picked || typeof picked !== "string") return;
-    setStatus("Importing XFDF…");
+    setStatus(t("st.loading"));
     try {
       const snap = await invoke<DocSnapshot>("import_annotations_xfdf", {
         document: state.currentDoc,
         path: picked,
       });
       applyDocSnapshot(snap);
-      setStatus("XFDF imported");
+      setStatus(t("xfdf.imported"));
       void refreshComments();
     } catch (e) {
-      setStatus(`xfdf import error: ${e}`);
+      setStatus(t("st.error", { e: String(e) }));
     }
   });
 
@@ -1411,9 +1480,15 @@ export function initAnnot() {
     await refreshComments();
     await refreshFormFields();
   };
+  // Next/previous field continues from the field the user last focused.
+  document.addEventListener("focusin", (e) => {
+    const w = (e.target as Element | null)?.closest?.(".formField") as HTMLElement | null;
+    if (w?.dataset.fieldKey) lastFieldKey = w.dataset.fieldKey;
+  });
   // Populate the annotation cache when a document is (re)opened.
   document.addEventListener("rustpdf:doc-changed", () => {
     pinnedNotes.clear();
+    lastFieldKey = null;
     void refreshComments();
   });
 }

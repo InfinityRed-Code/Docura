@@ -169,12 +169,15 @@ async function commitOcr() {
   hideBanner();
   void invoke("set_ocr_language", { lang }).catch(() => {});
   setStatus(t("ocr.working"));
+  const doc = state.currentDoc;
   try {
     await ensureLanguage(lang);
     const res = await invoke<OcrRunResult>("ocr_document", {
-      document: state.currentDoc,
+      document: doc,
       args: { pages, lang, preprocess, skip_text_pages: skipText },
     });
+    // OCR can take minutes; ignore the result if another file was opened.
+    if (doc !== state.currentDoc) return;
     applyDocSnapshot(res.snapshot);
     const skipped =
       res.pages_skipped > 0 ? t("ocr.doneSkipped", { n: res.pages_skipped }) : "";
@@ -196,7 +199,7 @@ async function batchOcr() {
   if (!sel) return;
   const paths = Array.isArray(sel) ? sel : [sel];
   if (paths.length === 0) return;
-  const outDir = await open({ directory: true });
+  const outDir = await open({ directory: true, title: t("tip.pickOutFolder") });
   if (!outDir || typeof outDir !== "string") return;
   const lang = await invoke<string>("get_ocr_language").catch(() => "deu");
   setStatus(t("ocr.working"));
@@ -244,8 +247,6 @@ async function maybeShowBanner() {
 export function initOcr() {
   el("ocrBtn").addEventListener("click", () => void openOcrDialog());
   el("ocrBatchBtn").addEventListener("click", () => void batchOcr());
-  // OCR ("Schnellerkennung") also offered on the Edit tab.
-  document.getElementById("editOcrBtn")?.addEventListener("click", () => void openOcrDialog());
   el("ocrDlgClose").addEventListener("click", closeOcrDialog);
   el("ocrCancel").addEventListener("click", closeOcrDialog);
   el("ocrCommit").addEventListener("click", () => void commitOcr());

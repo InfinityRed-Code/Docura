@@ -8,7 +8,7 @@ import type { OpenedDocument } from "./types";
 import { state } from "./state";
 import { t } from "./i18n";
 import { setStatus } from "./dom";
-import { applyOpenedDoc } from "./doc";
+import { applyOpenedDoc, confirmDiscardChanges } from "./doc";
 
 /** Filename stem of the open document, e.g. "report" for ".../report.pdf". */
 function docBase(): string {
@@ -83,7 +83,7 @@ async function exportText() {
   }
   const dest = await save({
     defaultPath: `${docBase()}.txt`,
-    filters: [{ name: "Text", extensions: ["txt"] }],
+    filters: [{ name: t("btn.expText"), extensions: ["txt"] }],
   });
   if (!dest || typeof dest !== "string") return;
   setStatus(t("export.working"));
@@ -178,11 +178,12 @@ async function officeToPdf() {
     }],
   });
   if (!sel || typeof sel !== "string") return;
+  if (!(await confirmDiscardChanges())) return;
   setStatus(t("export.officeWorking"));
   try {
     type Res = OpenedDocument & { temp_path: string };
     const res = await invoke<Res>("office_to_pdf_and_open", { path: sel });
-    applyOpenedDoc(res, res.temp_path);
+    applyOpenedDoc(res, res.temp_path, { temp: true });
     setStatus(t("export.officeDone"));
   } catch (e) {
     if (String(e).includes("LIBREOFFICE_MISSING")) setStatus(t("export.loMissing"));
@@ -195,16 +196,17 @@ async function officeToPdf() {
 async function imagesToPdf() {
   const sel = await open({
     multiple: true,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "bmp", "webp"] }],
+    filters: [{ name: t("lbl.images"), extensions: ["png", "jpg", "jpeg", "bmp", "webp"] }],
   });
   if (!sel) return;
   const paths = Array.isArray(sel) ? sel : [sel];
   if (paths.length === 0) return;
+  if (!(await confirmDiscardChanges())) return;
   setStatus(t("export.working"));
   try {
     type Res = OpenedDocument & { temp_path: string };
     const res = await invoke<Res>("images_to_pdf_and_open", { paths });
-    applyOpenedDoc(res, res.temp_path);
+    applyOpenedDoc(res, res.temp_path, { temp: true });
     setStatus(t("export.imagesPdfDone", { n: paths.length }));
   } catch (e) {
     setStatus(`${t("export.error")}: ${e}`);
@@ -226,9 +228,6 @@ export function initExport() {
   document.getElementById("exportHtmlBtn")!.addEventListener("click", () => void exportHtml());
   document.getElementById("exportDocxBtn")!.addEventListener("click", () => void exportDocx());
   document.getElementById("exportXlsxBtn")!.addEventListener("click", () => void exportXlsx());
-  // Same Office export, surfaced on the Edit tab ("Nach Office").
-  document.getElementById("editExportDocxBtn")?.addEventListener("click", () => void exportDocx());
-  document.getElementById("editExportXlsxBtn")?.addEventListener("click", () => void exportXlsx());
   document.getElementById("imagesToPdfBtn")!.addEventListener("click", () => void imagesToPdf());
   document.getElementById("officeToPdfBtn")!.addEventListener("click", () => void officeToPdf());
 }
