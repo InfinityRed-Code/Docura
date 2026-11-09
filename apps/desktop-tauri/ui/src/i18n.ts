@@ -348,6 +348,8 @@ const en: Dict = {
   "tip.winMax": "Maximize",
   "tip.winRestore": "Restore",
   "tip.winClose": "Close",
+  "tip.ribbonAutoHide": "Show the ribbon only when hovering the tabs (Ctrl+F1)",
+  "tip.ribbonPin": "Always show the ribbon (Ctrl+F1)",
   "st.encryptedInput": "{file} is password-protected — open it separately and save it without protection first",
   "st.pdfaNoProtection": "note: PDF/A does not allow encryption, the password protection was not applied",
   // ---- Redesign (v1.2) ----
@@ -871,6 +873,8 @@ const de: Dict = {
   "tip.winMax": "Maximieren",
   "tip.winRestore": "Wiederherstellen",
   "tip.winClose": "Schließen",
+  "tip.ribbonAutoHide": "Menüband nur beim Überfahren der Reiter einblenden (Strg+F1)",
+  "tip.ribbonPin": "Menüband immer anzeigen (Strg+F1)",
   "st.encryptedInput": "{file} ist passwortgeschützt — zuerst separat öffnen und ohne Schutz speichern",
   "st.pdfaNoProtection": "Hinweis: PDF/A erlaubt keine Verschlüsselung, der Passwortschutz wurde nicht angewendet",
   // ---- Redesign (v1.2) ----

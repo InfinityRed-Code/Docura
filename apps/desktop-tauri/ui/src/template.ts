@@ -35,6 +35,7 @@ export function buildHtml(): string {
       <button class="ribbonTab" role="tab" data-ribbon-tab="sign">${t("tab.sign")}</button>
       <button class="ribbonTab" role="tab" data-ribbon-tab="convert">${t("tab.convert")}</button>
       <button class="ribbonTab" role="tab" data-ribbon-tab="protect">${t("tab.protect")}</button>
+      <button id="ribbonPinBtn" class="ribbonPin" type="button"><i data-lucide="chevron-down"></i></button>
     </div>
     <div class="ribbonBody" data-active="reader">
       <!-- ===== Start ===== -->
@@ -831,6 +832,25 @@ export const CSS = `
   .ribbonTab:hover { background:transparent; color:var(--text); }
   .ribbonTab.active { background:transparent; color:var(--accent); font-weight:600;
                       border-bottom:2px solid var(--accent); }
+  /* Ribbon display toggle at the right end of the tab strip: chevron down =
+     ribbon always shown, chevron up = auto-hide (body shows on tab hover). */
+  .ribbonPin { margin-left:auto; align-self:center; width:28px; height:24px; padding:0; border:none;
+               border-radius:4px; background:transparent; color:var(--text-3); cursor:pointer;
+               display:inline-flex; align-items:center; justify-content:center; }
+  .ribbonPin:hover { background:var(--bg-3); color:var(--text); }
+  .ribbonPin svg.lucide { width:15px; height:15px; }
+  /* Auto-hide: the body leaves the layout and slides in as an overlay, so
+     the viewer keeps its size (no re-render) while the ribbon peeks. */
+  .ribbon.autoHide { z-index:39; }
+  .ribbon.autoHide .ribbonBody { position:absolute; top:100%; left:0; right:0;
+      border-bottom:1px solid var(--border); box-shadow:0 8px 18px rgba(20,30,50,0.16);
+      visibility:hidden; opacity:0; transform:translateY(-6px); pointer-events:none;
+      transition: opacity .12s ease, transform .12s ease, visibility 0s linear .12s; }
+  .ribbon.autoHide.peek .ribbonBody { visibility:visible; opacity:1; transform:none; pointer-events:auto;
+      transition: opacity .12s ease, transform .12s ease; }
+  @media (prefers-reduced-motion: reduce) {
+    .ribbon.autoHide .ribbonBody, .ribbon.autoHide.peek .ribbonBody { transition:none; transform:none; }
+  }
   /* Quick-access toolbar in the title bar: compact icon-only cluster
      (open/save/print/undo/redo/page-nav). */
   .qat { display:inline-flex; align-items:center; gap:0.1rem; padding:0 0.35rem;

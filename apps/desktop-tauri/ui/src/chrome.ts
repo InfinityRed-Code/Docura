@@ -63,6 +63,140 @@ function initWindowControls() {
   });
 }
 
+// ---------- Ribbon auto-hide ----------
+//
+// Pinned (default, chevron down): the ribbon body always takes its row.
+// Auto-hide (chevron up): only the tab strip stays; hovering a tab — or
+// reaching it with the keyboard — slides the body in as an overlay, and it
+// hides again shortly after the pointer leaves tabs and body. The choice is
+// remembered; Ctrl+F1 toggles it like in Office.
+
+const RIBBON_PINNED_KEY = "docura-ribbon-pinned";
+const PEEK_OPEN_MS = 120; // brushing past the tabs must not flash the ribbon
+const PEEK_CLOSE_MS = 350; // bridges the gap between tabs and body
+
+let ribbonPinned = true;
+let peekOpenTimer = 0;
+let peekCloseTimer = 0;
+// A native popup (select list, colour picker) is open. The pointer is
+// outside the page while the user picks, so hover can't be trusted then.
+let nativePopupAt = 0;
+let keyboardNav = false;
+
+function ribbonEl(): HTMLElement {
+  return document.querySelector<HTMLElement>(".ribbon")!;
+}
+
+function peekRibbon(on: boolean) {
+  window.clearTimeout(peekOpenTimer);
+  window.clearTimeout(peekCloseTimer);
+  ribbonEl().classList.toggle("peek", on && !ribbonPinned);
+}
+
+/** Whether something in the peeking ribbon still needs it visible. */
+function ribbonBusy(): boolean {
+  if (nativePopupAt) return true;
+  const ribbon = ribbonEl();
+  if (ribbon.querySelector(".tabStrip:hover, .ribbonBody:hover")) return true;
+  if (dom.ribbonBody.querySelector(".popover:not(.hidden), .menu:not(.hidden)")) return true;
+  const ae = document.activeElement as HTMLElement | null;
+  if (!ae || !(dom.ribbonBody.contains(ae) || ae.closest(".tabStrip"))) return false;
+  // Keyboard navigation through the ribbon, or typing into one of its fields.
+  if (keyboardNav) return true;
+  return ae.tagName === "TEXTAREA" || (ae.tagName === "INPUT"
+    && !/^(button|checkbox|radio|color|range)$/.test((ae as HTMLInputElement).type));
+}
+
+function scheduleRibbonHide() {
+  if (ribbonPinned) return;
+  window.clearTimeout(peekCloseTimer);
+  peekCloseTimer = window.setTimeout(() => {
+    if (!ribbonBusy()) peekRibbon(false);
+  }, PEEK_CLOSE_MS);
+}
+
+function setRibbonPinned(pinned: boolean, persist = true) {
+  const changed = ribbonPinned !== pinned;
+  ribbonPinned = pinned;
+  if (persist) {
+    try { localStorage.setItem(RIBBON_PINNED_KEY, pinned ? "1" : "0"); } catch {}
+  }
+  const ribbon = ribbonEl();
+  ribbon.classList.toggle("autoHide", !pinned);
+  peekRibbon(false);
+  const btn = document.getElementById("ribbonPinBtn")!;
+  btn.innerHTML = `<i data-lucide="${pinned ? "chevron-down" : "chevron-up"}"></i>`;
+  const tip = pinned ? t("tip.ribbonAutoHide") : t("tip.ribbonPin");
+  btn.title = tip;
+  btn.setAttribute("aria-label", tip);
+  refreshIcons();
+  // The viewer gained / lost the ribbon row without a window resize.
+  if (changed && state.currentDoc && (state.fitMode === "width" || state.fitMode === "page")) reflow();
+}
+
+export function toggleRibbonPinned() {
+  setRibbonPinned(!ribbonPinned);
+}
+
+function initRibbonAutoHide() {
+  const ribbon = ribbonEl();
+  const strip = ribbon.querySelector<HTMLElement>(".tabStrip")!;
+  const body = dom.ribbonBody;
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(RIBBON_PINNED_KEY); } catch {}
+  setRibbonPinned(saved !== "0", false);
+  document.getElementById("ribbonPinBtn")!.addEventListener("click", toggleRibbonPinned);
+
+  strip.querySelectorAll<HTMLElement>(".ribbonTab").forEach((tab) => {
+    tab.addEventListener("pointerenter", () => {
+      if (ribbonPinned) return;
+      if (ribbon.classList.contains("peek")) { window.clearTimeout(peekCloseTimer); return; }
+      window.clearTimeout(peekOpenTimer);
+      peekOpenTimer = window.setTimeout(() => {
+        if (tab.matches(":hover")) peekRibbon(true);
+      }, PEEK_OPEN_MS);
+    });
+    // A click (or touch) opens at once.
+    tab.addEventListener("click", () => peekRibbon(true));
+  });
+  for (const el of [strip, body]) {
+    el.addEventListener("pointerenter", () => window.clearTimeout(peekCloseTimer));
+    el.addEventListener("pointerleave", () => {
+      window.clearTimeout(peekOpenTimer);
+      scheduleRibbonHide();
+    });
+  }
+
+  // Keyboard: Tab into the strip shows the body; leaving hides it again.
+  document.addEventListener("keydown", () => { keyboardNav = true; }, true);
+  document.addEventListener("pointerdown", (e) => {
+    keyboardNav = false;
+    if (!ribbon.contains(e.target as Node)) scheduleRibbonHide();
+  }, true);
+  ribbon.addEventListener("focusin", (e) => {
+    if (!ribbonPinned && keyboardNav && (e.target as HTMLElement).closest(".tabStrip, .ribbonBody")) {
+      peekRibbon(true);
+    }
+  });
+  ribbon.addEventListener("focusout", () => scheduleRibbonHide());
+
+  // Native popups take the pointer off the page until they close.
+  body.addEventListener("pointerdown", (e) => {
+    if ((e.target as HTMLElement).matches("select, input[type=color]")) nativePopupAt = performance.now();
+  });
+  const endNativePopup = () => {
+    if (!nativePopupAt) return;
+    nativePopupAt = 0;
+    scheduleRibbonHide();
+  };
+  body.addEventListener("change", endNativePopup);
+  body.addEventListener("focusout", endNativePopup);
+  // Closed without a choice: the page gets pointer moves again.
+  document.addEventListener("pointermove", () => {
+    if (nativePopupAt && performance.now() - nativePopupAt > 400) endNativePopup();
+  }, true);
+}
+
 // ---------- Search ----------
 
 function openSearch() {
@@ -273,6 +407,7 @@ function closeOverlay(o: HTMLElement) {
 export function initChrome() {
   // Window controls (custom title bar)
   initWindowControls();
+  initRibbonAutoHide();
 
   // Search panel
   document.getElementById("searchBtn")!.addEventListener("click", openSearch);
@@ -512,6 +647,7 @@ export function initChrome() {
     if (openOverlay()) return;
     const key = e.key.toLowerCase();
     if (e.key === "F11") { e.preventDefault(); void toggleFullscreen(); return; }
+    if (e.ctrlKey && e.key === "F1") { e.preventDefault(); toggleRibbonPinned(); return; }
     if (e.key === "F5") { e.preventDefault(); void togglePresentation(); return; }
     if (e.key === "F4") {
       e.preventDefault();
