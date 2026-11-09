@@ -11,6 +11,17 @@ scope each tag landed.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-09
+
+More room for the document: the ribbon can auto-hide.
+
+### Added
+- **Ribbon auto-hide.** A small arrow at the right end of the tab row toggles
+  the ribbon: arrow down = always shown, arrow up = auto-hide — the command
+  row then only slides in (as an overlay, the document doesn't move) while
+  the pointer is on the tabs or the ribbon, giving the document ~80 px more
+  height. Remembered across starts; Ctrl+F1 toggles it as well.
+
 ## [1.1.1] — 2026-11-09
 
 Faster, complete rendering of large CAD / scanned plans.
