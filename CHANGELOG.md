@@ -11,6 +11,10 @@ scope each tag landed.
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-11-09
+
+Faster, complete rendering of large CAD / scanned plans.
+
 ### Fixed — large CAD / scanned plans
 - **Plans with huge scanned images rendered half black.** PDFium refuses to
   inflate more than 1 GiB from a single Flate stream, so the lower part of
