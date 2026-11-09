@@ -33,6 +33,26 @@ pub trait PdfEngine: Send + Sync {
     fn page_count(&self, doc: DocumentId) -> CoreResult<u32>;
     fn page_size(&self, doc: DocumentId, page: PageIndex) -> CoreResult<PageSize>;
     fn render(&self, req: RenderRequest) -> CoreResult<RenderedPage>;
+    /// Render only the `width × height` pixel rectangle at (`x`, `y`) of the
+    /// page as it would appear rendered whole at `req.zoom` / `req.rotation`.
+    /// Used for sharp detail at zoom levels where a full-page bitmap would be
+    /// huge. Default: unsupported.
+    fn render_region(
+        &self,
+        _req: RenderRequest,
+        _x: i32,
+        _y: i32,
+        _width: u32,
+        _height: u32,
+    ) -> CoreResult<RenderedPage> {
+        Err(crate::error::CoreError::Engine("region rendering is not supported".into()))
+    }
+    /// For documents rendered from a downsampled proxy (huge scanned
+    /// images): the zoom up to which full-page renders are sharp. Above it
+    /// callers should switch to `render_region`. `None` = no proxy.
+    fn detail_scale(&self, _doc: DocumentId) -> Option<f32> {
+        None
+    }
     fn extract_text(&self, doc: DocumentId, page: PageIndex) -> CoreResult<String>;
     fn page_text_layout(&self, doc: DocumentId, page: PageIndex) -> CoreResult<Vec<TextRun>>;
     fn outline(&self, doc: DocumentId) -> CoreResult<Vec<OutlineNode>>;

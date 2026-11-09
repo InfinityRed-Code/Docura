@@ -987,11 +987,17 @@ export const CSS = `
   .outlineChildren { margin-left: 0.8rem; border-left:1px solid var(--border); padding-left:0.3rem; }
   .viewer { flex:1; overflow:auto; background:var(--canvas); padding:1rem; }
   body.wheelZoomMode .viewer { padding:0; }
-  .pageList { display:flex; flex-direction:column; align-items:center; gap: 1rem; box-sizing:border-box; }
-  .pageList.double { flex-flow: row wrap; justify-content:center; align-content:flex-start; gap: 0.6rem 0.6rem; }
+  /* "safe center": once a zoomed page is wider than the viewer it aligns to
+     the start instead of overflowing to the left, where scrolling (and the
+     hand tool) could never reach it. */
+  .pageList { display:flex; flex-direction:column; align-items:safe center; gap: 1rem; box-sizing:border-box; }
+  .pageList.double { flex-flow: row wrap; justify-content:safe center; align-content:flex-start; gap: 0.6rem 0.6rem; }
   .pageList.single > .pageSlot:not(.current) { display:none; }
   .pageSlot { position:relative; background:white; box-shadow: 0 2px 10px rgba(0,0,0,0.35); flex: 0 0 auto; }
   .pageSlot img.page { display:block; width:100%; height:100%; }
+  /* Sharp render of the visible window at high zoom, over the upscaled page. */
+  .pageSlot img.detail { position:absolute; display:block; pointer-events:none; }
+  body.dark .pageSlot img.detail { filter: invert(0.92) hue-rotate(180deg); }
   /* Loading skeleton for never-rendered pages: a blank sheet with a soft
      shimmer sweep (replaces the old diagonal hatch). */
   .pageSlot .placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;

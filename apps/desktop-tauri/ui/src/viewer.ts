@@ -13,6 +13,16 @@ const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
 const EVICT_DIST = 10;
 const MAX_RENDER_DIST = 6;
+// Largest whole-page bitmap requested. Beyond it (deep zoom on large
+// formats) the page bitmap stays at this size, upscaled, and the visible
+// window is rendered sharply on top ("detail").
+const MAX_PAGE_PIXELS = 12_000_000;
+// Detail windows extend this far past the viewport and snap to this grid,
+// so small scrolls reuse the current one.
+const DETAIL_MARGIN = 320;
+const DETAIL_SNAP = 256;
+// Quiet time after the last zoom step before re-rendering.
+const ZOOM_SETTLE_MS = 160;
 
 export function syncZoomUi() {
   const pct = Math.round(state.zoom * 100);
@@ -42,6 +52,7 @@ export function stepZoom(dir: 1 | -1) {
     : [...ZOOM_STEPS].reverse().find((v) => v < z - 0.001) ?? ZOOM_STEPS[0];
   state.fitMode = "custom";
   state.zoom = clampZoom(next);
+  holdRendersForZoom();
   reflow();
 }
 
@@ -154,6 +165,7 @@ export function makeSlot(pageIdx: number): Slot {
   return {
     wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, redactLayer, drawLayer, formLayer, placeholder,
     loaded: false, renderingZoom: null, lastZoom: null,
+    baseZoom: null, baseRot: null, baseGen: -1, detail: null, detailKey: null,
   };
 }
 
@@ -210,6 +222,8 @@ export function recenterScrollX() {
 export function evictSlot(idx: number) {
   const slot = state.slots[idx];
   if (!slot || !slot.loaded) return;
+  dropDetail(slot);
+  slot.baseZoom = null;
   slot.img.removeAttribute("src");
   slot.img.width = 0;
   slot.img.height = 0;
@@ -249,14 +263,51 @@ export function setupObserver() {
   for (const s of state.slots) state.observer.observe(s.wrap);
 }
 
+/** Zoom at which page `idx` is rendered as a whole: the view zoom, capped
+ * by the bitmap budget and — for proxied scans — the proxy's sharpness. */
+export function baseZoomFor(idx: number): number {
+  const rs = rotatedSize(idx);
+  const area = Math.max(1, rs.w * rs.h);
+  let z = Math.min(state.zoom, Math.sqrt(MAX_PAGE_PIXELS / area));
+  if (state.detailScale) z = Math.min(z, state.detailScale);
+  return z;
+}
+
+function needsDetail(idx: number): boolean {
+  return baseZoomFor(idx) < state.zoom - 1e-3;
+}
+
 export function scheduleRender(idx: number) {
   if (!state.currentDoc) return;
   const slot = state.slots[idx];
   if (!slot) return;
   if (slot.loaded && slot.lastZoom === state.zoom) return;
+  // Deep zoom on a large page: the capped bitmap is still valid — only the
+  // overlays (text, links, …) and the sharp detail window need updating.
+  if (
+    slot.img.getAttribute("src") &&
+    slot.baseGen === state.contentGen &&
+    slot.baseRot === effectiveRotation(idx) &&
+    slot.baseZoom !== null &&
+    Math.abs(slot.baseZoom - baseZoomFor(idx)) < 1e-4
+  ) {
+    slot.loaded = true;
+    slot.lastZoom = state.zoom;
+    slot.placeholder.style.display = "none";
+    void refreshLayers(idx);
+    scheduleDetailUpdate();
+    return;
+  }
   state.renderQueue.add(idx);
   pumpRenderQueue();
 }
+
+/** Hold renders back while the user keeps zooming. */
+export function holdRendersForZoom() {
+  state.renderHoldUntil = performance.now() + ZOOM_SETTLE_MS;
+}
+
+let holdTimer: number | null = null;
 
 function pruneRenderQueue() {
   for (const idx of state.renderQueue) {
@@ -274,6 +325,16 @@ function pruneRenderQueue() {
 const RENDER_CONCURRENCY = 3;
 
 function pumpRenderQueue() {
+  const wait = state.renderHoldUntil - performance.now();
+  if (wait > 0) {
+    if (holdTimer === null) {
+      holdTimer = window.setTimeout(() => {
+        holdTimer = null;
+        pumpRenderQueue();
+      }, wait + 5);
+    }
+    return;
+  }
   pruneRenderQueue();
   while (state.renderInFlight.size < RENDER_CONCURRENCY) {
     const nearest = pickNearest();
@@ -308,36 +369,147 @@ async function renderSlot(idx: number) {
   const docAtStart = state.currentDoc;
   const zoomAtStart = state.zoom;
   const epochAtStart = state.renderEpoch;
+  const genAtStart = state.contentGen;
+  const rot = effectiveRotation(idx);
+  const renderZoom = baseZoomFor(idx);
   slot.renderingZoom = zoomAtStart;
   try {
     const res = await invoke<Rendered>("render_page", {
       document: docAtStart,
       page: idx,
-      zoom: zoomAtStart,
-      rotation: effectiveRotation(idx),
+      zoom: renderZoom,
+      rotation: rot,
     });
     // Drop the result if the view was invalidated (zoom/rotate/doc change) or
     // the document switched while this render was in flight.
     if (docAtStart !== state.currentDoc || epochAtStart !== state.renderEpoch) return;
     slot.img.src = res.data_url;
-    slot.img.width = res.width;
-    slot.img.height = res.height;
-    slot.wrap.style.width = `${res.width}px`;
-    slot.wrap.style.height = `${res.height}px`;
+    // The slot keeps its full CSS size; a capped bitmap is upscaled.
+    const rs = rotatedSize(idx);
+    const cw = Math.round(rs.w * zoomAtStart);
+    const ch = Math.round(rs.h * zoomAtStart);
+    slot.img.width = cw;
+    slot.img.height = ch;
+    slot.wrap.style.width = `${cw}px`;
+    slot.wrap.style.height = `${ch}px`;
     slot.placeholder.style.display = "none";
     slot.loaded = true;
     slot.lastZoom = zoomAtStart;
-    await ensureTextLayer(idx);
-    renderHighlightsFor(idx);
-    await ensureLinkLayer(idx);
-    callbacks.renderNotesFor(idx);
-    callbacks.renderRedactsFor(idx);
-    callbacks.renderFormFor(idx);
+    slot.baseZoom = renderZoom;
+    slot.baseRot = rot;
+    slot.baseGen = genAtStart;
+    await refreshLayers(idx);
+    if (needsDetail(idx)) scheduleDetailUpdate();
   } catch (e) {
     // A render for a document that has since been closed is not news.
     if (docAtStart === state.currentDoc) setStatus(t("st.error", { e: `${t("page.one", { n: idx + 1 })}: ${e}` }));
   } finally {
     slot.renderingZoom = null;
+  }
+}
+
+/** Rebuild the per-page overlays (text, search hits, links, notes,
+ * redactions, form fields) for the slot's current size. */
+async function refreshLayers(idx: number) {
+  await ensureTextLayer(idx);
+  renderHighlightsFor(idx);
+  await ensureLinkLayer(idx);
+  callbacks.renderNotesFor(idx);
+  callbacks.renderRedactsFor(idx);
+  callbacks.renderFormFor(idx);
+}
+
+// ---------- Sharp detail window (deep zoom / huge scans) ----------
+
+function dropDetail(slot: Slot) {
+  slot.detail?.remove();
+  slot.detail = null;
+  slot.detailKey = null;
+}
+
+let detailTimer: number | null = null;
+
+/** Refresh the detail windows shortly after scrolling/zooming stops. */
+export function scheduleDetailUpdate() {
+  if (detailTimer !== null) clearTimeout(detailTimer);
+  detailTimer = window.setTimeout(() => {
+    detailTimer = null;
+    updateDetails();
+  }, 120);
+}
+
+function updateDetails() {
+  if (!state.currentDoc) return;
+  const vr = dom.viewer.getBoundingClientRect();
+  for (let i = 0; i < state.slots.length; i++) {
+    const slot = state.slots[i];
+    if (!slot.loaded || !needsDetail(i)) {
+      if (slot.detail) dropDetail(slot);
+      continue;
+    }
+    const wr = slot.wrap.getBoundingClientRect();
+    if (wr.bottom < vr.top || wr.top > vr.bottom || wr.right < vr.left || wr.left > vr.right) {
+      if (slot.detail) dropDetail(slot);
+      continue;
+    }
+    void updateDetail(i, vr, wr);
+  }
+}
+
+async function updateDetail(idx: number, vr: DOMRect, wr: DOMRect) {
+  const slot = state.slots[idx];
+  const cw = Math.round(wr.width);
+  const ch = Math.round(wr.height);
+  // Visible part of the page, in page-slot pixels.
+  const vx0 = Math.max(0, vr.left - wr.left);
+  const vy0 = Math.max(0, vr.top - wr.top);
+  const vx1 = Math.min(cw, vr.right - wr.left);
+  const vy1 = Math.min(ch, vr.bottom - wr.top);
+  if (vx1 <= vx0 || vy1 <= vy0) return;
+  const cur = slot.detail;
+  const zoom = state.zoom;
+  if (
+    cur && cur.dataset.zoom === String(zoom) &&
+    Number(cur.dataset.x0) <= vx0 && Number(cur.dataset.y0) <= vy0 &&
+    Number(cur.dataset.x1) >= vx1 && Number(cur.dataset.y1) >= vy1
+  ) return; // current window still covers the view
+  const x0 = Math.max(0, Math.floor((vx0 - DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
+  const y0 = Math.max(0, Math.floor((vy0 - DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
+  const x1 = Math.min(cw, Math.ceil((vx1 + DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
+  const y1 = Math.min(ch, Math.ceil((vy1 + DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
+  const rot = effectiveRotation(idx);
+  const key = `${zoom}|${rot}|${state.contentGen}|${x0},${y0},${x1},${y1}`;
+  if (slot.detailKey === key) return; // already showing / requested
+  slot.detailKey = key;
+  const doc = state.currentDoc;
+  const epoch = state.renderEpoch;
+  try {
+    const res = await invoke<Rendered>("render_region", {
+      document: doc, page: idx, zoom, rotation: rot,
+      x: x0, y: y0, width: x1 - x0, height: y1 - y0,
+    });
+    if (doc !== state.currentDoc || epoch !== state.renderEpoch || slot.detailKey !== key) return;
+    let img = slot.detail;
+    if (!img) {
+      img = document.createElement("img");
+      img.className = "detail";
+      img.alt = "";
+      img.draggable = false;
+      slot.img.after(img);
+      slot.detail = img;
+    }
+    img.src = res.data_url;
+    img.style.left = `${x0}px`;
+    img.style.top = `${y0}px`;
+    img.style.width = `${x1 - x0}px`;
+    img.style.height = `${y1 - y0}px`;
+    img.dataset.zoom = String(zoom);
+    img.dataset.x0 = String(x0);
+    img.dataset.y0 = String(y0);
+    img.dataset.x1 = String(x1);
+    img.dataset.y1 = String(y1);
+  } catch {
+    if (slot.detailKey === key) slot.detailKey = null;
   }
 }
 
@@ -512,6 +684,7 @@ export function invalidateRenders() {
     // zoom/rotate. The placeholder only shows for never-rendered slots.
     if (!s.img.getAttribute("src")) s.placeholder.style.display = "";
     s.linkLayer.innerHTML = "";
+    dropDetail(s);
   }
   state.renderQueue.clear();
   // Supersede any in-flight renders: their results paint stale bitmaps.
@@ -633,6 +806,7 @@ export function applyZoomAround(newZoom: number, clientX: number, clientY: numbe
   }
   state.fitMode = "custom";
   state.zoom = clamped;
+  holdRendersForZoom();
   invalidateRenders();
   sizeSlots();
   if (state.viewMode === "single") {
@@ -810,6 +984,7 @@ export function initViewer() {
   // Scroll updates current page
   dom.viewer.addEventListener("scroll", () => {
     if (state.viewMode !== "single") updateCurrentFromScroll();
+    scheduleDetailUpdate();
   });
 
   // Resize re-flows fit modes

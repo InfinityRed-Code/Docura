@@ -11,6 +11,24 @@ scope each tag landed.
 
 ## [Unreleased]
 
+### Fixed — large CAD / scanned plans
+- **Plans with huge scanned images rendered half black.** PDFium refuses to
+  inflate more than 1 GiB from a single Flate stream, so the lower part of
+  multi-gigapixel scans (often mistaken for DRM on signed plans) stayed black.
+  Such images are now decoded once on open (streamed inflate + PNG unfilter,
+  multi-threaded) into a downsampled preview proxy and a tiled full-resolution
+  proxy; PDFium renders from those. Annotation appearances (stamps, signature
+  widgets) are flattened into the full-resolution proxy so they still show.
+  Saving still writes the original bytes.
+- **Opening and zooming plans was very slow.** Whole-page renders of these
+  plans took 2–3 s each (PDFium re-decodes the image every time); with the
+  preview proxy they take ~60 ms. Deep zoom keeps a capped whole-page bitmap
+  and renders only the visible window sharply (new `render_region` command),
+  and zooming holds re-renders until the wheel settles.
+- **Hand tool could not reach the left part of wide pages at high zoom.**
+  The page list centred with `align-items: center`, which pushes overflow off
+  the left edge where it can't be scrolled to; it now uses `safe center`.
+
 ## [1.1.0] — 2026-11-08
 
 The v1.1 "Performance & Polish" milestone: a simpler, more intuitive UI, save

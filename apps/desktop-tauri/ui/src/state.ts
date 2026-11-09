@@ -48,6 +48,12 @@ export const state = {
   // Bumped whenever the document content/page order changes (open, edit,
   // undo). Async text/link/thumbnail lookups compare it before caching.
   contentGen: 0,
+  // Documents with huge scans: zoom up to which whole-page renders are
+  // sharp; above it the visible window is rendered separately.
+  detailScale: null as number | null,
+  // Renders are held back until this time (ms) while the user is zooming,
+  // so a wheel gesture costs one render instead of one per notch.
+  renderHoldUntil: 0,
   textRunsCache: new Map<number, TextRun[]>(),
   linksCache: new Map<number, PageLink[]>(),
 

@@ -33,6 +33,7 @@ use pdfium_render::prelude::*;
 
 #[cfg(windows)]
 mod print_win;
+mod proxy;
 
 /// Control characters PDFium emits for glyphs without a Unicode mapping
 /// (e.g. U+0002), plus the non-characters U+FFFE/U+FFFF. They are invalid
@@ -93,12 +94,61 @@ fn bind_to_bundled() -> CoreResult<Box<dyn PdfiumLibraryBindings>> {
     ))
 }
 
+/// A `PdfDocument` together with the leaked byte buffer it borrows.
+/// Dropping it tears down the handle before reclaiming the bytes.
+struct LoadedDoc {
+    doc: Option<PdfDocument<'static>>,
+    bytes_raw: *mut [u8],
+}
+
+impl LoadedDoc {
+    fn load(bytes: Vec<u8>, password: Option<&str>) -> Result<Self, PdfiumError> {
+        let pdfium = shared_pdfium()
+            .map_err(|_| PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::Unknown))?;
+        let bytes_raw: *mut [u8] = Box::into_raw(bytes.into_boxed_slice());
+        // SAFETY: `bytes_raw` stays alive until this LoadedDoc is dropped,
+        // which first drops the document borrowing it.
+        let bytes_static: &'static [u8] = unsafe { &*bytes_raw };
+        match pdfium.load_pdf_from_byte_slice(bytes_static, password) {
+            Ok(d) => Ok(Self { doc: Some(d), bytes_raw }),
+            Err(e) => {
+                // SAFETY: nothing borrows the buffer any more.
+                unsafe { drop(Box::from_raw(bytes_raw)) };
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Drop for LoadedDoc {
+    fn drop(&mut self) {
+        self.doc.take();
+        // SAFETY: allocated by `Box::into_raw` in `load`; the document that
+        // borrowed it was dropped just above.
+        unsafe { drop(Box::from_raw(self.bytes_raw)) };
+    }
+}
+
+/// Full-resolution render copy of a document with huge raster images (see
+/// `proxy`): used for renders above `low_scale`.
+struct HiDoc {
+    loaded: LoadedDoc,
+    low_scale: f32,
+}
+
 /// Per-document state. Owns the leaked byte buffer and the resident
 /// `PdfDocument`. Dropping this entry tears down the document handle and
 /// reclaims the bytes.
+///
+/// For documents with huge raster images (scanned plans) `doc` is the
+/// downsampled render proxy, `hi` the tiled full-resolution one and `orig`
+/// the untouched file bytes (what `document_bytes` hands out for saving,
+/// signing and mutations).
 struct DocEntry {
     doc: Option<PdfDocument<'static>>,
     bytes_raw: *mut [u8],
+    orig: Option<Vec<u8>>,
+    hi: Option<HiDoc>,
     page_count: u32,
     // Per-page sizes resolved lazily on first access. `None` = not yet
     // fetched. Opening a 500-page PDF no longer blocks on N sequential
@@ -133,6 +183,55 @@ unsafe impl Send for Inner {}
 
 pub struct PdfiumEngine {
     inner: Mutex<Inner>,
+}
+
+impl DocEntry {
+    /// Load `bytes`; documents with huge raster images get render proxies
+    /// (built before the engine lock is taken — it can take seconds).
+    fn build(bytes: Vec<u8>, password: Option<&str>) -> Result<Self, PdfiumError> {
+        let proxies = if password.is_none() { proxy::build(&bytes) } else { None };
+        let (main, orig, hi) = match proxies {
+            Some(p) => match (LoadedDoc::load(p.low, None), LoadedDoc::load(p.high, None)) {
+                (Ok(low), Ok(high)) => (
+                    low,
+                    Some(bytes),
+                    Some(HiDoc { loaded: high, low_scale: p.low_scale }),
+                ),
+                (low, high) => {
+                    tracing::warn!(
+                        "render proxies failed to load (low ok={}, high ok={}); rendering the original",
+                        low.is_ok(),
+                        high.is_ok()
+                    );
+                    (LoadedDoc::load(bytes, password)?, None, None)
+                }
+            },
+            None => (LoadedDoc::load(bytes, password)?, None, None),
+        };
+        // Hand the document/buffer pair over to the entry, whose own Drop
+        // frees them from now on.
+        let mut main = std::mem::ManuallyDrop::new(main);
+        let doc = main.doc.take();
+        let page_count = doc.as_ref().map(|d| d.pages().len() as u32).unwrap_or(0);
+        Ok(DocEntry {
+            doc,
+            bytes_raw: main.bytes_raw,
+            orig,
+            hi,
+            page_count,
+            sizes: vec![None; page_count as usize],
+            outline: None,
+        })
+    }
+
+    /// Document to render at `zoom`: the full-resolution proxy above the
+    /// downsampled one's sharpness limit, else the resident document.
+    fn render_doc(&self, zoom: f32) -> Option<&PdfDocument<'static>> {
+        match &self.hi {
+            Some(hi) if zoom > hi.low_scale * 1.01 => hi.loaded.doc.as_ref(),
+            _ => self.doc.as_ref(),
+        }
+    }
 }
 
 impl PdfiumEngine {
@@ -220,46 +319,19 @@ impl PdfEngine for PdfiumEngine {
         bytes: Vec<u8>,
         password: Option<String>,
     ) -> CoreResult<DocumentId> {
-        let pdfium = shared_pdfium()?;
+        shared_pdfium()?;
         let bytes_len = bytes.len();
-        // Leak bytes so the PdfDocument can borrow them for 'static.
-        let bytes_box: Box<[u8]> = bytes.into_boxed_slice();
-        let bytes_raw: *mut [u8] = Box::into_raw(bytes_box);
-        // SAFETY: we just created `bytes_raw` and retain it until this
-        // DocEntry is dropped.
-        let bytes_static: &'static [u8] = unsafe { &*bytes_raw };
-
         let t_load = std::time::Instant::now();
-        let document = match pdfium.load_pdf_from_byte_slice(bytes_static, password.as_deref()) {
-            Ok(d) => d,
-            Err(e) => {
-                // SAFETY: bytes_raw still owns the leaked buffer, reclaim it.
-                unsafe {
-                    drop(Box::from_raw(bytes_raw));
-                }
-                return Err(password_error(e, password.is_some()));
-            }
-        };
-        let load_t = t_load.elapsed();
-
-        let t_pc = std::time::Instant::now();
-        let page_count = document.pages().len() as u32;
+        let entry = DocEntry::build(bytes, password.as_deref())
+            .map_err(|e| password_error(e, password.is_some()))?;
         tracing::info!(
-            "pdfium::open bytes={:.1}MB load={:?} page_count_enum={:?} pages={}",
+            "pdfium::open bytes={:.1}MB load={:?} pages={} proxied={}",
             bytes_len as f64 / 1024.0 / 1024.0,
-            load_t,
-            t_pc.elapsed(),
-            page_count
+            t_load.elapsed(),
+            entry.page_count,
+            entry.hi.is_some()
         );
-
         let id = DocumentId::new();
-        let entry = DocEntry {
-            doc: Some(document),
-            bytes_raw,
-            page_count,
-            sizes: vec![None; page_count as usize],
-            outline: None,
-        };
         self.inner.lock().docs.insert(id, entry);
         Ok(id)
     }
@@ -306,7 +378,7 @@ impl PdfEngine for PdfiumEngine {
             .docs
             .get(&req.document)
             .ok_or(CoreError::DocumentNotLoaded)?;
-        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.render_doc(req.zoom.0).ok_or(CoreError::DocumentNotLoaded)?;
         let t_page = std::time::Instant::now();
         let page = document
             .pages()
@@ -539,6 +611,9 @@ impl PdfEngine for PdfiumEngine {
     fn document_bytes(&self, doc: DocumentId) -> CoreResult<Vec<u8>> {
         let inner = self.inner.lock();
         let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        if let Some(orig) = &entry.orig {
+            return Ok(orig.clone());
+        }
         // SAFETY: `bytes_raw` is live until the entry is dropped and we
         // hold the lock preventing that.
         let bytes = unsafe { &*entry.bytes_raw };
@@ -593,34 +668,80 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn reload_bytes(&self, doc: DocumentId, bytes: Vec<u8>) -> CoreResult<()> {
-        let pdfium = shared_pdfium()?;
-        let bytes_box: Box<[u8]> = bytes.into_boxed_slice();
-        let bytes_raw: *mut [u8] = Box::into_raw(bytes_box);
-        let bytes_static: &'static [u8] = unsafe { &*bytes_raw };
-        let document = match pdfium.load_pdf_from_byte_slice(bytes_static, None) {
-            Ok(d) => d,
-            Err(e) => {
-                unsafe { drop(Box::from_raw(bytes_raw)); }
-                return Err(CoreError::Engine(format!("reload: {e}")));
-            }
-        };
-        let page_count = document.pages().len() as u32;
+        shared_pdfium()?;
+        let entry =
+            DocEntry::build(bytes, None).map_err(|e| CoreError::Engine(format!("reload: {e}")))?;
         let mut inner = self.inner.lock();
         if !inner.docs.contains_key(&doc) {
-            unsafe { drop(Box::from_raw(bytes_raw)); }
             return Err(CoreError::DocumentNotLoaded);
         }
         // Drop old entry (reclaims old bytes + PdfDocument) before inserting new.
         inner.docs.remove(&doc);
-        let entry = DocEntry {
-            doc: Some(document),
-            bytes_raw,
-            page_count,
-            sizes: vec![None; page_count as usize],
-            outline: None,
-        };
         inner.docs.insert(doc, entry);
         Ok(())
+    }
+
+    fn render_region(
+        &self,
+        req: RenderRequest,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> CoreResult<RenderedPage> {
+        if width == 0 || height == 0 || width > 8192 || height > 8192 {
+            return Err(CoreError::Engine(format!("bad region size {width}x{height}")));
+        }
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&req.document).ok_or(CoreError::DocumentNotLoaded)?;
+        let document = entry.render_doc(req.zoom.0).ok_or(CoreError::DocumentNotLoaded)?;
+        let t = std::time::Instant::now();
+        let page = document
+            .pages()
+            .get(req.page.0 as u16)
+            .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+        let (rot, swap) = match req.rotation {
+            Rotation::R0 => (0, false),
+            Rotation::R90 => (1, true),
+            Rotation::R180 => (2, false),
+            Rotation::R270 => (3, true),
+        };
+        let (pw, ph) = (page.width().value, page.height().value);
+        let (dw, dh) = if swap { (ph, pw) } else { (pw, ph) };
+        let full_w = (dw * req.zoom.0).round() as i32;
+        let full_h = (dh * req.zoom.0).round() as i32;
+        let bindings = document.bindings();
+        let bitmap = PdfBitmap::empty(width as i32, height as i32, PdfBitmapFormat::BGRA, bindings)
+            .map_err(|e| CoreError::Engine(format!("bitmap: {e}")))?;
+        let bmp = bindings.get_handle_from_bitmap(&bitmap);
+        bindings.FPDFBitmap_FillRect(bmp, 0, 0, width as i32, height as i32, 0xFFFF_FFFF);
+        // Draw the whole page shifted by (-x, -y): PDFium clips to the
+        // bitmap and skips page objects (image tiles) outside it entirely.
+        const FPDF_ANNOT: i32 = 0x01;
+        bindings.FPDF_RenderPageBitmap(
+            bmp,
+            bindings.get_handle_from_page(&page),
+            -x,
+            -y,
+            full_w,
+            full_h,
+            rot,
+            FPDF_ANNOT,
+        );
+        let rgba = bitmap.as_rgba_bytes();
+        tracing::info!(
+            "pdfium::render_region page={} zoom={:.2} at {x},{y} {width}x{height} of {full_w}x{full_h} hi={} t={:?}",
+            req.page.0,
+            req.zoom.0,
+            entry.hi.as_ref().is_some_and(|h| req.zoom.0 > h.low_scale * 1.01),
+            t.elapsed()
+        );
+        Ok(RenderedPage { width_px: width, height_px: height, rgba })
+    }
+
+    fn detail_scale(&self, doc: DocumentId) -> Option<f32> {
+        let inner = self.inner.lock();
+        inner.docs.get(&doc)?.hi.as_ref().map(|h| h.low_scale)
     }
 
     fn is_protected(&self, doc: DocumentId) -> CoreResult<bool> {

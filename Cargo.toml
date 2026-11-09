@@ -50,3 +50,9 @@ strip = "symbols"
 # for fast incremental builds.
 [profile.dev.package."*"]
 opt-level = 3
+
+# The render-proxy decoder (inflate + PNG unfilter + downsample of huge
+# scans) is pure per-byte loops: unoptimised it is ~10× slower, which makes
+# opening scanned plans in `tauri dev` painfully slow.
+[profile.dev.package.pdf_pdfium]
+opt-level = 3

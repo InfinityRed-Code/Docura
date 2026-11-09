@@ -12,6 +12,9 @@ export type OpenedDocument = {
   outline: OutlineNode[];
   /** Password/permission protection detected on open; re-applied on save. */
   protected: boolean;
+  /** Huge scanned images: zoom above which sharp detail comes from
+   * `render_region` (the whole-page render is a downsampled proxy). */
+  detail_scale?: number | null;
 };
 export type Rendered = { width: number; height: number; data_url: string };
 export type SearchHit = { page: number; rects_pt: RectPt[]; snippet: string };
@@ -84,12 +87,22 @@ export type Slot = {
   loaded: boolean;
   renderingZoom: number | null;
   lastZoom: number | null;
+  /** Zoom / rotation / content generation of the bitmap in `img` — reused
+   * across zoom steps when the (capped) render zoom doesn't change. */
+  baseZoom: number | null;
+  baseRot: number | null;
+  baseGen: number;
+  /** Sharp render of the visible window at the current zoom, overlaid on
+   * the (capped, upscaled) page bitmap. */
+  detail: HTMLImageElement | null;
+  detailKey: string | null;
 };
 
 export type DocSnapshot = {
   page_count: number;
   page_sizes: PageSize[];
   outline: OutlineNode[];
+  detail_scale?: number | null;
 };
 
 export type OpenErr = {

@@ -119,6 +119,10 @@ struct OpenedDocument {
     /// True when the document was password-protected / permission-restricted.
     /// The protection is re-applied on save.
     protected: bool,
+    /// Set for documents with huge scanned images (rendered from a
+    /// downsampled proxy): the zoom above which the UI must request sharp
+    /// detail via `render_region` instead of whole pages.
+    detail_scale: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -252,6 +256,7 @@ async fn open_pdf_inner(
         // `crypto` is set when the document was flattened; if flattening
         // failed the resident copy still reports as protected itself.
         let protected = crypto.is_some() || engine.is_protected(id).unwrap_or(false);
+        let detail_scale = engine.detail_scale(id);
         Ok((
             OpenedDocument {
                 id,
@@ -259,6 +264,7 @@ async fn open_pdf_inner(
                 page_sizes,
                 outline,
                 protected,
+                detail_scale,
             },
             crypto,
         ))
@@ -297,6 +303,51 @@ async fn render_page(
     rotation: Option<u8>,
 ) -> Result<RenderedPayload, String> {
     render_internal(state, document, page, zoom, rotation, 82).await
+}
+
+/// Render only a `width × height` pixel window (at `x`, `y`) of a page as
+/// it appears at `zoom`. The UI uses it for the visible part of a page once
+/// a whole-page bitmap would be too large or too slow (deep zoom, huge
+/// scanned plans). Not cached: the UI keeps the current window itself.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn render_region(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+    zoom: f32,
+    rotation: Option<u8>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<RenderedPayload, String> {
+    if !(zoom.is_finite() && zoom > 0.0 && zoom <= 16.0) {
+        return Err(format!("bad zoom {zoom}"));
+    }
+    let rotation = Rotation::from_quarter_turns(rotation.unwrap_or(0) % 4);
+    let engine = state.engine.clone();
+    let t0 = std::time::Instant::now();
+    let rendered = tokio::task::spawn_blocking(move || {
+        engine
+            .render_region(
+                RenderRequest { document, page: PageIndex(page), zoom: ZoomLevel(zoom), rotation },
+                x,
+                y,
+                width,
+                height,
+            )
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let (w, h) = (rendered.width_px, rendered.height_px);
+    let rgba = rendered.rgba;
+    let data_url = tokio::task::spawn_blocking(move || encode_data_url(w, h, &rgba, 85))
+        .await
+        .map_err(|e| e.to_string())??;
+    tracing::info!("render_region page={page} zoom={zoom} {w}x{h} total={:?}", t0.elapsed());
+    Ok(RenderedPayload { width: w, height: h, data_url })
 }
 
 async fn render_internal(
@@ -903,6 +954,7 @@ async fn images_to_pdf_and_open(
         page_sizes: opened.page_sizes,
         outline: opened.outline,
         protected: opened.protected,
+        detail_scale: opened.detail_scale,
         temp_path: tmp_str,
     })
 }
@@ -1006,6 +1058,7 @@ async fn office_to_pdf_and_open(
         page_sizes: opened.page_sizes,
         outline: opened.outline,
         protected: opened.protected,
+        detail_scale: opened.detail_scale,
         temp_path: tmp_str,
     })
 }
@@ -1328,6 +1381,7 @@ struct DocSnapshot {
     page_count: u32,
     page_sizes: Vec<PageSize>,
     outline: Vec<OutlineNode>,
+    detail_scale: Option<f32>,
 }
 
 async fn snapshot_doc(
@@ -1345,10 +1399,12 @@ async fn snapshot_doc(
             page_sizes.push(sz);
         }
         let outline = engine.outline(document).unwrap_or_default();
+        let detail_scale = engine.detail_scale(document);
         Ok(DocSnapshot {
             page_count,
             page_sizes,
             outline,
+            detail_scale,
         })
     })
     .await
@@ -1692,6 +1748,7 @@ struct MergeOpenedDocument {
     page_sizes: Vec<PageSize>,
     outline: Vec<OutlineNode>,
     protected: bool,
+    detail_scale: Option<f32>,
     temp_path: String,
 }
 
@@ -1758,6 +1815,7 @@ async fn merge_files_and_open(
         page_sizes: opened.page_sizes,
         outline: opened.outline,
         protected: false,
+        detail_scale: opened.detail_scale,
         temp_path: tmp_str,
     })
 }
@@ -3582,6 +3640,7 @@ pub fn run() {
             open_pdf_path,
             close_pdf,
             render_page,
+            render_region,
             render_thumbnail,
             page_text_layout_cmd,
             search_document,

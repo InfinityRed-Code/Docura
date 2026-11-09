@@ -235,6 +235,7 @@ export function applyOpenedDoc(doc: OpenedDocument, label: string, opts: { temp?
     state.pageCount = doc.page_count;
     state.pageSizes = doc.page_sizes;
     state.outline = doc.outline;
+    state.detailScale = doc.detail_scale ?? null;
     state.currentPage = 0;
     state.hits = [];
     state.currentHit = -1;
@@ -591,6 +592,7 @@ export function applyDocSnapshot(snap: DocSnapshot) {
   state.pageCount = snap.page_count;
   state.pageSizes = snap.page_sizes;
   state.outline = snap.outline;
+  state.detailScale = snap.detail_scale ?? null;
   if (state.currentPage >= state.pageCount) state.currentPage = Math.max(0, state.pageCount - 1);
   state.textRunsCache.clear();
   state.linksCache.clear();

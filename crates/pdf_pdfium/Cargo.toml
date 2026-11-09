@@ -13,6 +13,8 @@ pdfium-render = { workspace = true }
 pdf_core = { workspace = true }
 pdf_types = { workspace = true }
 parking_lot = "0.12"
+lopdf = { workspace = true }
+flate2 = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -25,5 +27,5 @@ windows = { version = "0.58", features = [
 [dev-dependencies]
 pdf_mutate = { workspace = true }
 pdf_export = { workspace = true }
-lopdf = { workspace = true }
+tracing-subscriber = { workspace = true }
 image = { workspace = true }
