@@ -2210,6 +2210,10 @@ struct FreeTextArgs {
     #[serde(default = "default_freetext_font")]
     font_family: String,
     #[serde(default)]
+    bold: bool,
+    #[serde(default)]
+    italic: bool,
+    #[serde(default)]
     rotation_quadrant: u8,
     #[serde(default = "default_shape_opacity")]
     opacity: f32,
@@ -2222,6 +2226,45 @@ fn default_freetext_color() -> [f32; 3] { [0.0, 0.0, 0.0] }
 fn default_freetext_size() -> f32 { 14.0 }
 fn default_freetext_bg() -> [f32; 4] { [1.0, 1.0, 1.0, 1.0] }
 fn default_freetext_font() -> String { "Helv".to_string() }
+
+impl FreeTextArgs {
+    fn into_annotation(self) -> (u32, pdf_mutate::FreeTextAnnotation) {
+        (
+            self.page,
+            pdf_mutate::FreeTextAnnotation {
+                rect: self.rect,
+                text: self.text,
+                color: self.color,
+                bg_color: self.bg_color,
+                font_size: self.font_size,
+                font_family: self.font_family,
+                bold: self.bold,
+                italic: self.italic,
+                rotation_quadrant: self.rotation_quadrant,
+                opacity: self.opacity,
+                author: self.author,
+                print: self.print,
+            },
+        )
+    }
+}
+
+/// Reload `document` from `new_bytes` and record `pre_bytes` as one undo
+/// step — the tail of every mutating command.
+async fn commit_mutation(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    pre_bytes: Vec<u8>,
+    new_bytes: Vec<u8>,
+) -> Result<DocSnapshot, String> {
+    state.cache.lock().remove_document(document);
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.undo.lock().record(document, pre_bytes);
+    snapshot_doc(state, document).await
+}
 
 #[tauri::command]
 async fn add_freetext(
@@ -2237,34 +2280,86 @@ async fn add_freetext(
         let t = std::time::Instant::now();
         let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
         let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
-        let annot = pdf_mutate::FreeTextAnnotation {
-            rect: args.rect,
-            text: args.text,
-            color: args.color,
-            bg_color: args.bg_color,
-            font_size: args.font_size,
-            font_family: args.font_family,
-            rotation_quadrant: args.rotation_quadrant,
-            opacity: args.opacity,
-            author: args.author,
-            print: args.print,
-        };
-        mdoc.add_freetext_annotation(args.page, &annot)
+        let (page, annot) = args.into_annotation();
+        mdoc.add_freetext_annotation(page, &annot)
             .map_err(|e| e.to_string())?;
         let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
-        tracing::info!("add_freetext page={}: {:?}", args.page, t.elapsed());
+        tracing::info!("add_freetext page={page}: {:?}", t.elapsed());
         Ok((bytes, out))
     })
     .await
     .map_err(|e| e.to_string())??;
+    commit_mutation(state, document, pre_bytes, new_bytes).await
+}
 
-    state.cache.lock().remove_document(document);
+/// Replace the text box `id` (as reported by `list_annotations`) with the
+/// one described by `args` in a single undo step. Empty text deletes the box.
+#[tauri::command]
+async fn update_freetext(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    id: String,
+    args: FreeTextArgs,
+) -> Result<DocSnapshot, String> {
     let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
-        .await
-        .map_err(|e| e.to_string())??;
-    state.undo.lock().record(document, pre_bytes);
-    snapshot_doc(state, document).await
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        let keep = !args.text.trim().is_empty();
+        let (page, annot) = args.into_annotation();
+        if !mdoc.delete_annotation(page, &id).map_err(|e| e.to_string())? {
+            return Err("update_freetext: text box not found".into());
+        }
+        if keep {
+            mdoc.add_freetext_annotation(page, &annot)
+                .map_err(|e| e.to_string())?;
+        }
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    commit_mutation(state, document, pre_bytes, new_bytes).await
+}
+
+/// Editable lines of text in the page content.
+#[tauri::command]
+async fn page_text_blocks_cmd(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+) -> Result<Vec<pdf_types::TextBlock>, String> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        engine
+            .page_text_blocks(document, PageIndex(page))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Replace one line of page text (see `page_text_blocks_cmd`) with new text.
+#[tauri::command]
+async fn replace_page_text(
+    state: tauri::State<'_, AppState>,
+    document: DocumentId,
+    page: u32,
+    edit: pdf_types::TextReplace,
+) -> Result<DocSnapshot, String> {
+    let engine = state.engine.clone();
+    let (pre_bytes, new_bytes) = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
+        let t = std::time::Instant::now();
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let out = engine
+            .replace_page_text(document, PageIndex(page), &edit)
+            .map_err(|e| e.to_string())?;
+        tracing::info!("replace_page_text page={page}: {:?}", t.elapsed());
+        Ok((bytes, out))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    commit_mutation(state, document, pre_bytes, new_bytes).await
 }
 
 #[derive(Deserialize)]
@@ -3683,6 +3778,9 @@ pub fn run() {
             delete_annotation,
             add_shape,
             add_freetext,
+            update_freetext,
+            page_text_blocks_cmd,
+            replace_page_text,
             add_ink,
             add_stamp,
             add_text_note,

@@ -9,6 +9,7 @@ import { initViewer, updateChrome, goToPage } from "./viewer";
 import { initDoc, openByPath } from "./doc";
 import { initEdit, addMergePaths } from "./edit";
 import { initAnnot } from "./annot";
+import { initTextEdit } from "./textedit";
 import { initSign } from "./sign";
 import { initProtect } from "./protect";
 import { initExport } from "./export";
@@ -28,6 +29,7 @@ refreshIcons();
 // by doc.applyDocSnapshot, so it must run before any snapshot fires.
 initViewer();
 initAnnot();
+initTextEdit();
 initSign();
 initDoc();
 initEdit();

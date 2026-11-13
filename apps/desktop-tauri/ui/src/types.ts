@@ -175,6 +175,41 @@ export interface AnnotationInfo {
   author: string | null;
   modified: string | null;
   icon: string | null;
+  /** Styling of a FreeText box (null for other subtypes). */
+  freetext?: FreeTextStyle | null;
+}
+
+export interface FreeTextStyle {
+  font_size: number;
+  text_color: [number, number, number];
+  bg_color: [number, number, number] | null;
+  font_family: string;
+  bold: boolean;
+  italic: boolean;
+  rotation_quadrant: number;
+}
+
+/** One editable line of page text (see `page_text_blocks_cmd`). */
+export interface TextBlock {
+  objects: number[];
+  text: string;
+  rect_pt: RectPt;
+  origin_x: number;
+  origin_y: number;
+  /** Reading direction on the displayed page, quarter turns clockwise. */
+  dir: number;
+  font_size: number;
+  font_family: string;
+  bold: boolean;
+  italic: boolean;
+  color: [number, number, number];
+  invisible: boolean;
+  /** The font has no Unicode mapping: `text` is empty, retype the line. */
+  unreadable?: boolean;
+  /** Installed font file identified as the line's font; edits embed it. */
+  font_file?: string | null;
+  /** Family name of that font, e.g. "Consolas". */
+  font_name?: string | null;
 }
 
 export interface FormFieldInfo {

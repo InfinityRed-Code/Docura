@@ -188,6 +188,87 @@ pub struct AnnotationInfo {
     pub modified: Option<String>,
     /// /Name (icon hint) for sticky notes / stamps.
     pub icon: Option<String>,
+    /// Text styling of a /FreeText annotation, so the UI can reopen it in
+    /// the editor. `None` for every other subtype.
+    #[serde(default)]
+    pub freetext: Option<FreeTextStyle>,
+}
+
+/// Styling of a /FreeText annotation as written by this app (other writers'
+/// boxes fall back to what their /DA string carries).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FreeTextStyle {
+    pub font_size: f32,
+    /// RGB text color 0..1.
+    pub text_color: [f32; 3],
+    /// Background fill; `None` = transparent.
+    pub bg_color: Option<[f32; 3]>,
+    /// Logical family: "Helv" | "Times" | "Cour".
+    pub font_family: String,
+    pub bold: bool,
+    pub italic: bool,
+    /// Viewer rotation (quarter turns CW) the text was written upright for.
+    pub rotation_quadrant: u8,
+}
+
+/// One editable line of text that is part of the page content itself (not
+/// an annotation): the page objects it is made of plus enough styling to
+/// reopen it in the text editor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextBlock {
+    /// Indices of the page objects forming this line.
+    pub objects: Vec<u32>,
+    pub text: String,
+    /// Bounding box in displayed top-origin points.
+    pub rect_pt: RectPt,
+    /// Start of the baseline in displayed top-origin points.
+    pub origin_x: f32,
+    pub origin_y: f32,
+    /// Reading direction on the displayed page in quarter turns clockwise
+    /// (0 = left to right, 1 = top to bottom, …).
+    pub dir: u8,
+    pub font_size: f32,
+    /// Closest standard family: "Helv" | "Times" | "Cour".
+    pub font_family: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [f32; 3],
+    /// Drawn with an invisible render mode (OCR layer over a scan).
+    pub invisible: bool,
+    /// The font carries no usable Unicode mapping: `text` is not what the
+    /// glyphs show (it is blanked), so the line can only be retyped.
+    #[serde(default)]
+    pub unreadable: bool,
+    /// Installed font file the line's font was identified as; edits embed
+    /// it so the new text looks like the old.
+    #[serde(default)]
+    pub font_file: Option<String>,
+    /// Family name of that font ("Consolas"), for displaying the editor.
+    #[serde(default)]
+    pub font_name: Option<String>,
+}
+
+/// Replace the page objects of one [`TextBlock`] with new text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextReplace {
+    pub objects: Vec<u32>,
+    /// New text; empty = just remove the old text.
+    pub text: String,
+    pub font_size: f32,
+    pub font_family: String,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    pub color: [f32; 3],
+    /// Write the text with this installed font file (from
+    /// [`TextBlock::font_file`]) instead of a standard font.
+    #[serde(default)]
+    pub font_file: Option<String>,
+    /// Paint this color over the old text's box first — for scans, where
+    /// the visible glyphs are pixels of the page image.
+    #[serde(default)]
+    pub cover: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

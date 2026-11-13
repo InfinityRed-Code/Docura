@@ -61,6 +61,8 @@ fn main() {
         bg_color: [1.0, 1.0, 1.0, 1.0],
         font_size: 14.0,
         font_family: "Helv".into(),
+        bold: false,
+        italic: false,
         rotation_quadrant: 0,
         opacity: 1.0,
         author: None,

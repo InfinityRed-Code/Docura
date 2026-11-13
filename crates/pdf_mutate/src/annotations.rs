@@ -753,9 +753,10 @@ pub struct FreeTextAnnotation {
     /// RGBA background. Alpha == 0 means "no background fill".
     pub bg_color: [f32; 4],
     pub font_size: f32,
-    /// Logical font name. Only "Helv" is wired up today; the field exists so
-    /// future fonts can flow through without an API break.
+    /// Logical font family: "Helv" (default), "Times" or "Cour".
     pub font_family: String,
+    pub bold: bool,
+    pub italic: bool,
     /// Viewer rotation at insert time (0/1/2/3 = 0/90/180/270 deg CW).
     /// Used to rotate the appearance so text reads upright in the rotated view.
     pub rotation_quadrant: u8,
@@ -764,12 +765,35 @@ pub struct FreeTextAnnotation {
     pub print: bool,
 }
 
-/// Ensures the document catalog has an /AcroForm /DR /Font /Helv entry pointing
-/// at a Helvetica Type1 font. Returns the font's object id (may be reused for
-/// later annotations). Idempotent. An existing AcroForm (inline or indirect)
-/// and its /DR fonts are extended, never replaced — the AcroForm carries the
-/// document's form /Fields.
-fn ensure_helv_font(doc: &mut Document) -> MutateResult<ObjectId> {
+/// Private annotation key holding the styling the appearance stream was
+/// built from, so a FreeText box can be reopened in the editor.
+pub(crate) const FREETEXT_STYLE_KEY: &[u8] = b"RustpdfFreeText";
+
+/// Resource name and /BaseFont of the standard font for a logical family
+/// ("Helv" | "Times" | "Cour", anything else = Helvetica) and style.
+pub(crate) fn std_font(family: &str, bold: bool, italic: bool) -> (&'static str, &'static str) {
+    match (family, bold, italic) {
+        ("Times", false, false) => ("TiRo", "Times-Roman"),
+        ("Times", true, false) => ("TiBo", "Times-Bold"),
+        ("Times", false, true) => ("TiIt", "Times-Italic"),
+        ("Times", true, true) => ("TiBI", "Times-BoldItalic"),
+        ("Cour", false, false) => ("Cour", "Courier"),
+        ("Cour", true, false) => ("CoBo", "Courier-Bold"),
+        ("Cour", false, true) => ("CoOb", "Courier-Oblique"),
+        ("Cour", true, true) => ("CoBO", "Courier-BoldOblique"),
+        (_, false, false) => ("Helv", "Helvetica"),
+        (_, true, false) => ("HeBo", "Helvetica-Bold"),
+        (_, false, true) => ("HeOb", "Helvetica-Oblique"),
+        (_, true, true) => ("HeBO", "Helvetica-BoldOblique"),
+    }
+}
+
+/// Ensures the document catalog has an /AcroForm /DR /Font /<key> entry
+/// pointing at the standard Type1 font `base_font`. Returns the font's object
+/// id (may be reused for later annotations). Idempotent. An existing AcroForm
+/// (inline or indirect) and its /DR fonts are extended, never replaced — the
+/// AcroForm carries the document's form /Fields.
+fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResult<ObjectId> {
     let root_id = doc
         .trailer
         .get(b"Root")
@@ -816,18 +840,18 @@ fn ensure_helv_font(doc: &mut Document) -> MutateResult<ObjectId> {
     let dr_entry = doc.get_dictionary(af_id).ok().and_then(|d| d.get(b"DR").ok().cloned());
     let (dr_ref, mut dr) = resolve(doc, dr_entry);
     let (font_ref, mut fonts) = resolve(doc, dr.get(b"Font").ok().cloned());
-    if let Ok(Object::Reference(helv_id)) = fonts.get(b"Helv") {
+    if let Ok(Object::Reference(helv_id)) = fonts.get(key.as_bytes()) {
         return Ok(*helv_id);
     }
 
-    // Create Helvetica font and register it next to the existing ones.
+    // Create the font and register it next to the existing ones.
     let helv_id = doc.add_object(dictionary! {
         "Type" => "Font",
         "Subtype" => "Type1",
-        "BaseFont" => "Helvetica",
+        "BaseFont" => Object::Name(base_font.as_bytes().to_vec()),
         "Encoding" => "WinAnsiEncoding",
     });
-    fonts.set("Helv", Object::Reference(helv_id));
+    fonts.set(key, Object::Reference(helv_id));
     match font_ref {
         Some(r) => {
             if let Ok(o) = doc.get_object_mut(r) {
@@ -860,7 +884,8 @@ pub fn add_freetext_annotation(
 ) -> MutateResult<ObjectId> {
     let page_id = page_id_for(doc, page_index)?;
     let view = page_view(doc, page_id);
-    let helv_id = ensure_helv_font(doc)?;
+    let (font_key, base_font) = std_font(&annot.font_family, annot.bold, annot.italic);
+    let helv_id = ensure_std_font(doc, font_key, base_font)?;
 
     let (llx, lly, urx, ury) = rect_native(&annot.rect, view);
     let mut d = base_annot_dict(
@@ -880,7 +905,7 @@ pub fn add_freetext_annotation(
         annot.color[1].clamp(0.0, 1.0),
         annot.color[2].clamp(0.0, 1.0),
     ];
-    let da = format!("{:.3} {:.3} {:.3} rg /Helv {:.2} Tf", c[0], c[1], c[2], fs);
+    let da = format!("{:.3} {:.3} {:.3} rg /{font_key} {:.2} Tf", c[0], c[1], c[2], fs);
     d.set(
         "DA",
         Object::String(da.into_bytes(), lopdf::StringFormat::Literal),
@@ -899,8 +924,24 @@ pub fn add_freetext_annotation(
     } else {
         None
     };
+    // Styling for reopening the box in the editor (see `read`).
+    let mut style = Dictionary::new();
+    let family = match annot.font_family.as_str() {
+        f @ ("Times" | "Cour") => f,
+        _ => "Helv",
+    };
+    style.set("Font", Object::Name(family.as_bytes().to_vec()));
+    style.set("Bold", Object::Boolean(annot.bold));
+    style.set("Italic", Object::Boolean(annot.italic));
+    style.set("Rot", Object::Integer((annot.rotation_quadrant & 3) as i64));
+    if let Some(bg) = bg {
+        style.set("BG", Object::Array(bg.iter().map(|v| Object::Real(*v)).collect()));
+    }
+    d.set(FREETEXT_STYLE_KEY, Object::Dictionary(style));
+
     let content = build_freetext_appearance(
         &annot.text,
+        font_key,
         fs,
         c,
         bg,
@@ -909,7 +950,7 @@ pub fn add_freetext_annotation(
         annot.rotation_quadrant & 3,
     );
     let mut font_dict = Dictionary::new();
-    font_dict.set("Helv", Object::Reference(helv_id));
+    font_dict.set(font_key, Object::Reference(helv_id));
     let mut resources = Dictionary::new();
     resources.set("Font", Object::Dictionary(font_dict));
     let form_id = make_form_xobject(doc, w, h, content, Some(resources));
@@ -962,6 +1003,7 @@ fn pdf_literal_string(s: &str) -> Vec<u8> {
 
 fn build_freetext_appearance(
     text: &str,
+    font_key: &str,
     fs: f32,
     rgb: [f32; 3],
     bg: Option<[f32; 3]>,
@@ -1010,7 +1052,7 @@ fn build_freetext_appearance(
         _ => ("1 0 0 1", (margin, h - margin - fs), (0.0, -leading)),
     };
 
-    let _ = write!(&mut buf, "q\nBT\n/Helv {fs:.2} Tf\n");
+    let _ = write!(&mut buf, "q\nBT\n/{font_key} {fs:.2} Tf\n");
     let _ = write!(&mut buf, "{r:.3} {g:.3} {b:.3} rg\n");
     let _ = write!(&mut buf, "{tm} {ex:.2} {ey:.2} Tm\n", ex = origin.0, ey = origin.1);
     let mut first = true;
@@ -1410,6 +1452,8 @@ mod tests {
             bg_color: [1.0, 1.0, 1.0, 0.0],
             font_size: 12.0,
             font_family: "Helv".into(),
+            bold: false,
+            italic: false,
             rotation_quadrant: 0,
             opacity: 1.0,
             author: None,
@@ -1445,6 +1489,44 @@ mod tests {
         let fonts = af.get(b"DR").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
         assert!(fonts.has(b"ZaDb"), "existing DR font dropped: {fonts:?}");
         assert!(fonts.has(b"Helv"));
+    }
+
+    #[test]
+    fn freetext_style_round_trips_for_reediting() {
+        let mut doc = one_page_doc();
+        let mut annot = freetext("Grüße\nZeile 2");
+        annot.font_family = "Times".into();
+        annot.bold = true;
+        annot.color = [0.2, 0.4, 0.6];
+        annot.font_size = 18.0;
+        annot.rotation_quadrant = 1;
+        add_freetext_annotation(&mut doc, 0, &annot).unwrap();
+        let mut boxed = freetext("with background");
+        boxed.bg_color = [1.0, 0.5, 0.0, 1.0];
+        boxed.italic = true;
+        add_freetext_annotation(&mut doc, 0, &boxed).unwrap();
+
+        let listed = crate::read::list_annotations(&doc);
+        let style = listed[0].freetext.as_ref().expect("freetext style");
+        assert_eq!(listed[0].contents.as_deref(), Some("Grüße\nZeile 2"));
+        assert_eq!(style.font_family, "Times");
+        assert!(style.bold && !style.italic);
+        assert_eq!(style.font_size, 18.0);
+        assert_eq!(style.rotation_quadrant, 1);
+        assert_eq!(style.bg_color, None);
+        assert!((style.text_color[1] - 0.4).abs() < 0.001);
+
+        let style = listed[1].freetext.as_ref().expect("freetext style");
+        assert_eq!(style.font_family, "Helv");
+        assert!(style.italic && !style.bold);
+        assert_eq!(style.bg_color, Some([1.0, 0.5, 0.0]));
+
+        // Each style draws with its own standard font.
+        let cat_id = doc.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let af = doc.get_dictionary(cat_id).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+        let fonts = doc.get_dictionary(af).unwrap().get(b"DR").unwrap().as_dict().unwrap()
+            .get(b"Font").unwrap().as_dict().unwrap();
+        assert!(fonts.has(b"TiBo") && fonts.has(b"HeOb"), "fonts: {fonts:?}");
     }
 
     #[test]

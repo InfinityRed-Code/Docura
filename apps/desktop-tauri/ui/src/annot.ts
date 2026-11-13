@@ -37,6 +37,15 @@ export function clearMarkupAndEraser() {
   clearEraseMode();
 }
 
+/** The Text tool (shape tool "freetext") turns lines of page text into click
+ * targets; keep the body class and those targets in step with the tool. */
+function syncTextEditMode() {
+  const on = state.shapeTool === "freetext";
+  if (document.body.classList.contains("textEditMode") === on) return;
+  document.body.classList.toggle("textEditMode", on);
+  callbacks.renderTextEditAll();
+}
+
 function setAnnotTool(k: MarkupKind | null) {
   state.annotTool = k;
   if (k !== null) {
@@ -51,6 +60,7 @@ function setAnnotTool(k: MarkupKind | null) {
   });
   document.body.classList.toggle("annotMode", k !== null);
   document.body.classList.toggle("shapeMode", false);
+  syncTextEditMode();
 }
 
 export function setShapeTool(k: ShapeKindUi | null) {
@@ -67,6 +77,7 @@ export function setShapeTool(k: ShapeKindUi | null) {
   });
   document.body.classList.toggle("shapeMode", k !== null);
   document.body.classList.toggle("annotMode", false);
+  syncTextEditMode();
 }
 
 // Eraser tool: click an existing annotation to delete it.
@@ -87,6 +98,7 @@ function setEraseMode(on: boolean) {
       b.classList.remove("active");
     });
     document.body.classList.remove("annotMode", "shapeMode");
+    syncTextEditMode();
   }
   document.getElementById("eraseAnnotBtn")?.classList.toggle("active", on);
   document.body.classList.toggle("eraseMode", on);
@@ -396,7 +408,7 @@ function toolNoun(tool: string | null): string {
  * that must receive their own clicks instead of the active page tool. */
 export function isOverlayControl(target: EventTarget | null): boolean {
   return !!(target as Element | null)?.closest?.(
-    "textarea, input, select, button, .stickyNote, .formField, .redactMark, .noteHotspot",
+    "textarea, input, select, button, .stickyNote, .formField, .redactMark, .noteHotspot, .textEd, .textEdBar",
   );
 }
 
@@ -412,91 +424,6 @@ export function findSlotFromTarget(target: EventTarget | null): { slot: Slot; id
     node = node.parentElement;
   }
   return null;
-}
-
-export function spawnFreeTextEditor(
-  slot: Slot,
-  pageIdx: number,
-  rectPx: { x: number; y: number; w: number; h: number },
-) {
-  const ed = document.createElement("textarea");
-  ed.style.position = "absolute";
-  ed.style.left = `${rectPx.x}px`;
-  ed.style.top = `${rectPx.y}px`;
-  ed.style.width = `${rectPx.w}px`;
-  ed.style.height = `${rectPx.h}px`;
-  ed.style.border = "1px dashed #4a8cff";
-  ed.style.background = "rgba(255,255,255,0.95)";
-  ed.style.color = "#000";
-  ed.style.font = "14px Helvetica, Arial, sans-serif";
-  ed.style.padding = "2px 4px";
-  ed.style.boxSizing = "border-box";
-  ed.style.resize = "both";
-  ed.style.zIndex = "20";
-  slot.wrap.appendChild(ed);
-  ed.focus();
-
-  let committed = false;
-  const cleanup = () => { ed.remove(); };
-  const commit = async () => {
-    if (committed) return;
-    committed = true;
-    const text = ed.value.trim();
-    // Read the textarea geometry BEFORE detaching it. A removed element's
-    // getBoundingClientRect collapses to all-zeros, which produces a 0-size
-    // off-page rect and the freetext annotation never renders.
-    const r = ed.getBoundingClientRect();
-    const wrapBb = slot.wrap.getBoundingClientRect();
-    cleanup();
-    if (!text || !state.currentDoc) return;
-    const left = r.left - wrapBb.left;
-    const top = r.top - wrapBb.top;
-    const right = left + r.width;
-    const bottom = top + r.height;
-    const tl = imagePxToPagePt(slot, pageIdx, left, top);
-    const br = imagePxToPagePt(slot, pageIdx, right, bottom);
-    if (!tl || !br) return;
-    const rect: RectPt = {
-      x0: Math.min(tl.x, br.x),
-      y0: Math.min(tl.y, br.y),
-      x1: Math.max(tl.x, br.x),
-      y1: Math.max(tl.y, br.y),
-    };
-    setStatus(t("st.adding", { label: toolNoun("freetext") }));
-    try {
-      const fg = (document.getElementById("textFgColor") as HTMLInputElement | null)?.value || "#000000";
-      const bg = (document.getElementById("textBgColor") as HTMLInputElement | null)?.value || "#ffffff";
-      const bgTransparent = (document.getElementById("textBgTransparent") as HTMLInputElement | null)?.checked ?? false;
-      const fontFamily = (document.getElementById("textFontFamily") as HTMLSelectElement | null)?.value || "Helv";
-      const fontSize = parseFloat((document.getElementById("textFontSize") as HTMLInputElement | null)?.value || "14") || 14;
-      const bgRgb = hexToRgb01(bg);
-      const bg_color: [number, number, number, number] = [bgRgb[0], bgRgb[1], bgRgb[2], bgTransparent ? 0 : 1];
-      const snap = await invoke<DocSnapshot>("add_freetext", {
-        document: state.currentDoc,
-        args: {
-          page: pageIdx,
-          rect,
-          text,
-          color: hexToRgb01(fg),
-          bg_color,
-          font_size: fontSize,
-          font_family: fontFamily,
-          rotation_quadrant: effectiveRotation(pageIdx),
-          opacity: 1.0,
-          print: state.printAnnotations,
-        },
-      });
-      applyDocSnapshot(snap);
-      setStatus(t("st.added", { label: toolNoun("freetext") }));
-    } catch (e) {
-      setStatus(t("st.addError", { label: toolNoun("freetext"), e: String(e) }));
-    }
-  };
-  ed.addEventListener("blur", () => { void commit(); });
-  ed.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { committed = true; cleanup(); }
-    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ed.blur(); }
-  });
 }
 
 function spawnTextNoteEditor(
@@ -659,6 +586,7 @@ async function refreshComments() {
   state.cachedAnnotations = list;
   renderComments();
   renderNotesAllSlots();
+  callbacks.renderTextEditAll();
 }
 
 // ---------- Sticky-note popups on the page ----------
@@ -1182,6 +1110,8 @@ export function initAnnot() {
   // Shape draw pipeline
   document.addEventListener("pointerdown", (ev) => {
     if (!state.shapeTool || !state.currentDoc) return;
+    // The Text tool places its editor on the press itself (textedit.ts).
+    if (state.shapeTool === "freetext") return;
     if (ev.button !== 0) return;
     if (isOverlayControl(ev.target)) return;
     const hit = findSlotFromTarget(ev.target);
@@ -1269,7 +1199,7 @@ export function initAnnot() {
       return;
     }
 
-    if (dxPx < 3 && dyPx < 3 && tool !== "freetext" && tool !== "note") return;
+    if (dxPx < 3 && dyPx < 3 && tool !== "note") return;
 
     const start = imagePxToPagePt(ds.slot, ds.pageIdx, sx.x, sx.y);
     const end = imagePxToPagePt(ds.slot, ds.pageIdx, cx.x, cx.y);
@@ -1324,20 +1254,6 @@ export function initAnnot() {
       } catch (e) {
         setStatus(t("st.saveError", { e: String(e) }));
       }
-      return;
-    }
-
-    if (tool === "freetext") {
-      let rectPx = {
-        x: Math.min(sx.x, cx.x),
-        y: Math.min(sx.y, cx.y),
-        w: Math.abs(cx.x - sx.x),
-        h: Math.abs(cx.y - sx.y),
-      };
-      if (rectPx.w < 60 || rectPx.h < 24) {
-        rectPx = { x: sx.x, y: sx.y, w: 220, h: 40 };
-      }
-      spawnFreeTextEditor(ds.slot, ds.pageIdx, rectPx);
       return;
     }
 

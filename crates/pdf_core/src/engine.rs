@@ -1,7 +1,8 @@
 use crate::error::CoreResult;
 use pdf_types::{
     AttachmentInfo, CharBox, DocMetadata, DocPermissions, DocumentId, FormFieldInfo, OutlineNode,
-    PageIndex, PageLink, PageSize, Rotation, SearchHit, SearchQuery, TextRun, ZoomLevel,
+    PageIndex, PageLink, PageSize, Rotation, SearchHit, SearchQuery, TextBlock, TextReplace,
+    TextRun, ZoomLevel,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -93,6 +94,24 @@ pub trait PdfEngine: Send + Sync {
     /// Default: none.
     fn page_char_boxes(&self, _doc: DocumentId, _page: PageIndex) -> CoreResult<Vec<CharBox>> {
         Ok(Vec::new())
+    }
+    /// Editable lines of text in the page content (see [`TextBlock`]).
+    /// Default: none.
+    fn page_text_blocks(&self, _doc: DocumentId, _page: PageIndex) -> CoreResult<Vec<TextBlock>> {
+        Ok(Vec::new())
+    }
+    /// Replace the page objects of one text block with new text and return
+    /// the resulting document bytes; the loaded document is left untouched
+    /// (the caller reloads it). Default: unsupported.
+    fn replace_page_text(
+        &self,
+        _doc: DocumentId,
+        _page: PageIndex,
+        _edit: &TextReplace,
+    ) -> CoreResult<Vec<u8>> {
+        Err(crate::error::CoreError::Engine(
+            "text editing is not supported by this engine".into(),
+        ))
     }
     /// Show the native OS print dialog and print the document. Returns `true`
     /// if the user printed, `false` if they cancelled. Default: unsupported.

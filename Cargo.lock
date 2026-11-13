@@ -3418,6 +3418,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "ttf-parser",
  "windows 0.58.0",
 ]
 

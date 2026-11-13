@@ -409,7 +409,7 @@ async function renderSlot(idx: number) {
 }
 
 /** Rebuild the per-page overlays (text, search hits, links, notes,
- * redactions, form fields) for the slot's current size. */
+ * redactions, form fields, text edit targets) for the slot's current size. */
 async function refreshLayers(idx: number) {
   await ensureTextLayer(idx);
   renderHighlightsFor(idx);
@@ -417,6 +417,7 @@ async function refreshLayers(idx: number) {
   callbacks.renderNotesFor(idx);
   callbacks.renderRedactsFor(idx);
   callbacks.renderFormFor(idx);
+  callbacks.renderTextEditFor(idx);
 }
 
 // ---------- Sharp detail window (deep zoom / huge scans) ----------

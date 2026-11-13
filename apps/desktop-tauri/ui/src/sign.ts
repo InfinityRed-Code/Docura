@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   DocSnapshot, RectPt, SignatureEntry, SignatureReport, SignTool, Slot, WinCertEntry,
 } from "./types";
+import { openNewTextBox } from "./textedit";
 import { state } from "./state";
 import { t } from "./i18n";
 import { setStatus } from "./dom";
@@ -10,7 +11,7 @@ import { applyDocSnapshot } from "./doc";
 import { effectiveRotation } from "./viewer";
 import {
   clearMarkupAndEraser, clearSignToolUi, findSlotFromTarget, hexToRgb01, imagePxToPagePt,
-  isOverlayControl, setShapeTool, spawnFreeTextEditor,
+  isOverlayControl, setShapeTool,
 } from "./annot";
 
 /** Localized name of a signature kind / mark tool for status messages. */
@@ -123,7 +124,7 @@ async function placeMarkAt(slot: Slot, pageIdx: number, cx: number, cy: number) 
   const col = signColor();
 
   if (tool === "text") {
-    spawnFreeTextEditor(slot, pageIdx, { x: cx, y: cy, w: 220, h: 40 });
+    openNewTextBox(slot, pageIdx, cx, cy);
     return;
   }
 

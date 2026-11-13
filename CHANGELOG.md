@@ -11,6 +11,39 @@ scope each tag landed.
 
 ## [Unreleased]
 
+Text editing reworked (#7).
+
+### Added
+- **Edit existing text.** With the Text tool armed, every line of text on the
+  page — native text as well as an OCR layer — is outlined and can be clicked
+  and retyped. The old text is removed from the page content and the new text
+  drawn at the same baseline in the closest standard font (sans / serif /
+  monospace, bold / italic kept); on scans the printed line is painted over
+  with the sampled page color first. Characters beyond Latin-1 use an embedded
+  system font. Editing works line by line; text does not reflow.
+  Text from fonts without a Unicode mapping (PDFs printed through a
+  PostScript / XPS driver, the virtual printer included — copy and search
+  yield gibberish there) is read back by matching the embedded glyphs against
+  the installed fonts. Where the original font is not installed the editor
+  opens empty on the line, which stays visible until typing starts.
+  Where the line's font is installed on this machine (identified by those
+  glyphs or by its PostScript name) the new text is written with that very
+  font, embedded once per page, so an edited line looks like its neighbours;
+  changing family / bold / italic in the format bar switches to the standard
+  fonts. Arial, Times New Roman and Courier New are never embedded — the
+  standard fonts are their metric twins.
+- **Floating format bar** on the text editor: font family, size, bold, italic,
+  text color, background color / transparent, delete, done. It replaces the
+  "Text format" popover in the ribbon. Text boxes can be dragged by the grip.
+- Text boxes can use Times and Courier besides Helvetica, each bold / italic.
+
+### Changed
+- **Text boxes stay editable.** Clicking a text box reopens it in the editor
+  (text, style, position); the change is one undo step. Emptying it deletes it.
+- The Text tool places a box with a single click; the box grows with the text
+  instead of clipping at a pre-drawn rectangle. Enter starts a new line,
+  Ctrl+Enter or a click outside finishes, Esc cancels.
+
 ## [1.2.0] — 2026-11-09
 
 More room for the document: the ribbon can auto-hide.

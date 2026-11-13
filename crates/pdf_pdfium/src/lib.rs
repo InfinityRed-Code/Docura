@@ -33,7 +33,9 @@ use pdfium_render::prelude::*;
 
 #[cfg(windows)]
 mod print_win;
+mod fontmatch;
 mod proxy;
+mod textedit;
 
 /// Control characters PDFium emits for glyphs without a Unicode mapping
 /// (e.g. U+0002), plus the non-characters U+FFFE/U+FFFF. They are invalid
@@ -537,6 +539,48 @@ impl PdfEngine for PdfiumEngine {
             });
         }
         Ok(out)
+    }
+
+    fn page_text_blocks(
+        &self,
+        doc: DocumentId,
+        page: PageIndex,
+    ) -> CoreResult<Vec<pdf_types::TextBlock>> {
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        // For proxied documents this is the downsampled render copy; its
+        // page objects are the original's, only image data differs.
+        let document = entry.doc.as_ref().ok_or(CoreError::DocumentNotLoaded)?;
+        let p = document
+            .pages()
+            .get(page.0 as u16)
+            .map_err(|e| CoreError::Engine(format!("page: {e}")))?;
+        textedit::list(&p).map_err(|e| CoreError::Engine(format!("text blocks: {e}")))
+    }
+
+    fn replace_page_text(
+        &self,
+        doc: DocumentId,
+        page: PageIndex,
+        edit: &pdf_types::TextReplace,
+    ) -> CoreResult<Vec<u8>> {
+        let pdfium = shared_pdfium()?;
+        // The lock is held throughout: PDFium is not thread-safe, even for
+        // the private copy edited here.
+        let inner = self.inner.lock();
+        let entry = inner.docs.get(&doc).ok_or(CoreError::DocumentNotLoaded)?;
+        let bytes: &[u8] = match &entry.orig {
+            Some(orig) => orig,
+            // SAFETY: `bytes_raw` is live until the entry is dropped and we
+            // hold the lock preventing that.
+            None => unsafe { &*entry.bytes_raw },
+        };
+        let mut copy = pdfium
+            .load_pdf_from_byte_slice(bytes, None)
+            .map_err(|e| CoreError::Engine(format!("replace text: load: {e}")))?;
+        textedit::replace(&mut copy, page.0 as u16, edit).map_err(CoreError::Engine)?;
+        copy.save_to_bytes()
+            .map_err(|e| CoreError::Engine(format!("replace text: save: {e}")))
     }
 
     fn outline(&self, doc: DocumentId) -> CoreResult<Vec<OutlineNode>> {

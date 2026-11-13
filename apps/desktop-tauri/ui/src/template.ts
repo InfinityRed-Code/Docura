@@ -147,18 +147,6 @@ export function buildHtml(): string {
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <button class="cmd shapeTool" data-shape="freetext" data-doc title="${t("tip.freetext")}"><i data-lucide="type"></i><span>${t("lbl.textAdd")}</span></button>
-          <div class="menuHost">
-            <button class="cmd menuTrigger" id="textOptsBtn" aria-haspopup="true" aria-expanded="false" title="${t("tip.textFormat")}"><i data-lucide="sliders-horizontal"></i><span>${t("lbl.textFormat")}</span></button>
-            <div class="popover hidden popoverForm" role="menu">
-              <label class="popRow"><span>${t("tip.textColor")}</span><input type="color" id="textFgColor" value="#000000" /></label>
-              <label class="popRow"><span>${t("tip.bgColor")}</span><input type="color" id="textBgColor" value="#ffffff" /></label>
-              <label class="popRow"><span>${t("tip.transparentBg")}</span><input type="checkbox" id="textBgTransparent" /></label>
-              <label class="popRow"><span>${t("tip.fontFamily")}</span>
-                <select id="textFontFamily"><option value="Helv" selected>Helvetica</option></select></label>
-              <label class="popRow"><span>${t("tip.fontSize")}</span>
-                <input id="textFontSize" type="number" min="6" max="96" step="1" value="14" class="numSm" /></label>
-            </div>
-          </div>
           <button class="cmd shapeTool" data-shape="stamp" data-doc title="${t("tip.stamp")}"><i data-lucide="image-plus"></i><span>${t("lbl.addImage")}</span></button>
         </div>
         <div class="groupLabel">${t("grp.addContent")}</div>
@@ -1129,6 +1117,48 @@ export const CSS = `
   .numSm { width:3.5rem; }
   .hiddenList { display:flex; flex-direction:column; gap:2px; font-size:0.85rem; color:var(--text-2); }
   .hiddenList div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Text editing: click targets on the page + the floating editor. */
+  .textEditLayer { position:absolute; inset:0; pointer-events:none; }
+  .textBoxHs, .textBlockHs { position:absolute; pointer-events:auto; cursor:text; border-radius:2px; }
+  .textBoxHs:hover { outline:1.5px solid var(--accent); outline-offset:1px; }
+  .textBlockHs { outline:1px dashed rgba(43,108,223,0.45); outline-offset:1px; }
+  .textBlockHs:hover { outline:1.5px solid var(--accent); background:rgba(43,108,223,0.10); }
+  body.shapeMode .textBoxHs, body.annotMode .textBoxHs, body.signMode .textBoxHs,
+  body.eraseMode .textBoxHs, body.wheelZoomMode .textBoxHs { pointer-events:none; }
+  body.textEditMode .textBoxHs { pointer-events:auto; }
+  body.textEditMode .drawLayer { cursor:text; }
+  .textEdPatch { position:absolute; z-index:19; pointer-events:none; }
+  .textEd { position:absolute; z-index:20; transform-origin:0 0; }
+  .textEdBox { display:block; box-sizing:content-box; min-width:1.2em; min-height:1.2em; line-height:1.2;
+               white-space:pre; outline:1.5px solid var(--accent); outline-offset:2px; border-radius:1px;
+               box-shadow:0 0 0 5px rgba(43,108,223,0.14); cursor:text; caret-color:var(--accent);
+               user-select:text; -webkit-user-select:text; }
+  .textEdBar { position:absolute; z-index:21; display:flex; align-items:center; gap:2px; padding:4px;
+               background:var(--bg); color:var(--text); border:1px solid var(--border-2); border-radius:10px;
+               box-shadow:0 6px 20px rgba(0,0,0,0.22), 0 1px 3px rgba(0,0,0,0.12);
+               font:12px "Segoe UI", system-ui, sans-serif; white-space:nowrap; user-select:none; }
+  .textEdBar select, .textEdBar .teSize { height:26px; border:1px solid var(--border); border-radius:6px;
+               background:var(--bg-2); color:var(--text); font:inherit; padding:0 4px; }
+  .textEdBar .teSize { width:3.4rem; }
+  .textEdBar .teBtn { position:relative; display:inline-flex; align-items:center; justify-content:center;
+               width:26px; height:26px; padding:0; border:none; border-radius:6px; background:transparent;
+               color:var(--text); cursor:pointer; }
+  .textEdBar .teBtn:hover { background:var(--hover); }
+  .textEdBar .teBtn.active { background:var(--accent-tint); color:var(--accent-strong); }
+  .textEdBar .teBtn svg.lucide { width:15px; height:15px; }
+  .textEdBar .teSwatchBtn svg.lucide { width:13px; height:13px; margin-bottom:5px; }
+  .textEdBar .teSwatchBtn input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; padding:0; border:0; }
+  .textEdBar .teSwatch { position:absolute; left:5px; right:5px; bottom:4px; height:4px; border-radius:2px;
+               border:1px solid var(--border-2); }
+  .textEdBar .teSwatch.none { background:repeating-linear-gradient(45deg, var(--bg-3) 0 3px, var(--bg) 3px 6px) !important; }
+  .textEdBar .teSep { width:1px; height:18px; margin:0 3px; background:var(--border); }
+  .textEdBar .teGrip { display:inline-flex; align-items:center; width:16px; height:26px; color:var(--text-3);
+               cursor:grab; touch-action:none; }
+  .textEdBar .teGrip:active { cursor:grabbing; }
+  .textEdBar .teGrip svg.lucide { width:15px; height:15px; }
+  .textEdBar .teDelete:hover { background:rgba(210,59,59,0.14); color:var(--danger); }
+  .textEdBar .teDone { background:var(--accent); color:#fff; }
+  .textEdBar .teDone:hover { background:var(--accent-strong); }
   .noteLayer .noteHotspot { position:absolute; pointer-events:auto; cursor:pointer; border-radius:3px; }
   .noteLayer .noteHotspot:hover { outline:1px solid rgba(179,154,0,0.7); }
   .stickyNote { position:absolute; width:220px; z-index:20; background:#fff8b0; color:#000;

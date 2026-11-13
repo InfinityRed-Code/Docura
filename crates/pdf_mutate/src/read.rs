@@ -3,7 +3,7 @@
 //! convention. Used by the comment panel and XFDF export.
 
 use lopdf::{Document, Object, ObjectId};
-use pdf_types::{AnnotationInfo, RectPt};
+use pdf_types::{AnnotationInfo, FreeTextStyle, RectPt};
 
 
 fn resolve_obj<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Object> {
@@ -134,6 +134,69 @@ fn fallback_id(oid: ObjectId) -> String {
     format!("obj-{}-{}", oid.0, oid.1)
 }
 
+/// Styling of a /FreeText annotation: size and text color from the /DA
+/// string, the rest from the private style dictionary this app writes.
+/// Boxes without one (older versions, other writers) get the old defaults:
+/// Helvetica on a white background.
+fn read_freetext_style(doc: &Document, dict: &lopdf::Dictionary) -> FreeTextStyle {
+    let mut style = FreeTextStyle {
+        font_size: 14.0,
+        text_color: [0.0, 0.0, 0.0],
+        bg_color: Some([1.0, 1.0, 1.0]),
+        font_family: "Helv".into(),
+        bold: false,
+        italic: false,
+        rotation_quadrant: 0,
+    };
+    // "r g b rg /Font size Tf" (gray "g" and other orders tolerated).
+    if let Some(da) = read_string_field(doc, dict, b"DA") {
+        let toks: Vec<&str> = da.split_whitespace().collect();
+        let num = |i: usize| toks.get(i).and_then(|t| t.parse::<f32>().ok());
+        for (i, tok) in toks.iter().enumerate() {
+            match *tok {
+                "Tf" if i >= 1 => {
+                    if let Some(size) = num(i - 1).filter(|s| *s > 0.0) {
+                        style.font_size = size;
+                    }
+                }
+                "rg" if i >= 3 => {
+                    if let (Some(r), Some(g), Some(b)) = (num(i - 3), num(i - 2), num(i - 1)) {
+                        style.text_color = [r, g, b];
+                    }
+                }
+                "g" if i >= 1 => {
+                    if let Some(v) = num(i - 1) {
+                        style.text_color = [v, v, v];
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let private = dict
+        .get(crate::annotations::FREETEXT_STYLE_KEY)
+        .ok()
+        .and_then(|o| resolve_obj(doc, o))
+        .and_then(|o| o.as_dict().ok());
+    if let Some(p) = private {
+        if let Some(name) = p.get(b"Font").ok().and_then(|o| o.as_name().ok()) {
+            style.font_family = String::from_utf8_lossy(name).to_string();
+        }
+        let flag = |key: &[u8]| p.get(key).ok().and_then(|o| o.as_bool().ok()).unwrap_or(false);
+        style.bold = flag(b"Bold");
+        style.italic = flag(b"Italic");
+        style.rotation_quadrant =
+            p.get(b"Rot").ok().and_then(|o| o.as_i64().ok()).unwrap_or(0).rem_euclid(4) as u8;
+        style.bg_color = p
+            .get(b"BG")
+            .ok()
+            .and_then(|o| obj_as_array(doc, o))
+            .filter(|a| a.len() == 3)
+            .and_then(|a| Some([obj_to_f32(&a[0])?, obj_to_f32(&a[1])?, obj_to_f32(&a[2])?]));
+    }
+    style
+}
+
 pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
     let mut out: Vec<AnnotationInfo> = Vec::new();
     for (page_idx, page_id) in doc.page_iter().enumerate() {
@@ -187,7 +250,10 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
                 .map(|n| String::from_utf8_lossy(n).to_string());
             let id = read_string_field(doc, dict, b"NM").unwrap_or_else(|| fallback_id(annot_oid));
 
+            let freetext = (subtype == "FreeText").then(|| read_freetext_style(doc, dict));
+
             out.push(AnnotationInfo {
+                freetext,
                 id,
                 page: page_idx as u32,
                 subtype,
