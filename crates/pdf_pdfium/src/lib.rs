@@ -131,11 +131,24 @@ impl Drop for LoadedDoc {
     }
 }
 
-/// Full-resolution render copy of a document with huge raster images (see
-/// `proxy`): used for renders above `low_scale`.
+/// Tiled render copies of a document with huge raster images (see
+/// `proxy`): used for renders above `low_scale`, coarsest level first.
 struct HiDoc {
-    loaded: LoadedDoc,
+    /// `(max_zoom, doc)`: the zoom up to which the level is screen-sharp.
+    levels: Vec<(f32, LoadedDoc)>,
     low_scale: f32,
+}
+
+impl HiDoc {
+    /// Coarsest level that is still sharp at `zoom` (else the finest).
+    fn level_for(&self, zoom: f32) -> Option<(usize, &LoadedDoc)> {
+        self.levels
+            .iter()
+            .enumerate()
+            .find(|(_, (max, _))| zoom <= max * 1.01)
+            .or_else(|| self.levels.iter().enumerate().next_back())
+            .map(|(i, (_, d))| (i, d))
+    }
 }
 
 /// Per-document state. Owns the leaked byte buffer and the resident
@@ -143,7 +156,7 @@ struct HiDoc {
 /// reclaims the bytes.
 ///
 /// For documents with huge raster images (scanned plans) `doc` is the
-/// downsampled render proxy, `hi` the tiled full-resolution one and `orig`
+/// downsampled render proxy, `hi` the tiled resolution pyramid and `orig`
 /// the untouched file bytes (what `document_bytes` hands out for saving,
 /// signing and mutations).
 struct DocEntry {
@@ -193,21 +206,29 @@ impl DocEntry {
     fn build(bytes: Vec<u8>, password: Option<&str>) -> Result<Self, PdfiumError> {
         let proxies = if password.is_none() { proxy::build(&bytes) } else { None };
         let (main, orig, hi) = match proxies {
-            Some(p) => match (LoadedDoc::load(p.low, None), LoadedDoc::load(p.high, None)) {
-                (Ok(low), Ok(high)) => (
-                    low,
-                    Some(bytes),
-                    Some(HiDoc { loaded: high, low_scale: p.low_scale }),
-                ),
-                (low, high) => {
-                    tracing::warn!(
-                        "render proxies failed to load (low ok={}, high ok={}); rendering the original",
-                        low.is_ok(),
-                        high.is_ok()
-                    );
-                    (LoadedDoc::load(bytes, password)?, None, None)
+            Some(p) => {
+                let low = LoadedDoc::load(p.low, None);
+                let levels: Result<Vec<(f32, LoadedDoc)>, PdfiumError> = p
+                    .levels
+                    .into_iter()
+                    .map(|(z, b)| LoadedDoc::load(b, None).map(|d| (z, d)))
+                    .collect();
+                match (low, levels) {
+                    (Ok(low), Ok(levels)) if !levels.is_empty() => (
+                        low,
+                        Some(bytes),
+                        Some(HiDoc { levels, low_scale: p.low_scale }),
+                    ),
+                    (low, levels) => {
+                        tracing::warn!(
+                            "render proxies failed to load (low ok={}, levels ok={}); rendering the original",
+                            low.is_ok(),
+                            levels.is_ok()
+                        );
+                        (LoadedDoc::load(bytes, password)?, None, None)
+                    }
                 }
-            },
+            }
             None => (LoadedDoc::load(bytes, password)?, None, None),
         };
         // Hand the document/buffer pair over to the entry, whose own Drop
@@ -226,12 +247,21 @@ impl DocEntry {
         })
     }
 
-    /// Document to render at `zoom`: the full-resolution proxy above the
-    /// downsampled one's sharpness limit, else the resident document.
+    /// Document to render at `zoom`: above the downsampled proxy's
+    /// sharpness limit the coarsest pyramid level that is still sharp,
+    /// else the resident document.
     fn render_doc(&self, zoom: f32) -> Option<&PdfDocument<'static>> {
+        match self.hi_level(zoom) {
+            Some((_, d)) => d.doc.as_ref(),
+            None => self.doc.as_ref(),
+        }
+    }
+
+    /// Pyramid level (index, doc) used at `zoom`, if any.
+    fn hi_level(&self, zoom: f32) -> Option<(usize, &LoadedDoc)> {
         match &self.hi {
-            Some(hi) if zoom > hi.low_scale * 1.01 => hi.loaded.doc.as_ref(),
-            _ => self.doc.as_ref(),
+            Some(hi) if zoom > hi.low_scale * 1.01 => hi.level_for(zoom),
+            _ => None,
         }
     }
 }
@@ -373,6 +403,7 @@ impl PdfEngine for PdfiumEngine {
     }
 
     fn render(&self, req: RenderRequest) -> CoreResult<RenderedPage> {
+        proxy::full_speed();
         let t_lock = std::time::Instant::now();
         let inner = self.inner.lock();
         let lock_t = t_lock.elapsed();
@@ -736,6 +767,7 @@ impl PdfEngine for PdfiumEngine {
         if width == 0 || height == 0 || width > 8192 || height > 8192 {
             return Err(CoreError::Engine(format!("bad region size {width}x{height}")));
         }
+        proxy::full_speed();
         let inner = self.inner.lock();
         let entry = inner.docs.get(&req.document).ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.render_doc(req.zoom.0).ok_or(CoreError::DocumentNotLoaded)?;
@@ -774,10 +806,10 @@ impl PdfEngine for PdfiumEngine {
         );
         let rgba = bitmap.as_rgba_bytes();
         tracing::info!(
-            "pdfium::render_region page={} zoom={:.2} at {x},{y} {width}x{height} of {full_w}x{full_h} hi={} t={:?}",
+            "pdfium::render_region page={} zoom={:.2} at {x},{y} {width}x{height} of {full_w}x{full_h} level={:?} t={:?}",
             req.page.0,
             req.zoom.0,
-            entry.hi.as_ref().is_some_and(|h| req.zoom.0 > h.low_scale * 1.01),
+            entry.hi_level(req.zoom.0).map(|(i, _)| i),
             t.elapsed()
         );
         Ok(RenderedPage { width_px: width, height_px: height, rgba })

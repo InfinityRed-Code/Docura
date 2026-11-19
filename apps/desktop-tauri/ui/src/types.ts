@@ -96,6 +96,11 @@ export type Slot = {
    * the (capped, upscaled) page bitmap. */
   detail: HTMLImageElement | null;
   detailKey: string | null;
+  /** Content generation + rotation the text layer was built for, and the
+   * fixed size it was laid out at; zooming only rescales it. */
+  textKey: string | null;
+  textW: number;
+  textH: number;
 };
 
 export type DocSnapshot = {

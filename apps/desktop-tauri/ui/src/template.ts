@@ -1017,8 +1017,8 @@ export const CSS = `
   .theme-dark .pageSlot .placeholder { background:#2a2d31; color:#5a5e66; }
   .theme-dark .pageSlot .placeholder::after { background: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.08) 50%, transparent 65%); }
   @media (prefers-reduced-motion: reduce) { .pageSlot .placeholder::after { animation:none; } }
-  .selectLayer { position:absolute; inset:0; cursor:text; color:transparent; user-select:text;
-                 pointer-events:auto; line-height: 1; }
+  .selectLayer { position:absolute; left:0; top:0; cursor:text; color:transparent; user-select:text;
+                 pointer-events:auto; line-height: 1; transform-origin: 0 0; }
   .selectLayer span { position:absolute; white-space:pre; color:transparent; user-select:text;
                       -webkit-user-select:text; transform-origin: 0 0; }
   .selectLayer span::selection { background: rgba(43,108,223,0.4); color:transparent; }

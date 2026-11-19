@@ -43,6 +43,31 @@ Text editing reworked (#7).
 - The Text tool places a box with a single click; the box grows with the text
   instead of clipping at a pre-drawn rectangle. Enter starts a new line,
   Ctrl+Enter or a click outside finishes, Esc cancels.
+- The mouse wheel zooms by a factor per notch (×1.2 with Ctrl, ×1.25 in
+  hand mode) instead of a fixed +10 %, which crawled at high zoom; touchpad
+  pinch zooms smoothly.
+
+### Fixed — zooming large plans
+- **Zooming lagged seconds behind.** Every wheel notch started a sharp
+  region render (up to 2 s each on scanned plans) that PDFium can't abort,
+  so they queued up — 5–8 s of backlog after a quick zoom. Region renders
+  now run one at a time, wait until the wheel settles, and only the newest
+  view is rendered; the previous sharp window stays visible (scaled) while
+  zooming instead of dropping back to the blurry preview.
+- **Sharp regions were slow just above the preview resolution.** Scanned
+  plans now get a resolution pyramid (½ and ¼ besides full resolution);
+  each region uses the coarsest level that is still sharp, so a
+  viewer-sized region renders in ~50–100 ms instead of 0.6–1.9 s.
+- After a big zoom step the visible area is rendered sharp first, the
+  whole-page bitmap (only seen when panning further) afterwards.
+- **Opening plans took 9–12 s when the window wasn't focused.** Windows
+  moved the decoder to efficiency cores at low clocks on hybrid CPUs
+  (Intel 12th gen and later); decoding and rendering threads now opt out
+  of power throttling (2.4–3.4 s on the test laptop).
+- **Zooming rebuilt the whole text layer on every step.** The selectable
+  text is now laid out once per page and only rescaled while zooming
+  (about 20 layout passes per zoom gesture instead of several hundred to
+  over a thousand).
 
 ## [1.2.0] — 2026-11-09
 

@@ -7,14 +7,17 @@
 //!  - it does not cache such an image, so *every* render — thumbnail, fit
 //!    page or 400 % — inflates it again (≈ 2–3 s each).
 //!
-//! For such documents the engine renders from two derived copies while the
+//! For such documents the engine renders from derived copies while the
 //! original bytes stay untouched for saving, signing and mutations:
 //!  - `low`:  each huge image box-downsampled to ≈ 16 MP. Full-page renders
 //!    up to [`RenderProxies::low_scale`] (fit page, thumbnails, normal
 //!    reading) are fast.
-//!  - `high`: each huge image replaced by a form XObject of 1024 × 1024
-//!    full-resolution tiles. Every tile stays far below PDFium's limit, and
-//!    a clipped (zoomed-in) render only decodes the tiles it shows.
+//!  - `levels`: a pyramid of tiled copies — full resolution plus halved
+//!    ones down towards `low` — where each huge image is a form XObject of
+//!    1024-px-wide tiles. Every tile stays far below PDFium's limit, a
+//!    clipped (zoomed-in) render only decodes the tiles it shows, and the
+//!    engine picks the coarsest level that is still sharp at the zoom, so a
+//!    region never decodes much more than ~4× its own pixels.
 //!
 //! Decoding is streamed (inflate + PNG predictor, one row at a time), tiles
 //! are deflated in parallel, and results are cached by image content so a
@@ -31,18 +34,22 @@ use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 const HUGE_DECODED_BYTES: usize = 96 << 20;
 /// Pixel budget of a downsampled (`low`) image.
 const LOW_TARGET_PX: usize = 16_000_000;
-/// Edge length of a full-resolution tile.
+/// Tile width (and the height of a decoded band) in pixels.
 const TILE: usize = 1024;
+/// A pyramid level is only worth building when the next coarser copy is at
+/// least this much smaller (linear).
+const MIN_LEVEL_STEP: f64 = 1.6;
 /// Decoded images kept for instant reloads.
 const CACHE_ENTRIES: usize = 6;
 
 pub(crate) struct RenderProxies {
     /// Document with every huge image downsampled.
     pub low: Vec<u8>,
-    /// Document with every huge image split into full-resolution tiles.
-    pub high: Vec<u8>,
     /// Zoom (1.0 = 72 dpi) up to which `low` is as sharp as the screen.
     pub low_scale: f32,
+    /// Tiled documents from the coarsest to full resolution, each with the
+    /// zoom up to which it is as sharp as the screen.
+    pub levels: Vec<(f32, Vec<u8>)>,
 }
 
 struct Huge {
@@ -55,11 +62,39 @@ struct Huge {
 }
 
 struct Processed {
+    /// Downsampling factor of `low`.
+    factor: usize,
     low_w: usize,
     low_h: usize,
     /// zlib-compressed `low_w × low_h × comps` samples.
     low: Vec<u8>,
+    /// Tiled copies, finest first (`levels[0].f == 1`).
+    levels: Vec<Level>,
+}
+
+/// One tiled copy of an image, downsampled by `f` (1 = full resolution).
+struct Level {
+    f: usize,
+    w: usize,
+    h: usize,
     tiles: Vec<Tile>,
+}
+
+/// Factors of the tiled pyramid for an image whose `low` copy is `factor`×
+/// smaller: full resolution plus every power of two that still leaves a
+/// worthwhile step to `low`.
+fn level_factors(factor: usize) -> Vec<usize> {
+    let mut v = vec![1];
+    let mut f = 2;
+    while factor as f64 / f as f64 >= MIN_LEVEL_STEP {
+        v.push(f);
+        f *= 2;
+    }
+    v
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 struct Tile {
@@ -100,40 +135,62 @@ pub(crate) fn build(bytes: &[u8]) -> Option<RenderProxies> {
         handles.into_iter().map(|h| h.join().ok().flatten()).collect()
     });
 
-    let mut low_doc = doc.clone();
-    let mut high_doc = doc;
-    let page_long = max_page_long_side(&high_doc).unwrap_or(0.0);
-    let mut low_scale = f32::INFINITY;
-    let mut any = false;
-    for (hg, p) in huge.iter().zip(processed) {
-        let Some(p) = p else { continue };
-        if replace_low(&mut low_doc, hg, &p).is_none() || replace_tiles(&mut high_doc, hg, &p).is_none() {
-            continue;
-        }
-        any = true;
-        if page_long > 0.0 {
-            low_scale = low_scale.min(p.low_w.max(p.low_h) as f32 / page_long);
-        }
-    }
-    if !any {
+    let pairs: Vec<(&Huge, Arc<Processed>)> =
+        huge.iter().zip(processed).filter_map(|(hg, p)| p.map(|p| (hg, p))).collect();
+    if pairs.is_empty() {
         return None;
     }
-    if !low_scale.is_finite() {
-        low_scale = 1.0;
+    // Zoom at which a copy `long` pixels on its long side is 1:1 on screen.
+    // Without a usable MediaBox, scale relative to the largest `low` copy.
+    let page_long = max_page_long_side(&doc)
+        .unwrap_or_else(|| pairs.iter().map(|(_, p)| p.low_w.max(p.low_h)).max().unwrap_or(1) as f32);
+    let scale = |long: usize| long as f32 / page_long;
+
+    let mut low_doc = doc.clone();
+    let mut low_scale = f32::INFINITY;
+    for (hg, p) in &pairs {
+        replace_low(&mut low_doc, hg, p)?;
+        low_scale = low_scale.min(scale(p.low_w.max(p.low_h)));
     }
-    flatten_annotations(&mut high_doc);
     let mut low = Vec::new();
     low_doc.save_to(&mut low).ok()?;
-    let mut high = Vec::new();
-    high_doc.save_to(&mut high).ok()?;
+    drop(low_doc);
+
+    // Pyramid level j holds every image at the largest of its own factors
+    // that is ≤ 2^j (its `low` copy where that is finer than its tiles).
+    let n_levels = pairs.iter().map(|(_, p)| p.levels.len()).max().unwrap_or(1);
+    let mut levels = Vec::with_capacity(n_levels);
+    for j in (0..n_levels).rev() {
+        let target = 1usize << j;
+        let mut d = doc.clone();
+        let mut max_zoom = f32::INFINITY;
+        for (hg, p) in &pairs {
+            let lvl = p.levels.iter().rev().find(|l| l.f <= target)?;
+            if p.factor <= target && p.factor > lvl.f {
+                replace_low(&mut d, hg, p)?;
+                max_zoom = max_zoom.min(scale(p.low_w.max(p.low_h)));
+            } else {
+                replace_tiles(&mut d, hg, lvl)?;
+                max_zoom = max_zoom.min(scale(lvl.w.max(lvl.h)));
+            }
+        }
+        flatten_annotations(&mut d);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).ok()?;
+        levels.push((max_zoom, bytes));
+    }
     tracing::info!(
-        "render proxies: {} huge image(s), low_scale={low_scale:.2}, low={:.1}MB high={:.1}MB in {:?}",
-        huge.len(),
+        "render proxies: {} huge image(s), low_scale={low_scale:.2}, low={:.1}MB, levels [{}] in {:?}",
+        pairs.len(),
         low.len() as f64 / 1048576.0,
-        high.len() as f64 / 1048576.0,
+        levels
+            .iter()
+            .map(|(z, b)| format!("≤{z:.2}: {:.1}MB", b.len() as f64 / 1048576.0))
+            .collect::<Vec<_>>()
+            .join(", "),
         t0.elapsed()
     );
-    Some(RenderProxies { low, high, low_scale })
+    Some(RenderProxies { low, low_scale, levels })
 }
 
 fn cached_or_process(doc: &Document, hg: &Huge) -> Option<Arc<Processed>> {
@@ -145,8 +202,14 @@ fn cached_or_process(doc: &Document, hg: &Huge) -> Option<Arc<Processed>> {
     match process(&stream.content, hg) {
         Ok(p) => {
             tracing::info!(
-                "render proxies: decoded {:?} {}x{} → low {}x{}, {} tiles in {:?}",
-                hg.id, hg.w, hg.h, p.low_w, p.low_h, p.tiles.len(), t.elapsed()
+                "render proxies: decoded {:?} {}x{} → low {}x{}, levels {:?} in {:?}",
+                hg.id,
+                hg.w,
+                hg.h,
+                p.low_w,
+                p.low_h,
+                p.levels.iter().map(|l| (l.f, l.tiles.len())).collect::<Vec<_>>(),
+                t.elapsed()
             );
             let p = Arc::new(p);
             if let Ok(mut c) = CACHE.lock() {
@@ -366,6 +429,39 @@ fn unfilter(kind: u8, row: &mut [u8], prev: &[u8], bpp: usize) -> Result<(), Str
     Ok(())
 }
 
+/// Ask Windows to run the calling thread at full speed. Decoding and
+/// rendering a plan is work the user is waiting for, but while the window
+/// isn't focused (switched away during a load, or ctrl+wheel over the
+/// window on a second monitor) the scheduler treats the app as low-QoS and
+/// parks its threads on efficiency cores at reduced clocks: 3-4x slower on
+/// hybrid (P/E-core) CPUs.
+#[cfg(windows)]
+pub(crate) fn full_speed() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadInformation, ThreadPowerThrottling, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
+    };
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        // Mechanism selected but off = opt out of throttling ("HighQoS").
+        StateMask: 0,
+    };
+    // SAFETY: valid pseudo-handle and a correctly sized, initialised struct.
+    // Best effort: older Windows versions reject the class, which is fine.
+    unsafe {
+        let _ = SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            &state as *const THREAD_POWER_THROTTLING_STATE as *const core::ffi::c_void,
+            std::mem::size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn full_speed() {}
+
 fn zlib(data: &[u8]) -> Vec<u8> {
     let mut enc = flate2::write::ZlibEncoder::new(Vec::with_capacity(data.len() / 8), flate2::Compression::fast());
     // Writing into a Vec cannot fail.
@@ -374,27 +470,40 @@ fn zlib(data: &[u8]) -> Vec<u8> {
 }
 
 fn process(compressed: &[u8], hg: &Huge) -> Result<Processed, String> {
+    process_with(compressed, hg, LOW_TARGET_PX)
+}
+
+fn process_with(compressed: &[u8], hg: &Huge, low_target: usize) -> Result<Processed, String> {
+    full_speed();
     let (w, h, comps) = (hg.w, hg.h, hg.comps);
-    let factor = (((w * h) as f64 / LOW_TARGET_PX as f64).sqrt().ceil() as usize).max(1);
+    let factor = (((w * h) as f64 / low_target as f64).sqrt().ceil() as usize).max(1);
     let (low_w, low_h) = (w.div_ceil(factor), h.div_ceil(factor));
+    let fs = level_factors(factor);
     let row_len = w * comps;
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8);
-    // Bands are a whole number of downsample blocks high, so every band can
-    // be reduced on its own (in parallel with decoding the next one).
-    let band_h = (TILE / factor).max(1) * factor;
+    // Bands are a whole number of blocks of every reduction high, so each
+    // band can be reduced on its own (in parallel with decoding the next).
+    let max_f = *fs.last().expect("level 1 always exists");
+    let unit = factor / gcd(factor, max_f) * max_f;
+    let band_h = ((TILE / unit) * unit).max(unit);
 
     // Decoding (inflate + PNG unfilter) is inherently sequential; it runs
     // here while a worker reduces/tiles the previous band on all cores.
     std::thread::scope(|s| -> Result<Processed, String> {
         let (band_tx, band_rx) = std::sync::mpsc::sync_channel::<(Vec<u8>, usize, usize)>(1);
         let (free_tx, free_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let fs_worker = fs.clone();
         let worker = s.spawn(move || {
+            full_speed();
             let mut low = Vec::with_capacity(low_w * low_h * comps);
-            let mut tiles = Vec::new();
+            let mut tiles: Vec<Vec<Tile>> = fs_worker.iter().map(|_| Vec::new()).collect();
             for (band, y0, rows) in band_rx {
-                let (l, t) = reduce_band(&band[..rows * row_len], y0, rows, w, comps, factor, threads);
+                let (l, t) =
+                    reduce_band(&band[..rows * row_len], y0, rows, w, comps, factor, &fs_worker, threads);
                 low.extend_from_slice(&l);
-                tiles.extend(t);
+                for (acc, lt) in tiles.iter_mut().zip(t) {
+                    acc.extend(lt);
+                }
                 let _ = free_tx.send(band);
             }
             (low, tiles)
@@ -403,7 +512,6 @@ fn process(compressed: &[u8], hg: &Huge) -> Result<Processed, String> {
         let mut dec = flate2::read::ZlibDecoder::new(compressed);
         let mut raw = vec![0u8; row_len + hg.png as usize];
         let mut prev = vec![0u8; row_len];
-        let mut spare: Vec<Vec<u8>> = Vec::new();
         let mut band = vec![0u8; band_h * row_len];
         let (mut rows, mut y0) = (0usize, 0usize);
         let mut result = Ok(());
@@ -426,10 +534,7 @@ fn process(compressed: &[u8], hg: &Huge) -> Result<Processed, String> {
             }
             rows += 1;
             if rows == band_h || y + 1 == h {
-                let next = spare
-                    .pop()
-                    .or_else(|| free_rx.try_recv().ok())
-                    .unwrap_or_else(|| vec![0u8; band_h * row_len]);
+                let next = free_rx.try_recv().unwrap_or_else(|_| vec![0u8; band_h * row_len]);
                 let full = std::mem::replace(&mut band, next);
                 if band_tx.send((full, y0, rows)).is_err() {
                     break;
@@ -441,46 +546,44 @@ fn process(compressed: &[u8], hg: &Huge) -> Result<Processed, String> {
         drop(band_tx);
         let (low, tiles) = worker.join().map_err(|_| "proxy worker panicked".to_string())?;
         result?;
-        Ok(Processed { low_w, low_h, low: zlib(&low), tiles })
+        let levels = fs
+            .iter()
+            .zip(tiles)
+            .map(|(&f, tiles)| Level { f, w: w.div_ceil(f), h: h.div_ceil(f), tiles })
+            .collect();
+        Ok(Processed { factor, low_w, low_h, low: zlib(&low), levels })
     })
 }
 
-/// Reduce one decoded band: its rows of the downsampled image (area
-/// average over `factor × factor` blocks) and its full-resolution tiles.
-/// Columns are split across `threads`.
-fn reduce_band(
-    band: &[u8],
-    y0: usize,
-    rows: usize,
-    w: usize,
-    comps: usize,
-    factor: usize,
-    threads: usize,
-) -> (Vec<u8>, Vec<Tile>) {
+/// Area-average `src` (`w` × `rows` pixels) over `k × k` blocks (partial
+/// blocks at the right/bottom edge average what they cover). Output columns
+/// are split across `threads`.
+fn box_reduce(src: &[u8], w: usize, rows: usize, comps: usize, k: usize, threads: usize) -> (Vec<u8>, usize, usize) {
     let row_len = w * comps;
-    let low_w = w.div_ceil(factor);
-    let low_rows = rows.div_ceil(factor);
-    let ncols = w.div_ceil(TILE);
-    let per_low = low_w.div_ceil(threads).max(1);
-    let per_tile = ncols.div_ceil(threads).max(1);
-    std::thread::scope(|s| {
-        // Downsample: each thread owns a range of output columns.
-        let low_parts: Vec<_> = (0..low_w)
-            .step_by(per_low)
+    let out_w = w.div_ceil(k);
+    let out_rows = rows.div_ceil(k);
+    if k == 1 {
+        return (src[..rows * row_len].to_vec(), w, rows);
+    }
+    let per = out_w.div_ceil(threads).max(1);
+    let parts: Vec<(usize, usize, Vec<u8>)> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..out_w)
+            .step_by(per)
             .map(|ox0| {
                 s.spawn(move || {
-                    let ox1 = (ox0 + per_low).min(low_w);
-                    let mut out = vec![0u8; low_rows * (ox1 - ox0) * comps];
+                    full_speed();
+                    let ox1 = (ox0 + per).min(out_w);
+                    let mut out = vec![0u8; out_rows * (ox1 - ox0) * comps];
                     let mut acc = vec![0u32; (ox1 - ox0) * comps];
-                    for ly in 0..low_rows {
-                        let r0 = ly * factor;
-                        let r1 = (r0 + factor).min(rows);
+                    for ly in 0..out_rows {
+                        let r0 = ly * k;
+                        let r1 = (r0 + k).min(rows);
                         acc.fill(0);
                         for r in r0..r1 {
-                            let row = &band[r * row_len..(r + 1) * row_len];
+                            let row = &src[r * row_len..(r + 1) * row_len];
                             for ox in ox0..ox1 {
-                                let x0 = ox * factor;
-                                let x1 = (x0 + factor).min(w);
+                                let x0 = ox * k;
+                                let x1 = (x0 + k).min(w);
                                 let a = &mut acc[(ox - ox0) * comps..(ox - ox0 + 1) * comps];
                                 let px = &row[x0 * comps..x1 * comps];
                                 if comps == 3 {
@@ -495,8 +598,8 @@ fn reduce_band(
                                     a[2] += s2;
                                 } else {
                                     for p in px.chunks_exact(comps) {
-                                        for k in 0..comps {
-                                            a[k] += p[k] as u32;
+                                        for c in 0..comps {
+                                            a[c] += p[c] as u32;
                                         }
                                     }
                                 }
@@ -505,11 +608,11 @@ fn reduce_band(
                         let rows_in = (r1 - r0) as u32;
                         let base = ly * (ox1 - ox0) * comps;
                         for ox in ox0..ox1 {
-                            let cols = ((ox * factor + factor).min(w) - ox * factor) as u32;
+                            let cols = ((ox * k + k).min(w) - ox * k) as u32;
                             let n = cols * rows_in;
-                            for k in 0..comps {
-                                out[base + (ox - ox0) * comps + k] =
-                                    ((acc[(ox - ox0) * comps + k] + n / 2) / n) as u8;
+                            for c in 0..comps {
+                                out[base + (ox - ox0) * comps + c] =
+                                    ((acc[(ox - ox0) * comps + c] + n / 2) / n) as u8;
                             }
                         }
                     }
@@ -517,41 +620,91 @@ fn reduce_band(
                 })
             })
             .collect();
-        // Tiles: each thread owns a range of tile columns.
-        let tile_parts: Vec<_> = (0..ncols)
-            .step_by(per_tile)
-            .map(|c0| {
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    // Stitch the column ranges back into row-major rows.
+    let mut out = vec![0u8; out_rows * out_w * comps];
+    for (ox0, ox1, part) in &parts {
+        let pw = (ox1 - ox0) * comps;
+        for ly in 0..out_rows {
+            let dst = ly * out_w * comps + ox0 * comps;
+            out[dst..dst + pw].copy_from_slice(&part[ly * pw..(ly + 1) * pw]);
+        }
+    }
+    (out, out_w, out_rows)
+}
+
+/// Reduce one decoded band (rows `y0..y0 + rows` of the image): its rows of
+/// the `low` copy and its tiles of every pyramid level in `fs` (finest
+/// first, 1 then powers of two). Halved levels are computed from each
+/// other; tiles are deflated across `threads`.
+#[allow(clippy::too_many_arguments)]
+fn reduce_band(
+    band: &[u8],
+    y0: usize,
+    rows: usize,
+    w: usize,
+    comps: usize,
+    factor: usize,
+    fs: &[usize],
+    threads: usize,
+) -> (Vec<u8>, Vec<Vec<Tile>>) {
+    // (factor, samples, width, rows) of every level of this band.
+    let mut lv: Vec<(usize, std::borrow::Cow<[u8]>, usize, usize)> =
+        vec![(1, std::borrow::Cow::Borrowed(band), w, rows)];
+    for &f in &fs[1..] {
+        let (pf, src, pw, pr) = lv.last().expect("level 1");
+        let (out, ow, or) = box_reduce(src, *pw, *pr, comps, f / pf, threads);
+        lv.push((f, std::borrow::Cow::Owned(out), ow, or));
+    }
+    let low = {
+        let (lf, src, lw, lr) = lv.last().expect("level 1");
+        if factor.is_multiple_of(*lf) {
+            box_reduce(src, *lw, *lr, comps, factor / lf, threads).0
+        } else {
+            box_reduce(band, w, rows, comps, factor, threads).0
+        }
+    };
+
+    // Tile jobs over all levels, split across threads.
+    let jobs: Vec<(usize, usize)> = lv
+        .iter()
+        .enumerate()
+        .flat_map(|(li, (_, _, lw, _))| (0..lw.div_ceil(TILE)).map(move |c| (li, c)))
+        .collect();
+    let per = jobs.len().div_ceil(threads).max(1);
+    let mut tiles: Vec<Vec<Tile>> = lv.iter().map(|_| Vec::new()).collect();
+    let done: Vec<Vec<(usize, Tile)>> = std::thread::scope(|s| {
+        let lv = &lv;
+        let handles: Vec<_> = jobs
+            .chunks(per)
+            .map(|chunk| {
                 s.spawn(move || {
-                    (c0..(c0 + per_tile).min(ncols))
-                        .map(|c| {
+                    full_speed();
+                    chunk
+                        .iter()
+                        .map(|&(li, c)| {
+                            let (f, src, lw, lr) = &lv[li];
+                            let row_len = lw * comps;
                             let x0 = c * TILE;
-                            let tw = TILE.min(w - x0);
-                            let mut buf = Vec::with_capacity(tw * comps * rows);
-                            for r in 0..rows {
+                            let tw = TILE.min(lw - x0);
+                            let mut buf = Vec::with_capacity(tw * comps * lr);
+                            for r in 0..*lr {
                                 let start = r * row_len + x0 * comps;
-                                buf.extend_from_slice(&band[start..start + tw * comps]);
+                                buf.extend_from_slice(&src[start..start + tw * comps]);
                             }
-                            Tile { x: x0, y: y0, w: tw, h: rows, data: zlib(&buf) }
+                            (li, Tile { x: x0, y: y0 / f, w: tw, h: *lr, data: zlib(&buf) })
                         })
-                        .collect::<Vec<_>>()
+                        .collect()
                 })
             })
             .collect();
-
-        // Stitch the column ranges back into row-major low rows.
-        let parts: Vec<(usize, usize, Vec<u8>)> =
-            low_parts.into_iter().filter_map(|h| h.join().ok()).collect();
-        let mut low = vec![0u8; low_rows * low_w * comps];
-        for (ox0, ox1, out) in &parts {
-            let pw = (ox1 - ox0) * comps;
-            for ly in 0..low_rows {
-                let dst = ly * low_w * comps + ox0 * comps;
-                low[dst..dst + pw].copy_from_slice(&out[ly * pw..(ly + 1) * pw]);
-            }
-        }
-        let tiles = tile_parts.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect();
-        (low, tiles)
-    })
+        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+    });
+    for (li, t) in done.into_iter().flatten() {
+        tiles[li].push(t);
+    }
+    (low, tiles)
 }
 
 // ---------- Document rewriting ----------
@@ -584,23 +737,25 @@ fn replace_low(doc: &mut Document, hg: &Huge, p: &Processed) -> Option<()> {
     Some(())
 }
 
-fn replace_tiles(doc: &mut Document, hg: &Huge, p: &Processed) -> Option<()> {
+/// Replace the image by a form XObject drawing `lvl`'s tiles over the
+/// image's unit square.
+fn replace_tiles(doc: &mut Document, hg: &Huge, lvl: &Level) -> Option<()> {
     let orig = doc.get_object(hg.id).ok()?.as_stream().ok()?.dict.clone();
     let mut base = sample_free_dict(&orig);
     // Optional-content membership belongs to the placed form, not each tile.
     let oc = base.remove(b"OC");
     base.remove(b"Metadata");
     base.remove(b"StructParent");
-    let (fw, fh) = (hg.w as f64, hg.h as f64);
+    let (fw, fh) = (lvl.w as f64, lvl.h as f64);
     let mut xobjects = Dictionary::new();
-    let mut content = String::with_capacity(p.tiles.len() * 64);
-    for (i, t) in p.tiles.iter().enumerate() {
+    let mut content = String::with_capacity(lvl.tiles.len() * 64);
+    for (i, t) in lvl.tiles.iter().enumerate() {
         let tid = doc.add_object(Object::Stream(image_stream(&base, t.w, t.h, t.data.clone())));
         xobjects.set(format!("T{i}"), Object::Reference(tid));
         // Stretch inner tiles by half a pixel right/down: the next tile
         // (drawn later) covers the overlap, so no hairline seams appear.
-        let ew = if t.x + t.w < hg.w { 0.5 } else { 0.0 };
-        let eh = if t.y + t.h < hg.h { 0.5 } else { 0.0 };
+        let ew = if t.x + t.w < lvl.w { 0.5 } else { 0.0 };
+        let eh = if t.y + t.h < lvl.h { 0.5 } else { 0.0 };
         let sx = (t.w as f64 + ew) / fw;
         let sy = (t.h as f64 + eh) / fh;
         let tx = t.x as f64 / fw;
@@ -861,11 +1016,14 @@ mod tests {
             .0;
         let hg = Huge { id, w, h, comps: 3, png: true, key: 1 };
         let p = process(&doc.get_object(id).unwrap().as_stream().unwrap().content, &hg).unwrap();
+        // Under the pixel budget: factor 1, a single full-resolution level.
+        assert_eq!(p.levels.len(), 1);
+        let tiles = &p.levels[0].tiles;
         // 3 columns × 2 rows of tiles; areas add up to the image.
-        assert_eq!(p.tiles.len(), 6);
-        assert_eq!(p.tiles.iter().map(|t| t.w * t.h).sum::<usize>(), w * h);
+        assert_eq!(tiles.len(), 6);
+        assert_eq!(tiles.iter().map(|t| t.w * t.h).sum::<usize>(), w * h);
         // A tile decodes back to the original samples.
-        let t = p.tiles.iter().find(|t| t.x == 1024 && t.y == 1024).unwrap();
+        let t = tiles.iter().find(|t| t.x == 1024 && t.y == 1024).unwrap();
         let mut px = Vec::new();
         flate2::read::ZlibDecoder::new(&t.data[..]).read_to_end(&mut px).unwrap();
         let (x, y) = (1024 + 7, 1024 + 5);
@@ -888,7 +1046,7 @@ mod tests {
         let hg = Huge { id, w, h, comps: 3, png: true, key: 2 };
         let p = process(&doc.get_object(id).unwrap().as_stream().unwrap().content, &hg).unwrap();
         let mut hi = doc.clone();
-        replace_tiles(&mut hi, &hg, &p).unwrap();
+        replace_tiles(&mut hi, &hg, &p.levels[0]).unwrap();
         let form = hi.get_object(id).unwrap().as_stream().unwrap();
         assert_eq!(form.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Form");
         let xo = form.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap();
@@ -899,5 +1057,46 @@ mod tests {
         assert!(first.ends_with("cm /T0 Do Q"), "{first}");
         let nums: Vec<f64> = first.split_whitespace().skip(1).take(6).map(|v| v.parse().unwrap()).collect();
         assert!((nums[3] + nums[5] - 1.0).abs() < 1e-6, "top edge at y=1: {first}");
+    }
+
+    #[test]
+    fn pyramid_levels_cover_the_image_and_average_it() {
+        assert_eq!(level_factors(1), vec![1]);
+        assert_eq!(level_factors(3), vec![1]);
+        assert_eq!(level_factors(5), vec![1, 2]);
+        assert_eq!(level_factors(8), vec![1, 2, 4]);
+        assert_eq!(level_factors(13), vec![1, 2, 4, 8]);
+
+        let (w, h) = (2500usize, 1300usize);
+        let pdf = huge_pdf(w, h);
+        let doc = Document::load_mem(&pdf).unwrap();
+        let (&id, _) = doc
+            .objects
+            .iter()
+            .find(|(_, o)| o.as_stream().map(|s| s.dict.has(b"Width")).unwrap_or(false))
+            .unwrap();
+        let hg = Huge { id, w, h, comps: 3, png: true, key: 3 };
+        let content = doc.get_object(id).unwrap().as_stream().unwrap().content.clone();
+        // A tiny pixel budget forces factor 8: levels 1, 2 and 4.
+        let p = process_with(&content, &hg, w * h / 60).unwrap();
+        assert_eq!(p.factor, 8);
+        assert_eq!((p.low_w, p.low_h), (w.div_ceil(8), h.div_ceil(8)));
+        assert_eq!(p.levels.iter().map(|l| l.f).collect::<Vec<_>>(), vec![1, 2, 4]);
+        for l in &p.levels {
+            assert_eq!((l.w, l.h), (w.div_ceil(l.f), h.div_ceil(l.f)), "level {}", l.f);
+            assert_eq!(l.tiles.iter().map(|t| t.w * t.h).sum::<usize>(), l.w * l.h, "level {}", l.f);
+            assert!(l.tiles.iter().all(|t| t.x + t.w <= l.w && t.y + t.h <= l.h));
+        }
+        // A level-2 pixel is the mean of its 2 × 2 source block.
+        let l2 = &p.levels[1];
+        let (lx, ly) = (600usize, 300usize);
+        let t = l2.tiles.iter().find(|t| (t.x..t.x + t.w).contains(&lx) && (t.y..t.y + t.h).contains(&ly)).unwrap();
+        let mut px = Vec::new();
+        flate2::read::ZlibDecoder::new(&t.data[..]).read_to_end(&mut px).unwrap();
+        let got = px[((ly - t.y) * t.w + (lx - t.x)) * 3] as u32;
+        let src = |x: usize, y: usize| ((x + y) % 251) as u32;
+        let (sx, sy) = (lx * 2, ly * 2);
+        let want = (src(sx, sy) + src(sx + 1, sy) + src(sx, sy + 1) + src(sx + 1, sy + 1) + 2) / 4;
+        assert_eq!(got, want);
     }
 }

@@ -57,6 +57,19 @@ fn main() {
         let _ = engine.render_region(req(zoom), x.max(0) + 300, y.max(0), w, h).unwrap();
         println!("region {name} panned: {:?}", t.elapsed());
     }
+    // What a deep-zoom gesture costs: a viewer-sized region (the UI's
+    // detail window) at the page centre across zoom levels.
+    for zoom in [1.45f32, 2.0, 2.65, 3.5, 5.0, 8.0] {
+        let (w, h) = (2048u32, 1536u32);
+        let x = (sz.width_pt * zoom * 0.5) as i32 - w as i32 / 2;
+        let y = (sz.height_pt * zoom * 0.5) as i32 - h as i32 / 2;
+        let t = Instant::now();
+        let r = engine.render_region(req(zoom), x.max(0), y.max(0), w, h).unwrap();
+        println!("detail window zoom {zoom}: {:?}", t.elapsed());
+        if zoom == 1.45 || zoom == 8.0 {
+            save(&r, &format!("{out}/eng_detail_{zoom}.png"));
+        }
+    }
     // Reload with identical bytes (what every edit does): proxy cache hit.
     let t = Instant::now();
     engine.reload_bytes(id, bytes).unwrap();
