@@ -11,7 +11,9 @@ scope each tag landed.
 
 ## [Unreleased]
 
-Text editing reworked (#7).
+## [1.3.0] — 2026-11-19
+
+Text editing reworked (#7); zooming large plans is fast.
 
 ### Added
 - **Edit existing text.** With the Text tool armed, every line of text on the
