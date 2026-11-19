@@ -23,6 +23,8 @@ const DETAIL_MARGIN = 320;
 const DETAIL_SNAP = 256;
 // Quiet time after the last zoom step before re-rendering.
 const ZOOM_SETTLE_MS = 160;
+// Layout pixels per PDF point of the text layer (independent of the zoom).
+const TEXT_LAYER_SCALE = 2;
 
 export function syncZoomUi() {
   const pct = Math.round(state.zoom * 100);
@@ -166,6 +168,7 @@ export function makeSlot(pageIdx: number): Slot {
     wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, redactLayer, drawLayer, formLayer, placeholder,
     loaded: false, renderingZoom: null, lastZoom: null,
     baseZoom: null, baseRot: null, baseGen: -1, detail: null, detailKey: null,
+    textKey: null, textW: 0, textH: 0,
   };
 }
 
@@ -204,6 +207,8 @@ export function sizeSlots() {
     slot.wrap.style.height = `${h}px`;
     slot.img.width = w;
     slot.img.height = h;
+    scaleTextLayer(slot);
+    if (slot.detail) placeDetail(slot.detail, state.zoom);
   }
   if (state.wheelZoomMode) {
     const bx = Math.max(16, dom.viewer.clientWidth);
@@ -228,6 +233,7 @@ export function evictSlot(idx: number) {
   slot.img.width = 0;
   slot.img.height = 0;
   slot.selectLayer.innerHTML = "";
+  slot.textKey = null;
   slot.highlightLayer.innerHTML = "";
   slot.linkLayer.innerHTML = "";
   slot.loaded = false;
@@ -330,6 +336,9 @@ function pumpRenderQueue() {
     if (holdTimer === null) {
       holdTimer = window.setTimeout(() => {
         holdTimer = null;
+        // The sharp window over the visible area first; the whole-page
+        // bitmap (only seen when panning past that window) queues behind.
+        void updateDetails();
         pumpRenderQueue();
       }, wait + 5);
     }
@@ -427,32 +436,68 @@ function dropDetail(slot: Slot) {
   slot.detailKey = null;
 }
 
-let detailTimer: number | null = null;
-
-/** Refresh the detail windows shortly after scrolling/zooming stops. */
-export function scheduleDetailUpdate() {
-  if (detailTimer !== null) clearTimeout(detailTimer);
-  detailTimer = window.setTimeout(() => {
-    detailTimer = null;
-    updateDetails();
-  }, 120);
+/** Position a detail window (rendered at its own zoom) for view `zoom`:
+ * while a zoom gesture runs, the previous sharp window stays visible,
+ * scaled, until its replacement arrives. */
+function placeDetail(img: HTMLImageElement, zoom: number) {
+  const k = zoom / Number(img.dataset.zoom);
+  const x0 = Number(img.dataset.x0), y0 = Number(img.dataset.y0);
+  img.style.left = `${x0 * k}px`;
+  img.style.top = `${y0 * k}px`;
+  img.style.width = `${(Number(img.dataset.x1) - x0) * k}px`;
+  img.style.height = `${(Number(img.dataset.y1) - y0) * k}px`;
 }
 
-function updateDetails() {
-  if (!state.currentDoc) return;
-  const vr = dom.viewer.getBoundingClientRect();
-  for (let i = 0; i < state.slots.length; i++) {
-    const slot = state.slots[i];
-    if (!slot.loaded || !needsDetail(i)) {
-      if (slot.detail) dropDetail(slot);
-      continue;
-    }
-    const wr = slot.wrap.getBoundingClientRect();
-    if (wr.bottom < vr.top || wr.top > vr.bottom || wr.right < vr.left || wr.left > vr.right) {
-      if (slot.detail) dropDetail(slot);
-      continue;
-    }
-    void updateDetail(i, vr, wr);
+let detailTimer: number | null = null;
+// One region render at a time: PDFium can't abort one, so firing a request
+// per wheel notch only queues work whose result is stale on arrival.
+let detailBusy = false;
+let detailAgain = false;
+
+/** Refresh the detail windows shortly after scrolling stops - and not
+ * before a zoom gesture has settled. */
+export function scheduleDetailUpdate() {
+  if (detailTimer !== null) clearTimeout(detailTimer);
+  const hold = state.renderHoldUntil - performance.now();
+  detailTimer = window.setTimeout(() => {
+    detailTimer = null;
+    void updateDetails();
+  }, Math.max(120, hold + 20));
+}
+
+async function updateDetails() {
+  if (detailBusy) {
+    detailAgain = true;
+    return;
+  }
+  detailBusy = true;
+  try {
+    do {
+      detailAgain = false;
+      if (!state.currentDoc) return;
+      if (state.renderHoldUntil > performance.now()) {
+        scheduleDetailUpdate();
+        return;
+      }
+      for (let i = 0; i < state.slots.length; i++) {
+        const slot = state.slots[i];
+        if (!slot.img.getAttribute("src") || !needsDetail(i)) {
+          if (slot.detail) dropDetail(slot);
+          continue;
+        }
+        const vr = dom.viewer.getBoundingClientRect();
+        const wr = slot.wrap.getBoundingClientRect();
+        if (wr.bottom < vr.top || wr.top > vr.bottom || wr.right < vr.left || wr.left > vr.right) {
+          if (slot.detail) dropDetail(slot);
+          continue;
+        }
+        await updateDetail(i, vr, wr);
+        // The view moved on meanwhile: start over with fresh geometry.
+        if (detailAgain) break;
+      }
+    } while (detailAgain);
+  } finally {
+    detailBusy = false;
   }
 }
 
@@ -468,8 +513,10 @@ async function updateDetail(idx: number, vr: DOMRect, wr: DOMRect) {
   if (vx1 <= vx0 || vy1 <= vy0) return;
   const cur = slot.detail;
   const zoom = state.zoom;
+  const rot = effectiveRotation(idx);
   if (
     cur && cur.dataset.zoom === String(zoom) &&
+    cur.dataset.rot === String(rot) && cur.dataset.gen === String(state.contentGen) &&
     Number(cur.dataset.x0) <= vx0 && Number(cur.dataset.y0) <= vy0 &&
     Number(cur.dataset.x1) >= vx1 && Number(cur.dataset.y1) >= vy1
   ) return; // current window still covers the view
@@ -477,7 +524,6 @@ async function updateDetail(idx: number, vr: DOMRect, wr: DOMRect) {
   const y0 = Math.max(0, Math.floor((vy0 - DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
   const x1 = Math.min(cw, Math.ceil((vx1 + DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
   const y1 = Math.min(ch, Math.ceil((vy1 + DETAIL_MARGIN) / DETAIL_SNAP) * DETAIL_SNAP);
-  const rot = effectiveRotation(idx);
   const key = `${zoom}|${rot}|${state.contentGen}|${x0},${y0},${x1},${y1}`;
   if (slot.detailKey === key) return; // already showing / requested
   slot.detailKey = key;
@@ -499,15 +545,14 @@ async function updateDetail(idx: number, vr: DOMRect, wr: DOMRect) {
       slot.detail = img;
     }
     img.src = res.data_url;
-    img.style.left = `${x0}px`;
-    img.style.top = `${y0}px`;
-    img.style.width = `${x1 - x0}px`;
-    img.style.height = `${y1 - y0}px`;
     img.dataset.zoom = String(zoom);
+    img.dataset.rot = String(rot);
+    img.dataset.gen = String(state.contentGen);
     img.dataset.x0 = String(x0);
     img.dataset.y0 = String(y0);
     img.dataset.x1 = String(x1);
     img.dataset.y1 = String(y1);
+    placeDetail(img, zoom);
   } catch {
     if (slot.detailKey === key) slot.detailKey = null;
   }
@@ -532,13 +577,28 @@ async function ensureTextLayer(idx: number) {
   const sz = state.pageSizes[idx];
   if (!sz) return;
   const rot = effectiveRotation(idx);
-  slot.selectLayer.innerHTML = "";
+  // The layer is laid out once per content/rotation at a fixed size and only
+  // rescaled (one CSS transform) on zoom — rebuilding thousands of spans per
+  // zoom step is what made text-heavy plans crawl.
+  const key = `${state.contentGen}|${rot}`;
+  if (slot.textKey === key) {
+    scaleTextLayer(slot);
+    return;
+  }
+  const rs = rotatedSize(idx);
+  const layerW = rs.w * TEXT_LAYER_SCALE;
+  const layerH = rs.h * TEXT_LAYER_SCALE;
+  const layer = slot.selectLayer;
+  layer.innerHTML = "";
+  layer.style.transform = "";
+  layer.style.width = `${layerW}px`;
+  layer.style.height = `${layerH}px`;
   // First pass: place each run's text at its box, font-size = box height,
   // but DON'T constrain the width — let the glyphs lay out at their natural
   // size so we can measure it.
   const pending: { span: HTMLSpanElement; targetW: number }[] = [];
   for (const run of runs) {
-    const box = rotateRectToSlot(run.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    const box = rotateRectToSlot(run.rect_pt, rot, sz, layerW, layerH);
     if (box.width <= 0 || box.height <= 0) continue;
     const span = document.createElement("span");
     span.textContent = run.text;
@@ -546,17 +606,33 @@ async function ensureTextLayer(idx: number) {
     span.style.top = `${box.top}px`;
     span.style.fontSize = `${box.height}px`;
     span.style.height = `${box.height}px`;
-    slot.selectLayer.appendChild(span);
+    layer.appendChild(span);
     pending.push({ span, targetW: box.width });
   }
   // Second pass (single reflow): scale each run's glyphs horizontally to fill
   // exactly its box width. Without this the natural text width overflows the
   // box and the selection/highlight rectangles of tightly spaced words
   // overlap. transform-origin is 0 0 (CSS) so the left edge stays put.
-  for (const { span, targetW } of pending) {
-    const natural = span.offsetWidth;
-    if (natural > 0) span.style.transform = `scaleX(${targetW / natural})`;
+  // Read every width first, then write every transform: interleaving the two
+  // dirties style after each write and forces a fresh layout per span.
+  // (The layer is untransformed here, so the rects are in layout pixels.)
+  const naturals = pending.map(({ span }) => span.getBoundingClientRect().width);
+  for (let i = 0; i < pending.length; i++) {
+    const natural = naturals[i];
+    if (natural > 0) pending[i].span.style.transform = `scaleX(${pending[i].targetW / natural})`;
   }
+  slot.textKey = key;
+  slot.textW = layerW;
+  slot.textH = layerH;
+  scaleTextLayer(slot);
+}
+
+/** Fit the fixed-size text layer to the slot's current (zoomed) size. */
+function scaleTextLayer(slot: Slot) {
+  if (!slot.textKey || slot.textW <= 0 || slot.textH <= 0) return;
+  const sx = slot.img.width / slot.textW;
+  const sy = slot.img.height / slot.textH;
+  slot.selectLayer.style.transform = `scale(${sx}, ${sy})`;
 }
 
 export function rotateRectToSlot(
@@ -676,7 +752,7 @@ export function renderAllHighlights() {
 }
 
 export function invalidateRenders() {
-  for (const s of state.slots) {
+  for (const [i, s] of state.slots.entries()) {
     s.loaded = false;
     s.lastZoom = null;
     // Keep the stale bitmap as a scaled preview while the re-render is
@@ -684,7 +760,13 @@ export function invalidateRenders() {
     // zoom/rotate. The placeholder only shows for never-rendered slots.
     if (!s.img.getAttribute("src")) s.placeholder.style.display = "";
     s.linkLayer.innerHTML = "";
-    dropDetail(s);
+    // Same for the sharp detail window on a pure zoom change (sizeSlots
+    // rescales it); new content or a rotation makes it wrong, not stale.
+    const d = s.detail;
+    if (d && (d.dataset.gen !== String(state.contentGen) || d.dataset.rot !== String(effectiveRotation(i)))) {
+      dropDetail(s);
+    }
+    s.detailKey = null;
   }
   state.renderQueue.clear();
   // Supersede any in-flight renders: their results paint stale bitmaps.
@@ -956,9 +1038,15 @@ export function initViewer() {
       if (!state.currentDoc) return;
       if (e.ctrlKey || state.wheelZoomMode) {
         e.preventDefault();
-        const step = e.ctrlKey ? 0.1 : 0.15;
-        const delta = e.deltaY > 0 ? -step : step;
-        applyZoomAround(state.zoom + delta, e.clientX, e.clientY);
+        // A factor per notch feels the same at every zoom level (a fixed
+        // +10 % crawled at 300 %). Scaling by the wheel distance keeps
+        // precision touchpads and pinch (ctrl+wheel, small deltas) smooth.
+        let dy = e.deltaY;
+        if (e.deltaMode === 1) dy *= 40;
+        else if (e.deltaMode === 2) dy *= 400;
+        dy = Math.max(-300, Math.min(300, dy));
+        const perNotch = e.ctrlKey ? 1.2 : 1.25;
+        applyZoomAround(state.zoom * Math.pow(perNotch, -dy / 100), e.clientX, e.clientY);
         return;
       }
       if (state.viewMode !== "single") return;
