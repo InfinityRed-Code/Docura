@@ -15,6 +15,8 @@ import { initProtect } from "./protect";
 import { initExport } from "./export";
 import { initOcr } from "./ocr";
 import { initChrome } from "./chrome";
+import { initColorPopover } from "./colorpicker";
+import { initFonts } from "./fonts";
 import { dom } from "./dom";
 
 // 0. Resolve language (German default) before the template renders.
@@ -27,6 +29,8 @@ refreshIcons();
 
 // 2. Wire each subsystem. Order matters: annot registers callbacks consumed
 // by doc.applyDocSnapshot, so it must run before any snapshot fires.
+initColorPopover();
+void initFonts();
 initViewer();
 initAnnot();
 initTextEdit();

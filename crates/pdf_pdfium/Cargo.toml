@@ -12,6 +12,7 @@ tracing = { workspace = true }
 pdfium-render = { workspace = true }
 pdf_core = { workspace = true }
 pdf_types = { workspace = true }
+pdf_fonts = { workspace = true }
 parking_lot = "0.12"
 lopdf = { workspace = true }
 flate2 = "1"

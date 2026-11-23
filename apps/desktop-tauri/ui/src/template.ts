@@ -2,6 +2,25 @@ import { t } from "./i18n";
 import appIcon from "./assets/logo.svg";
 import logoText from "./assets/logo-text.svg";
 
+/** Shapes of the comment tab's "Shapes" menu: [tool, lucide icon], grouped. */
+export const SHAPE_MENU: { head: string; items: [string, string][] }[] = [
+  { head: "shape.lines", items: [["line", "slash"], ["arrow", "move-up-right"], ["arrow2", "move-diagonal-2"], ["polyline", "spline"]] },
+  { head: "shape.shapes", items: [
+    ["rect", "square"], ["circle", "circle"], ["triangle", "triangle"], ["diamond", "diamond"],
+    ["hexagon", "hexagon"], ["star", "star"], ["polygon", "pentagon"],
+  ] },
+  { head: "shape.symbols", items: [["cloud", "cloud"], ["callout", "message-square"], ["check", "check"]] },
+];
+
+function shapeMenu(): string {
+  return SHAPE_MENU.map((g) =>
+    `<div class="popHead">${t(g.head)}</div><div class="shapeGrid">` +
+    g.items.map(([k, icon]) =>
+      `<button class="mi shapeTool" data-shape="${k}" data-icon="${icon}" role="menuitem"><i data-lucide="${icon}"></i><span>${t(`tip.${k}`)}</span></button>`,
+    ).join("") + `</div>`,
+  ).join("");
+}
+
 export function buildHtml(): string {
   return `
 <main class="root">
@@ -96,14 +115,15 @@ export function buildHtml(): string {
           <button class="cmd shapeTool" data-shape="note" data-doc title="${t("tip.note")}"><i data-lucide="sticky-note"></i><span>${t("lbl.note")}</span></button>
           <div class="menuHost">
             <button class="cmd menuTrigger" id="shapeMenuBtn" data-doc aria-haspopup="true" aria-expanded="false" title="${t("tip.drawDrag")}"><i data-lucide="shapes"></i><span>${t("lbl.draw")}</span></button>
-            <div class="popover hidden" role="menu" id="shapeToolGroup">
-              <button class="mi shapeTool" data-shape="rect" role="menuitem"><i data-lucide="square"></i><span>${t("tip.rect")}</span></button>
-              <button class="mi shapeTool" data-shape="circle" role="menuitem"><i data-lucide="circle"></i><span>${t("tip.circle")}</span></button>
-              <button class="mi shapeTool" data-shape="line" role="menuitem"><i data-lucide="slash"></i><span>${t("tip.line")}</span></button>
-              <button class="mi shapeTool" data-shape="arrow" role="menuitem"><i data-lucide="arrow-up-right"></i><span>${t("tip.arrow")}</span></button>
+            <div class="popover hidden shapePop" role="menu" id="shapeToolGroup">
+              ${shapeMenu()}
             </div>
           </div>
           <button class="cmd shapeTool" data-shape="ink" data-doc title="${t("tip.ink")}"><i data-lucide="pen-line"></i><span>${t("lbl.ink")}</span></button>
+          <label class="fieldCol" title="${t("tip.fill")}">
+            <input type="hidden" id="shapeFill" value="" data-color data-color-none="${t("cp.noFill")}" />
+            <span class="fieldCaption"><i data-lucide="paint-bucket"></i>${t("lbl.fill")}</span>
+          </label>
         </div>
         <div class="groupLabel">${t("grp.addComment")}</div>
       </div>
@@ -147,9 +167,15 @@ export function buildHtml(): string {
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <button class="cmd shapeTool" data-shape="freetext" data-doc title="${t("tip.freetext")}"><i data-lucide="type"></i><span>${t("lbl.textAdd")}</span></button>
+          <div class="textFmt" id="textFmt" role="group" aria-label="${t("lbl.textFormat")}" title="${t("tip.textFormat")}"></div>
+        </div>
+        <div class="groupLabel">${t("grp.text")}</div>
+      </div>
+      <div data-ribbon="edit" class="ribbonGroup">
+        <div class="groupBody">
           <button class="cmd shapeTool" data-shape="stamp" data-doc title="${t("tip.stamp")}"><i data-lucide="image-plus"></i><span>${t("lbl.addImage")}</span></button>
         </div>
-        <div class="groupLabel">${t("grp.addContent")}</div>
+        <div class="groupLabel">${t("grp.image")}</div>
       </div>
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
@@ -316,6 +342,8 @@ export function buildHtml(): string {
           <option value="Square">${t("kind.Square")}</option>
           <option value="Circle">${t("kind.Circle")}</option>
           <option value="Line">${t("kind.Line")}</option>
+          <option value="Polygon">${t("kind.Polygon")}</option>
+          <option value="PolyLine">${t("kind.PolyLine")}</option>
           <option value="Ink">${t("kind.Ink")}</option>
           <option value="FreeText">${t("kind.FreeText")}</option>
           <option value="Stamp">${t("kind.Stamp")}</option>
@@ -1137,20 +1165,89 @@ export const CSS = `
                background:var(--bg); color:var(--text); border:1px solid var(--border-2); border-radius:10px;
                box-shadow:0 6px 20px rgba(0,0,0,0.22), 0 1px 3px rgba(0,0,0,0.12);
                font:12px "Segoe UI", system-ui, sans-serif; white-space:nowrap; user-select:none; }
-  .textEdBar select, .textEdBar .teSize { height:26px; border:1px solid var(--border); border-radius:6px;
+  .textEdBar select, .textEdBar .fmtSize { height:26px; border:1px solid var(--border); border-radius:6px;
                background:var(--bg-2); color:var(--text); font:inherit; padding:0 4px; }
-  .textEdBar .teSize { width:3.4rem; }
+  .textEdBar .fmtFamily { max-width:9.5rem; }
+  .textEdBar .fmtSize { width:3.4rem; }
   .textEdBar .teBtn { position:relative; display:inline-flex; align-items:center; justify-content:center;
                width:26px; height:26px; padding:0; border:none; border-radius:6px; background:transparent;
                color:var(--text); cursor:pointer; }
-  .textEdBar .teBtn:hover { background:var(--hover); }
+  .textEdBar .teBtn:hover:not(:disabled) { background:var(--hover); }
+  .textEdBar .teBtn:disabled { opacity:0.35; cursor:default; }
   .textEdBar .teBtn.active { background:var(--accent-tint); color:var(--accent-strong); }
   .textEdBar .teBtn svg.lucide { width:15px; height:15px; }
-  .textEdBar .teSwatchBtn svg.lucide { width:13px; height:13px; margin-bottom:5px; }
-  .textEdBar .teSwatchBtn input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; padding:0; border:0; }
-  .textEdBar .teSwatch { position:absolute; left:5px; right:5px; bottom:4px; height:4px; border-radius:2px;
+  /* Color buttons (text bar and ribbon): icon over a bar showing the color. */
+  .fmtSwatchBtn svg.lucide { width:13px !important; height:13px !important; margin-bottom:5px; }
+  .fmtSwatch { position:absolute; left:5px; right:5px; bottom:4px; height:4px; border-radius:2px;
                border:1px solid var(--border-2); }
-  .textEdBar .teSwatch.none { background:repeating-linear-gradient(45deg, var(--bg-3) 0 3px, var(--bg) 3px 6px) !important; }
+  .fmtSwatch.none, .colorBtnSwatch.none, .cpSwatch.none {
+    background:linear-gradient(to top right, transparent calc(50% - 1px), #d23b3b calc(50% - 1px), #d23b3b calc(50% + 1px), transparent calc(50% + 1px)),
+               repeating-conic-gradient(var(--bg-3) 0 25%, var(--bg) 0 50%) 0 0 / 8px 8px !important; }
+  /* Text group of the Edit tab: two rows (font + size; style + colors). */
+  .textFmt { display:flex; flex-direction:column; justify-content:center; gap:4px; height:3.5rem;
+             padding:0 0.35rem; box-sizing:border-box; }
+  .textFmt .tfRow { display:flex; align-items:center; gap:3px; }
+  .ribbonBody .textFmt select, .ribbonBody .textFmt input { height:1.55rem; box-sizing:border-box;
+             padding:0 0.3rem; font-size:0.78rem; }
+  .textFmt .fmtFamily { width:9.5rem; }
+  .textFmt .fmtSize { width:3.4rem; }
+  .ribbonBody .textFmt .tfBtn { position:relative; width:1.75rem; height:1.55rem; padding:0;
+             background:transparent; border:1px solid transparent; border-radius:4px; }
+  .ribbonBody .textFmt .tfBtn svg.lucide { width:15px; height:15px; }
+  .ribbonBody .textFmt .tfBtn.active { background:var(--accent-tint); color:var(--accent-strong); border-color:#bcd4f6; }
+  /* Swatch button replacing <input type=color> (colorpicker.ts). */
+  .ribbonBody .colorBtn, .colorBtn { display:inline-flex; align-items:center; gap:2px; height:1.6rem;
+             padding:0 0.2rem 0 0.25rem; background:var(--bg); border:1px solid var(--border-2);
+             border-radius:4px; cursor:pointer; color:var(--text-2); }
+  .colorBtn .colorBtnSwatch { display:block; width:1.45rem; height:1rem; border-radius:3px;
+             border:1px solid rgba(0,0,0,0.25); box-sizing:border-box; }
+  .colorBtn svg.lucide { width:11px; height:11px; }
+  /* Color popover: palette, recent colors, custom picker. */
+  .colorPop { position:fixed; z-index:1000; width:248px; padding:8px; box-sizing:border-box;
+              background:var(--bg); color:var(--text); border:1px solid var(--border-2); border-radius:8px;
+              box-shadow:0 8px 24px rgba(20,30,50,0.22); font:12px "Segoe UI", system-ui, sans-serif;
+              display:flex; flex-direction:column; gap:6px; user-select:none; }
+  .colorPop.hidden { display:none; }
+  .colorPop .hidden { display:none !important; }
+  .cpGrid, .cpRecentRow { display:grid; grid-template-columns:repeat(8, 1fr); gap:4px; }
+  .cpSwatch { width:22px; height:22px; padding:0; border-radius:4px; cursor:pointer;
+              background:var(--c) !important; border:1px solid rgba(0,0,0,0.22) !important; box-sizing:border-box; }
+  .cpSwatch:hover { transform:scale(1.12); box-shadow:0 1px 4px rgba(0,0,0,0.3); }
+  .cpSwatch.current { outline:2px solid var(--accent); outline-offset:1px; }
+  .cpLabel { color:var(--text-3); font-size:11px; margin-bottom:3px; }
+  .cpNone, .cpMoreToggle { display:flex; align-items:center; gap:6px; padding:3px 4px; border:none;
+              border-radius:4px; background:transparent; color:var(--text); cursor:pointer; font:inherit; text-align:left; }
+  .cpNone:hover, .cpMoreToggle:hover { background:var(--hover); }
+  .cpNone .cpSwatch { width:18px; height:18px; display:inline-block; }
+  .cpNone.current { color:var(--accent-strong); font-weight:600; }
+  .cpMoreToggle { border-top:1px solid var(--border); border-radius:0; padding-top:6px; }
+  .cpMoreToggle svg.lucide { width:14px; height:14px; transition:transform .12s ease; }
+  .cpMoreToggle.open svg.lucide { transform:rotate(90deg); }
+  .cpCustom { display:flex; flex-direction:column; gap:6px; }
+  .cpSV { position:relative; height:120px; border-radius:4px; cursor:crosshair; touch-action:none;
+          background:linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue, #f00)); }
+  .cpSVThumb { position:absolute; width:12px; height:12px; margin:-7px 0 0 -7px; border-radius:50%;
+               border:2px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,0.5); pointer-events:none; }
+  .cpHue { -webkit-appearance:none; appearance:none; width:100%; height:12px; margin:0; border-radius:6px;
+           background:linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); cursor:pointer; }
+  .cpHue::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+           background:#fff; border:1px solid rgba(0,0,0,0.45); box-shadow:0 1px 3px rgba(0,0,0,0.3); }
+  .cpFields { display:flex; align-items:center; justify-content:space-between; gap:3px; }
+  .cpFields label { display:inline-flex; align-items:center; gap:2px; color:var(--text-2); font-size:11px; }
+  .cpFields input { width:2rem; min-width:0; height:22px; box-sizing:border-box; padding:0 2px; font:inherit;
+                    background:var(--bg-2); color:var(--text); border:1px solid var(--border); border-radius:4px; }
+  .cpFields .cpHex { width:3.6rem; font-family:Consolas, monospace; }
+  .cpFields input[type=number]::-webkit-inner-spin-button { display:none; }
+  .cpPreview { width:22px; height:22px; flex:none; border-radius:4px; border:1px solid rgba(0,0,0,0.22); }
+  .cpActions { display:flex; justify-content:flex-end; }
+  .cpActions .cpOk { padding:3px 14px; border-radius:4px; cursor:pointer; font:inherit; }
+  /* Shapes menu: grouped two-column grid. */
+  .shapePop { min-width:260px; }
+  .shapePop .popHead { font-size:0.7rem; color:var(--text-3); text-transform:uppercase; letter-spacing:0.4px;
+                       padding:0.35rem 0.5rem 0.15rem; }
+  .shapePop .shapeGrid { display:grid; grid-template-columns:1fr 1fr; gap:1px; }
+  .shapePop .mi.active { background:var(--accent-tint); color:var(--accent-strong); }
+  #shapeMenuBtn.active { background:var(--accent-tint); color:var(--accent-strong); border-color:#bcd4f6; }
   .textEdBar .teSep { width:1px; height:18px; margin:0 3px; background:var(--border); }
   .textEdBar .teGrip { display:inline-flex; align-items:center; width:16px; height:26px; color:var(--text-3);
                cursor:grab; touch-action:none; }

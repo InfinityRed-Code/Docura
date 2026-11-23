@@ -39,7 +39,7 @@ pub struct SearchQuery {
     pub whole_word: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct RectPt {
     pub x0: f32,
     pub y0: f32,
@@ -192,6 +192,10 @@ pub struct AnnotationInfo {
     /// the editor. `None` for every other subtype.
     #[serde(default)]
     pub freetext: Option<FreeTextStyle>,
+    /// /Subj: what the annotation is ("Stern", "Wolke") where the subtype
+    /// alone does not say it (a /Polygon can be any of several shapes).
+    #[serde(default)]
+    pub subject: Option<String>,
 }
 
 /// Styling of a /FreeText annotation as written by this app (other writers'
@@ -203,7 +207,8 @@ pub struct FreeTextStyle {
     pub text_color: [f32; 3],
     /// Background fill; `None` = transparent.
     pub bg_color: Option<[f32; 3]>,
-    /// Logical family: "Helv" | "Times" | "Cour".
+    /// Logical family: "Helv" | "Times" | "Cour", or a bundled family id
+    /// (`pdf_fonts`, e.g. "Roboto").
     pub font_family: String,
     pub bold: bool,
     pub italic: bool,
@@ -228,7 +233,8 @@ pub struct TextBlock {
     /// (0 = left to right, 1 = top to bottom, …).
     pub dir: u8,
     pub font_size: f32,
-    /// Closest standard family: "Helv" | "Times" | "Cour".
+    /// Closest standard family ("Helv" | "Times" | "Cour"), or the bundled
+    /// family (`pdf_fonts`) the line is written with.
     pub font_family: String,
     pub bold: bool,
     pub italic: bool,

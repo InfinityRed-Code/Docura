@@ -2118,10 +2118,20 @@ async fn delete_annotation(
 #[derive(Deserialize)]
 struct ShapeArgs {
     page: u32,
-    /// `"rect"` | `"circle"` | `"line"` | `"arrow"`.
+    /// `"rect"` | `"circle"` | `"line"` | `"arrow"` | `"arrow2"` (both ends)
+    /// | `"polygon"` | `"cloud"` | `"polyline"`.
     kind: String,
-    /// (x0, y0, x1, y1) in PDF points, top-origin.
+    /// (x0, y0, x1, y1) in PDF points, top-origin. Unused for the
+    /// vertex-based kinds.
+    #[serde(default)]
     rect: RectPt,
+    /// Corner points (x, y) in PDF points, top-origin, for `"polygon"`,
+    /// `"cloud"` and `"polyline"`.
+    #[serde(default)]
+    vertices: Vec<[f32; 2]>,
+    /// Name of the shape for comment lists (/Subj), e.g. "Stern".
+    #[serde(default)]
+    subject: Option<String>,
     /// RGB stroke color 0..1.
     #[serde(default = "default_shape_stroke")]
     stroke: [f32; 3],
@@ -2160,6 +2170,16 @@ async fn add_shape(
             arrow_start: pdf_mutate::LineEnding::None,
             arrow_end: pdf_mutate::LineEnding::OpenArrow,
         },
+        "arrow2" => pdf_mutate::ShapeKind::Line {
+            arrow_start: pdf_mutate::LineEnding::OpenArrow,
+            arrow_end: pdf_mutate::LineEnding::OpenArrow,
+        },
+        "polygon" => pdf_mutate::ShapeKind::Polygon { cloudy: false },
+        "cloud" => pdf_mutate::ShapeKind::Polygon { cloudy: true },
+        "polyline" => pdf_mutate::ShapeKind::PolyLine {
+            start: pdf_mutate::LineEnding::None,
+            end: pdf_mutate::LineEnding::None,
+        },
         other => return Err(format!("unknown shape kind: {other}")),
     };
     let engine = state.engine.clone();
@@ -2170,6 +2190,8 @@ async fn add_shape(
         let annot = pdf_mutate::ShapeAnnotation {
             kind,
             rect: args.rect,
+            vertices: args.vertices.iter().map(|v| (v[0], v[1])).collect(),
+            subject: args.subject,
             stroke_color: args.stroke,
             fill_color: args.fill,
             border_width: args.border_width,
@@ -2320,6 +2342,20 @@ async fn update_freetext(
     .await
     .map_err(|e| e.to_string())??;
     commit_mutation(state, document, pre_bytes, new_bytes).await
+}
+
+/// The fonts bundled with the app (`pdf_fonts`), for the font pickers.
+#[tauri::command]
+fn list_fonts() -> &'static [pdf_fonts::Family] {
+    pdf_fonts::families()
+}
+
+/// TrueType bytes of a bundled font face, so the text editor previews with
+/// exactly the font that gets embedded.
+#[tauri::command]
+fn font_data(family: String, bold: bool, italic: bool) -> Result<tauri::ipc::Response, String> {
+    let fam = pdf_fonts::family(&family).ok_or_else(|| format!("unknown font: {family}"))?;
+    Ok(tauri::ipc::Response::new(fam.face(bold, italic).to_vec()))
 }
 
 /// Editable lines of text in the page content.
@@ -3780,6 +3816,8 @@ pub fn run() {
             add_freetext,
             update_freetext,
             page_text_blocks_cmd,
+            list_fonts,
+            font_data,
             replace_page_text,
             add_ink,
             add_stamp,

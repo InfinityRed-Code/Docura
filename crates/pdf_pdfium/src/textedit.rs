@@ -11,7 +11,8 @@
 //! The original font is not reused: embedded fonts are usually subsets that
 //! lack the glyphs for new text. The replacement uses the closest standard
 //! font instead (sans / serif / monospace, bold / italic); text outside
-//! Latin-1 falls back to an embedded system TrueType font.
+//! Latin-1 falls back to an embedded system TrueType font. A family the app
+//! ships (`pdf_fonts`) is embedded in full.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -204,9 +205,15 @@ fn collect_pieces(page: &PdfPage) -> Result<Vec<Piece>, PdfiumError> {
         }
         let font = t.font();
         let (mut family, mut bold, mut italic) = classify_font(&font);
+        // A font the app ships (left by an earlier edit or text box): edits
+        // keep using it.
+        let bundled = pdf_fonts::by_postscript_name(&font.name());
+        if let Some((fam, b, i)) = bundled {
+            (family, bold, italic) = (fam.id, b, i);
+        }
         // An embedded font whose original is installed here: edits can keep
         // using the real thing.
-        let face = if !unreadable && font.is_embedded().unwrap_or(false) {
+        let face = if !unreadable && bundled.is_none() && font.is_embedded().unwrap_or(false) {
             fontmatch::by_name(&font.name())
         } else {
             None
@@ -455,6 +462,9 @@ fn font_source(edit: &TextReplace, text: &str) -> Result<FontSource, String> {
         return std::fs::read(path)
             .map(FontSource::File)
             .map_err(|e| format!("replace text: read font: {e}"));
+    }
+    if let Some(family) = pdf_fonts::family(&edit.font_family) {
+        return Ok(FontSource::File(family.face(edit.bold, edit.italic).to_vec()));
     }
     if text.chars().all(|c| c == '\n' || is_std_font_char(c)) {
         return Ok(FontSource::Builtin(builtin_font(&edit.font_family, edit.bold, edit.italic)));

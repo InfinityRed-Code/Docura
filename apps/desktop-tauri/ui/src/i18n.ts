@@ -116,7 +116,7 @@ const en: Dict = {
   "tip.exportXfdf": "Export annotations as XFDF", "tip.importXfdf": "Import annotations from XFDF",
   "tip.close": "Close", "filter.allKinds": "All kinds",
   "kind.Highlight": "Highlight", "kind.Underline": "Underline", "kind.StrikeOut": "Strikeout",
-  "kind.Square": "Rectangle", "kind.Circle": "Circle", "kind.Line": "Line", "kind.Ink": "Ink",
+  "kind.Square": "Rectangle", "kind.Circle": "Ellipse", "kind.Line": "Line", "kind.Ink": "Ink",
   "kind.FreeText": "Text box", "kind.Stamp": "Stamp", "kind.Text": "Sticky",
   "ph.author": "Author…", "lbl.withComment": "with comment",
   // Merge / convert panes
@@ -382,7 +382,7 @@ const en: Dict = {
   "lbl.rotRight": "Rotate right",
   "lbl.addImage": "Image",
   "lbl.textFormat": "Text format",
-  "tip.textFormat": "Color, font and size for new text boxes",
+  "tip.textFormat": "Font, size and colors of the open text box, or of the next new one",
   "lbl.prevField": "Previous field",
   "lbl.nextField": "Next field",
   "lbl.images": "Images",
@@ -557,6 +557,26 @@ const en: Dict = {
   "pattern.working": "Searching document…",
   "form.requiredMark": "required",
   "xfdf.imported": "Comments imported",
+  // Shapes menu (comment tab)
+  "shape.lines": "Lines", "shape.shapes": "Shapes", "shape.symbols": "Symbols",
+  "tip.arrow2": "Double arrow", "tip.triangle": "Triangle", "tip.diamond": "Diamond",
+  "tip.hexagon": "Hexagon", "tip.star": "Star", "tip.cloud": "Cloud", "tip.callout": "Speech bubble",
+  "tip.check": "Check mark", "tip.polygon": "Polygon", "tip.polyline": "Polyline",
+  "kind.Polygon": "Polygon", "kind.PolyLine": "Polyline",
+  "hint.polyDraw": "Click to set corner points · double-click or Enter finishes · Backspace removes the last point · Esc cancels",
+  "lbl.fill": "Fill", "tip.fill": "Fill color of closed shapes", "cp.noFill": "No fill",
+  "grp.image": "Image",
+  // Fonts
+  "font.standard": "PDF standard fonts", "font.sans": "Sans serif", "font.serif": "Serif",
+  "font.mono": "Monospace", "font.handwriting": "Handwriting",
+  // Color popover
+  "cp.none": "None", "cp.recent": "Recently used", "cp.custom": "Custom color…",
+  "cp.ok": "OK", "cp.sv": "Saturation and brightness", "cp.hue": "Hue",
+  "color.black": "Black", "color.darkGray": "Dark gray", "color.gray": "Gray", "color.white": "White",
+  "color.darkRed": "Dark red", "color.red": "Red", "color.orange": "Orange", "color.yellow": "Yellow",
+  "color.lightGreen": "Light green", "color.green": "Green", "color.lightBlue": "Light blue",
+  "color.blue": "Blue", "color.navy": "Dark blue", "color.purple": "Purple", "color.pink": "Pink",
+  "color.brown": "Brown",
 };
 
 // German — primary.
@@ -658,7 +678,7 @@ const de: Dict = {
   "tip.exportXfdf": "Anmerkungen als XFDF exportieren", "tip.importXfdf": "Anmerkungen aus XFDF importieren",
   "tip.close": "Schließen", "filter.allKinds": "Alle Arten",
   "kind.Highlight": "Hervorhebung", "kind.Underline": "Unterstreichung", "kind.StrikeOut": "Durchstreichung",
-  "kind.Square": "Rechteck", "kind.Circle": "Kreis", "kind.Line": "Linie", "kind.Ink": "Freihand",
+  "kind.Square": "Rechteck", "kind.Circle": "Ellipse", "kind.Line": "Linie", "kind.Ink": "Freihand",
   "kind.FreeText": "Textfeld", "kind.Stamp": "Stempel", "kind.Text": "Notiz",
   "ph.author": "Autor…", "lbl.withComment": "mit Kommentar",
   "merge.title": "PDFs zusammenführen", "tip.pickPdfs": "PDF-Dateien wählen",
@@ -914,7 +934,7 @@ const de: Dict = {
   "lbl.rotRight": "Rechts drehen",
   "lbl.addImage": "Bild",
   "lbl.textFormat": "Textformat",
-  "tip.textFormat": "Farbe, Schrift und Größe für neue Textfelder",
+  "tip.textFormat": "Schrift, Größe und Farben des geöffneten Textfelds bzw. des nächsten neuen",
   "lbl.prevField": "Vorheriges Feld",
   "lbl.nextField": "Nächstes Feld",
   "lbl.images": "Bilder",
@@ -1089,6 +1109,26 @@ const de: Dict = {
   "pattern.working": "Durchsuche Dokument…",
   "form.requiredMark": "Pflichtfeld",
   "xfdf.imported": "Kommentare importiert",
+  // Formen-Menü (Kommentieren)
+  "shape.lines": "Linien", "shape.shapes": "Formen", "shape.symbols": "Symbole",
+  "tip.arrow2": "Doppelpfeil", "tip.triangle": "Dreieck", "tip.diamond": "Raute",
+  "tip.hexagon": "Sechseck", "tip.star": "Stern", "tip.cloud": "Wolke", "tip.callout": "Sprechblase",
+  "tip.check": "Häkchen", "tip.polygon": "Polygon", "tip.polyline": "Polylinie",
+  "kind.Polygon": "Polygon", "kind.PolyLine": "Polylinie",
+  "hint.polyDraw": "Klicken setzt Eckpunkte · Doppelklick oder Enter schließt ab · Rücktaste entfernt den letzten Punkt · Esc bricht ab",
+  "lbl.fill": "Füllung", "tip.fill": "Füllfarbe geschlossener Formen", "cp.noFill": "Keine Füllung",
+  "grp.image": "Bild",
+  // Schriften
+  "font.standard": "PDF-Standardschriften", "font.sans": "Serifenlos", "font.serif": "Serif",
+  "font.mono": "Monospace", "font.handwriting": "Handschrift",
+  // Farbauswahl
+  "cp.none": "Keine", "cp.recent": "Zuletzt verwendet", "cp.custom": "Eigene Farbe…",
+  "cp.ok": "OK", "cp.sv": "Sättigung und Helligkeit", "cp.hue": "Farbton",
+  "color.black": "Schwarz", "color.darkGray": "Dunkelgrau", "color.gray": "Grau", "color.white": "Weiß",
+  "color.darkRed": "Dunkelrot", "color.red": "Rot", "color.orange": "Orange", "color.yellow": "Gelb",
+  "color.lightGreen": "Hellgrün", "color.green": "Grün", "color.lightBlue": "Hellblau",
+  "color.blue": "Blau", "color.navy": "Dunkelblau", "color.purple": "Violett", "color.pink": "Pink",
+  "color.brown": "Braun",
 };
 
 const dicts: Record<Lang, Dict> = { de, en };

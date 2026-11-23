@@ -7,6 +7,10 @@ import { refreshIcons } from "./icons";
 import { applyDocSnapshot } from "./doc";
 import { effectiveRotation, rotateRectToSlot } from "./viewer";
 import { findSlotFromTarget, hexToRgb01, imagePxToPagePt, isOverlayControl } from "./annot";
+import { bindColorButton, paintSwatch } from "./colorpicker";
+import {
+  cssFamily as familyCss, ensureFace, faceReady, familyOptionsHtml, fontInfo, isKnownFamily,
+} from "./fonts";
 
 // ---------- Text editing ----------
 //
@@ -18,9 +22,15 @@ import { findSlotFromTarget, hexToRgb01, imagePxToPagePt, isOverlayControl } fro
 //
 // The editor is a plaintext contenteditable laid out with the metrics of the
 // font the backend will write (Arial = Helvetica, Times New Roman = Times,
-// Courier New = Courier), so what is typed is what lands in the PDF.
+// Courier New = Courier; bundled families load their own TrueType file), so
+// what is typed is what lands in the PDF.
+//
+// The format controls exist twice and stay in step: the floating bar next
+// to the editor, and the "Text" group of the Edit ribbon tab, which also
+// sets the style of the next new text box when no editor is open.
 
-type Family = "Helv" | "Times" | "Cour";
+/** "Helv" | "Times" | "Cour" or a bundled family id (see fonts.ts). */
+type Family = string;
 
 type Style = {
   family: Family;
@@ -62,14 +72,8 @@ type Editor = {
   patch: HTMLDivElement | null;
 };
 
-const CSS_FAMILY: Record<Family, string> = {
-  Helv: "Arial, Helvetica, sans-serif",
-  Times: '"Times New Roman", Times, serif',
-  Cour: '"Courier New", Courier, monospace',
-};
-
 function cssFamily(style: Style): string {
-  const std = CSS_FAMILY[style.family];
+  const std = familyCss(style.family);
   return style.face ? `"${style.face.replace(/["\\]/g, "")}", ${std}` : std;
 }
 
@@ -79,14 +83,53 @@ const BOX_PAD_PT = 2;
 const LINE_HEIGHT = 1.2;
 
 let active: Editor | null = null;
-/** Style of the last text box, reused for the next new one. */
-let lastStyle: Style = { family: "Helv", size: 14, bold: false, italic: false, color: "#000000", bg: null };
+const LAST_STYLE_KEY = "rustpdf-text-style";
+const DEFAULT_STYLE: Style = { family: "Helv", size: 14, bold: false, italic: false, color: "#000000", bg: null };
+/** Style of the last text box, reused for the next new one (and kept
+ * across sessions). */
+let lastStyle: Style = loadLastStyle();
 
 const blocksCache = new Map<number, TextBlock[]>();
 let blocksGen = -1;
 
 function asFamily(s: string | undefined): Family {
-  return s === "Times" || s === "Cour" ? s : "Helv";
+  return isKnownFamily(s) ? s : "Helv";
+}
+
+function loadLastStyle(): Style {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_STYLE_KEY) ?? "null");
+    if (!v || typeof v !== "object") return { ...DEFAULT_STYLE };
+    const hex = (x: unknown) => typeof x === "string" && /^#[0-9a-f]{6}$/i.test(x) ? x : null;
+    return {
+      // Bundled families are validated once the font list is known.
+      family: typeof v.family === "string" ? v.family : "Helv",
+      size: typeof v.size === "number" && v.size >= 4 && v.size <= 400 ? v.size : 14,
+      bold: !!v.bold,
+      italic: !!v.italic,
+      color: hex(v.color) ?? "#000000",
+      bg: hex(v.bg),
+    };
+  } catch {
+    return { ...DEFAULT_STYLE };
+  }
+}
+
+function setLastStyle(s: Style) {
+  lastStyle = { ...s, face: null };
+  try { localStorage.setItem(LAST_STYLE_KEY, JSON.stringify(lastStyle)); } catch { /* storage unavailable */ }
+}
+
+/** Drop bold / italic the family has no face for (the PDF would be written
+ * without them; the preview must not fake them). */
+function fitStyleToFamily(s: Style) {
+  const info = fontInfo(s.family);
+  if (info && !info.italic) s.italic = false;
+  if (info && !info.bold) s.bold = false;
+}
+
+function notifyStyle() {
+  document.dispatchEvent(new CustomEvent("rustpdf:textstyle"));
 }
 
 function rgbToHex(c: [number, number, number]): string {
@@ -194,6 +237,11 @@ function editorText(ed: Editor): string {
 
 /** Apply the editor's style and anchor to the DOM and re-place the toolbar. */
 function layout(ed: Editor) {
+  // A bundled face is fetched on first use; lay out again once it is there.
+  const { family, bold, italic } = ed.style;
+  if (!faceReady(family, bold, italic)) {
+    void ensureFace(family, bold, italic).then((ok) => { if (ok && active === ed) layout(ed); });
+  }
   const ppx = pxPerPt(ed.slot, ed.pageIdx);
   const px = ed.style.size * ppx;
   const s = ed.box.style;
@@ -217,6 +265,7 @@ function layout(ed: Editor) {
   }
   placeBar(ed);
   syncBar(ed);
+  notifyStyle();
 }
 
 /** Put the toolbar just above the box (below when there is no room). */
@@ -234,74 +283,123 @@ function placeBar(ed: Editor) {
   ed.bar.style.top = `${top}px`;
 }
 
-function syncBar(ed: Editor) {
-  const q = <T extends HTMLElement>(sel: string) => ed.bar.querySelector(sel) as T;
-  q<HTMLSelectElement>(".teFamily").value = ed.style.family;
-  q<HTMLInputElement>(".teSize").value = String(ed.style.size);
-  q<HTMLButtonElement>(".teBold").classList.toggle("active", ed.style.bold);
-  q<HTMLButtonElement>(".teItalic").classList.toggle("active", ed.style.italic);
-  q<HTMLInputElement>(".teColor").value = ed.style.color;
-  q<HTMLElement>(".teColorSwatch").style.background = ed.style.color;
-  const bg = ed.bar.querySelector(".teBg") as HTMLInputElement | null;
-  if (bg) {
-    bg.value = ed.style.bg ?? "#ffffff";
-    q<HTMLElement>(".teBgSwatch").style.background = ed.style.bg ?? "transparent";
-    q<HTMLElement>(".teBgSwatch").classList.toggle("none", ed.style.bg === null);
-    q<HTMLButtonElement>(".teNoBg").classList.toggle("active", ed.style.bg === null);
+/** Show `style` in a set of format controls (the floating bar or the
+ * ribbon group); `isBox` = the background control applies. */
+function syncControls(root: HTMLElement, style: Style, isBox: boolean) {
+  const q = <T extends HTMLElement>(sel: string) => root.querySelector(sel) as T | null;
+  const fam = q<HTMLSelectElement>(".fmtFamily");
+  if (fam) {
+    // A style can name a family the picker does not list yet (fonts still
+    // loading): show it rather than a wrong one.
+    if (!Array.from(fam.options).some((o) => o.value === style.family)) {
+      fam.add(new Option(fontInfo(style.family)?.name ?? style.family, style.family));
+    }
+    fam.value = style.family;
   }
+  const size = q<HTMLInputElement>(".fmtSize");
+  if (size && document.activeElement !== size) size.value = String(style.size);
+  const info = fontInfo(style.family);
+  const bold = q<HTMLButtonElement>(".fmtBold");
+  if (bold) {
+    bold.classList.toggle("active", style.bold);
+    bold.disabled = !!info && !info.bold;
+  }
+  const italic = q<HTMLButtonElement>(".fmtItalic");
+  if (italic) {
+    italic.classList.toggle("active", style.italic);
+    italic.disabled = !!info && !info.italic;
+  }
+  const color = q<HTMLElement>(".fmtColor .fmtSwatch");
+  if (color) paintSwatch(color, style.color);
+  const bgBtn = q<HTMLButtonElement>(".fmtBg");
+  if (bgBtn) {
+    paintSwatch(bgBtn.querySelector<HTMLElement>(".fmtSwatch")!, style.bg);
+    bgBtn.disabled = !isBox;
+  }
+}
+
+function syncBar(ed: Editor) {
+  syncControls(ed.bar, ed.style, ed.target.kind !== "block");
+}
+
+/** Wire a set of format controls to whatever style `get` returns; `apply`
+ * runs after every change. */
+function wireControls(
+  root: HTMLElement,
+  get: () => Style,
+  apply: (refocus: boolean) => void,
+) {
+  const q = <T extends HTMLElement>(sel: string) => root.querySelector(sel) as T | null;
+  const change = (fn: (s: Style) => void, refocus = true) => {
+    const s = get();
+    fn(s);
+    fitStyleToFamily(s);
+    apply(refocus);
+  };
+  // Buttons must not take the focus (and with it the caret) from the text.
+  root.querySelectorAll("button").forEach((b) => b.addEventListener("mousedown", (e) => e.preventDefault()));
+
+  q<HTMLSelectElement>(".fmtFamily")?.addEventListener("change", (e) =>
+    change((s) => { s.family = asFamily((e.target as HTMLSelectElement).value); s.face = null; }));
+  q<HTMLInputElement>(".fmtSize")?.addEventListener("input", (e) => {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (Number.isFinite(v) && v >= 4 && v <= 400) change((s) => { s.size = v; }, false);
+  });
+  q(".fmtBold")?.addEventListener("click", () => change((s) => { s.bold = !s.bold; s.face = null; }));
+  q(".fmtItalic")?.addEventListener("click", () => change((s) => { s.italic = !s.italic; s.face = null; }));
+  const color = q(".fmtColor");
+  if (color) {
+    bindColorButton(color, {
+      get: () => get().color,
+      set: (hex, final) => change((s) => { s.color = hex ?? "#000000"; }, final),
+    });
+  }
+  const bg = q(".fmtBg");
+  if (bg) {
+    bindColorButton(bg, {
+      get: () => get().bg,
+      set: (hex, final) => change((s) => { s.bg = hex; }, final),
+      allowNone: true,
+      noneLabel: t("tip.transparentBg"),
+    });
+  }
+}
+
+/** Markup of the format controls shared by the floating bar and the
+ * ribbon group. */
+function controlsHtml(btnClass: string): { family: string; style: string } {
+  return {
+    family: `
+    <select class="fmtFamily" title="${t("tip.fontFamily")}">${familyOptionsHtml()}</select>
+    <input class="fmtSize" type="number" min="4" max="400" step="1" title="${t("tip.fontSize")}" />`,
+    style: `
+    <button type="button" class="${btnClass} fmtBold" title="${t("text.bold")}"><i data-lucide="bold"></i></button>
+    <button type="button" class="${btnClass} fmtItalic" title="${t("text.italic")}"><i data-lucide="italic"></i></button>
+    <button type="button" class="${btnClass} fmtSwatchBtn fmtColor" title="${t("tip.textColor")}"><i data-lucide="baseline"></i><span class="fmtSwatch"></span></button>
+    <button type="button" class="${btnClass} fmtSwatchBtn fmtBg" title="${t("text.bg")}"><i data-lucide="paint-bucket"></i><span class="fmtSwatch"></span></button>`,
+  };
 }
 
 function buildBar(ed: Editor): HTMLDivElement {
   const bar = document.createElement("div");
   bar.className = "textEdBar";
   const isBox = ed.target.kind !== "block";
+  const ctl = controlsHtml("teBtn");
   bar.innerHTML = `
     ${isBox ? `<span class="teGrip" title="${t("text.move")}"><i data-lucide="grip-vertical"></i></span>` : ""}
-    <select class="teFamily" title="${t("tip.fontFamily")}">
-      <option value="Helv">${t("text.fontSans")}</option>
-      <option value="Times">${t("text.fontSerif")}</option>
-      <option value="Cour">${t("text.fontMono")}</option>
-    </select>
-    <input class="teSize" type="number" min="4" max="400" step="1" title="${t("tip.fontSize")}" />
+    ${ctl.family}
     <span class="teSep"></span>
-    <button type="button" class="teBtn teBold" title="${t("text.bold")}"><i data-lucide="bold"></i></button>
-    <button type="button" class="teBtn teItalic" title="${t("text.italic")}"><i data-lucide="italic"></i></button>
-    <label class="teBtn teSwatchBtn" title="${t("tip.textColor")}">
-      <i data-lucide="type"></i><span class="teSwatch teColorSwatch"></span>
-      <input class="teColor" type="color" />
-    </label>
-    ${isBox ? `
-    <label class="teBtn teSwatchBtn" title="${t("text.bg")}">
-      <i data-lucide="paint-bucket"></i><span class="teSwatch teBgSwatch"></span>
-      <input class="teBg" type="color" />
-    </label>
-    <button type="button" class="teBtn teNoBg" title="${t("tip.transparentBg")}"><i data-lucide="droplet"></i></button>` : ""}
+    ${ctl.style}
     <span class="teSep"></span>
     <button type="button" class="teBtn teDelete" title="${t("btn.delete")}"><i data-lucide="trash-2"></i></button>
     <button type="button" class="teBtn teDone" title="${t("text.done")}"><i data-lucide="check"></i></button>`;
+  if (!isBox) bar.querySelector(".fmtBg")?.remove();
 
   const q = <T extends HTMLElement>(sel: string) => bar.querySelector(sel) as T | null;
-  const change = (fn: (s: Style) => void, refocus = true) => {
-    fn(ed.style);
+  wireControls(bar, () => ed.style, (refocus) => {
     layout(ed);
     if (refocus) ed.box.focus();
-  };
-  // Buttons must not take the focus (and with it the caret) from the text.
-  bar.querySelectorAll("button").forEach((b) => b.addEventListener("mousedown", (e) => e.preventDefault()));
-
-  q<HTMLSelectElement>(".teFamily")!.addEventListener("change", (e) =>
-    change((s) => { s.family = asFamily((e.target as HTMLSelectElement).value); s.face = null; }));
-  q<HTMLInputElement>(".teSize")!.addEventListener("input", (e) => {
-    const v = parseFloat((e.target as HTMLInputElement).value);
-    if (Number.isFinite(v) && v >= 4 && v <= 400) change((s) => { s.size = v; }, false);
   });
-  q(".teBold")!.addEventListener("click", () => change((s) => { s.bold = !s.bold; s.face = null; }));
-  q(".teItalic")!.addEventListener("click", () => change((s) => { s.italic = !s.italic; s.face = null; }));
-  q<HTMLInputElement>(".teColor")!.addEventListener("input", (e) =>
-    change((s) => { s.color = (e.target as HTMLInputElement).value; }, false));
-  q<HTMLInputElement>(".teBg")?.addEventListener("input", (e) =>
-    change((s) => { s.bg = (e.target as HTMLInputElement).value; }, false));
-  q(".teNoBg")?.addEventListener("click", () => change((s) => { s.bg = s.bg === null ? "#ffffff" : null; }));
   q(".teDelete")!.addEventListener("click", () => void finish(true));
   q(".teDone")!.addEventListener("click", () => void finish(false));
 
@@ -403,6 +501,7 @@ function openEditor(init: {
       if (e.key === "b") ed.style.bold = !ed.style.bold;
       else ed.style.italic = !ed.style.italic;
       ed.style.face = null;
+      fitStyleToFamily(ed.style);
       layout(ed);
     }
   };
@@ -429,6 +528,7 @@ function closeEditor() {
   ed.root.remove();
   ed.bar.remove();
   ed.patch?.remove();
+  notifyStyle();
 }
 
 function styleArgs(s: Style) {
@@ -500,7 +600,7 @@ async function finish(remove: boolean) {
       print: target.kind === "annot" ? target.annot.print : state.printAnnotations,
       author: target.kind === "annot" ? target.annot.author : null,
     };
-    lastStyle = { ...style };
+    setLastStyle(style);
     const label = t("kind.FreeText");
     if (target.kind === "new") {
       setStatus(t("st.adding", { label }));
@@ -522,6 +622,8 @@ async function finish(remove: boolean) {
 
 /** New text box with its top-left corner near the given slot position. */
 export function openNewTextBox(slot: Slot, pageIdx: number, x: number, y: number) {
+  lastStyle.family = asFamily(lastStyle.family);
+  fitStyleToFamily(lastStyle);
   const ppx = pxPerPt(slot, pageIdx);
   // The click lands on the middle of the first line.
   const lift = (BOX_PAD_PT + lastStyle.size * LINE_HEIGHT / 2) * ppx;
@@ -686,12 +788,14 @@ export function initTextEdit() {
   callbacks.renderTextEditAll = renderTextEditAll;
 
   // A press outside the open editor finishes it. On the page the press is
-  // consumed, so it does not also start the next box or a selection.
+  // consumed, so it does not also start the next box or a selection. The
+  // ribbon's format controls and the color popover edit it instead.
   document.addEventListener("pointerdown", (ev) => {
     const ed = active;
     if (!ed) return;
     const target = ev.target as Node | null;
     if (target && (ed.root.contains(target) || ed.bar.contains(target))) return;
+    if ((target as Element | null)?.closest?.("#textFmt, .colorPop")) return;
     if (target && dom.pageList.contains(target)) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -710,6 +814,8 @@ export function initTextEdit() {
     openNewTextBox(hit.slot, hit.idx, ev.clientX - bb.left, ev.clientY - bb.top);
   });
 
+  initFormatRibbon();
+
   // Pixel positions go stale when the page is re-laid out or replaced.
   document.addEventListener("rustpdf:doc-changed", () => {
     closeEditor();
@@ -719,4 +825,34 @@ export function initTextEdit() {
   dom.viewer.addEventListener("wheel", (e) => {
     if (active && e.ctrlKey) void finish(false);
   }, { passive: true, capture: true });
+}
+
+/** The "Text" group of the Edit ribbon tab: formats the open editor, or
+ * sets the style of the next new text box. */
+function initFormatRibbon() {
+  const ribbon = document.getElementById("textFmt");
+  if (!ribbon) return;
+  const ctl = controlsHtml("tfBtn");
+  ribbon.innerHTML = `<div class="tfRow">${ctl.family}</div><div class="tfRow">${ctl.style}</div>`;
+  refreshIcons();
+  const get = () => active ? active.style : lastStyle;
+  wireControls(ribbon, get, (refocus) => {
+    if (active) {
+      layout(active);
+      if (refocus) active.box.focus();
+    } else {
+      setLastStyle(lastStyle);
+      notifyStyle();
+    }
+  });
+  const sync = () => syncControls(ribbon, get(), !active || active.target.kind !== "block");
+  document.addEventListener("rustpdf:textstyle", sync);
+  document.addEventListener("rustpdf:fonts-ready", () => {
+    const sel = ribbon.querySelector<HTMLSelectElement>(".fmtFamily");
+    if (sel) sel.innerHTML = familyOptionsHtml();
+    lastStyle.family = asFamily(lastStyle.family);
+    fitStyleToFamily(lastStyle);
+    sync();
+  });
+  sync();
 }
