@@ -11,9 +11,12 @@ scope each tag landed.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-11-23
+
 Edit cleanup (#8): more shapes, inline text format, one color picker, more fonts.
 Installer: virtual printer set up during installation (#5), Tesseract bundled
-for OCR (#6), per-machine install.
+for OCR (#6), per-machine install. Text boxes (#11), stamps, signatures and
+text marks (#13) stay upright on pages with /Rotate.
 
 ### Added
 - **More shapes** in Comment → Shapes, grouped as lines / shapes / symbols:
@@ -81,6 +84,21 @@ for OCR (#6), per-machine install.
   every bundled library, JBIG-KIT and GNU libiconv included) is built by
   `scripts/fetch-tesseract-sources.ps1` (`just tesseract-sources`) and
   attached to each GitHub release, not put into the installer.
+- **Text boxes stay upright on pages with /Rotate (#11).** A text box's
+  appearance only countered the app's view rotation, not the page's own
+  `/Rotate`, which viewers apply to annotations as well. On pages stored
+  portrait with `/Rotate 90` (common for CAD plans) new text ran top to
+  bottom. Text boxes now counter both, wherever they are written (Text tool,
+  editing, date mark, XFDF import). An existing turned text box is fixed by
+  clicking it once and saving.
+- **Stamps, signatures and text marks stay upright on pages with /Rotate
+  (#13).** Image stamps and placed signatures were drawn unrotated into PDF
+  space, so on such pages they lay turned by 90° (upside down at 180°), and
+  the stamp tool ignored the view rotation too. Underline, strike-through and
+  squiggly ran across the text there and took their thickness from the text
+  length. Stamps are now scaled to the box as seen and turned back; text marks
+  are built as the page is displayed, and the QuadPoints of all text marks
+  (highlight too) start at the edge other viewers read the direction from.
 
 ## [1.3.0] — 2026-11-19
 
