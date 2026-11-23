@@ -2479,6 +2479,9 @@ struct StampArgs {
     page: u32,
     rect: RectPt,
     image_path: String,
+    /// Viewer rotation (quarter turns CW) the image is placed upright for.
+    #[serde(default)]
+    rotation_quadrant: u8,
     #[serde(default = "default_shape_opacity")]
     opacity: f32,
     #[serde(default)]
@@ -2506,6 +2509,7 @@ async fn add_stamp(
         let annot = pdf_mutate::StampAnnotation {
             rect: args.rect,
             image: img_bytes,
+            rotation_quadrant: args.rotation_quadrant,
             opacity: args.opacity,
             contents: args.contents,
             author: args.author,

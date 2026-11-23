@@ -1542,7 +1542,12 @@ export function initAnnot() {
       try {
         const snap = await invoke<DocSnapshot>("add_stamp", {
           document: state.currentDoc,
-          args: { page: ds.pageIdx, rect, image_path: state.stampImagePath, opacity: 1.0, print: state.printAnnotations },
+          args: {
+            page: ds.pageIdx, rect, image_path: state.stampImagePath,
+            // Upright in the rotated view, like a text box.
+            rotation_quadrant: effectiveRotation(ds.pageIdx),
+            opacity: 1.0, print: state.printAnnotations,
+          },
         });
         applyDocSnapshot(snap);
         setStatus(t("st.added", { label: toolNoun("stamp") }));

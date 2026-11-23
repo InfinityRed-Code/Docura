@@ -125,6 +125,36 @@ fn random_nm() -> String {
     format!("rustpdf-{nanos:x}")
 }
 
+/// Clockwise quarter turns an annotation's appearance is shown turned by on
+/// screen: the page's own /Rotate plus the viewer rotation (`view_quadrant`
+/// quarter turns) it was created in.
+fn screen_turns(page_rotation: i32, view_quadrant: u8) -> u8 {
+    ((page_rotation.rem_euclid(360) / 90) as u8 + (view_quadrant & 3)) & 3
+}
+
+/// Size of a `w` × `h` appearance form as seen after `turns` clockwise
+/// quarter turns.
+fn upright_size(turns: u8, w: f32, h: f32) -> (f32, f32) {
+    if turns & 1 == 1 { (h, w) } else { (w, h) }
+}
+
+/// Matrix from a box laid out upright as seen on screen ([`upright_size`],
+/// origin bottom left) into the space of a `w` × `h` appearance form that is
+/// shown turned by `turns` clockwise quarter turns ([`screen_turns`]). It
+/// counter-rotates, so what is drawn through it reads upright on screen.
+fn upright_matrix(turns: u8, w: f32, h: f32) -> [f32; 6] {
+    match turns & 3 {
+        0 => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        1 => [0.0, 1.0, -1.0, 0.0, w, 0.0],
+        2 => [-1.0, 0.0, 0.0, -1.0, w, h],
+        _ => [0.0, -1.0, 1.0, 0.0, 0.0, h],
+    }
+}
+
+fn transform(m: [f32; 6], (x, y): (f32, f32)) -> (f32, f32) {
+    (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
+}
+
 fn rect_native(r: &RectPt, view: ([f32; 4], i32)) -> (f32, f32, f32, f32) {
     // Top-origin view space -> PDF user space. Returns (llx, lly, urx, ury).
     // The view box (CropBox intersect MediaBox) may not start at (0,0).
@@ -156,27 +186,35 @@ pub fn add_markup_annotation(
         .ok_or(MutateError::PageOutOfRange(page_index, total))?;
     let view = page_view(doc, page_id);
 
+    // The rects as displayed (normalised). Text on a page with /Rotate reads
+    // upright as displayed, so the marks are laid out in this space and only
+    // their points are mapped into PDF space; laid out in PDF space they
+    // came out turned by the page's /Rotate (#13).
+    let rects: Vec<(f32, f32, f32, f32)> = annot
+        .rects
+        .iter()
+        .map(|r| (r.x0.min(r.x1), r.y0.min(r.y1), r.x0.max(r.x1), r.y0.max(r.y1)))
+        .collect();
+    let to_pdf = |x: f32, y: f32| crate::point_to_pdf_space(x, y, view.0, view.1);
+
     // Collect quadpoints + bounding rect.
-    let mut quad: Vec<Object> = Vec::with_capacity(annot.rects.len() * 8);
-    let mut rects_native: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(annot.rects.len());
+    let mut quad: Vec<Object> = Vec::with_capacity(rects.len() * 8);
     let mut bbox: Option<(f32, f32, f32, f32)> = None;
-    for r in &annot.rects {
-        let (llx, lly, urx, ury) = rect_native(r, view);
-        rects_native.push((llx, lly, urx, ury));
+    for &(x0, y0, x1, y1) in &rects {
         // PDF spec QuadPoints order for highlight (PDF 1.7 §12.5.6.10):
-        // [x1 y1 x2 y2 x3 y3 x4 y4] = top-left, top-right, bottom-left, bottom-right.
+        // [x1 y1 x2 y2 x3 y3 x4 y4] = top-left, top-right, bottom-left,
+        // bottom-right of the text, the first edge giving its direction.
         // Acrobat interprets in that order; some viewers expect bottom-first,
         // but Acrobat / PDFium / Foxit accept the upper-line-first form.
-        for v in [
-            llx, ury, urx, ury, llx, lly, urx, lly,
-        ] {
-            quad.push(Object::Real(v));
+        for (x, y) in [to_pdf(x0, y0), to_pdf(x1, y0), to_pdf(x0, y1), to_pdf(x1, y1)] {
+            quad.push(Object::Real(x));
+            quad.push(Object::Real(y));
+            let bb = bbox.get_or_insert((x, y, x, y));
+            bb.0 = bb.0.min(x);
+            bb.1 = bb.1.min(y);
+            bb.2 = bb.2.max(x);
+            bb.3 = bb.3.max(y);
         }
-        let bb = bbox.get_or_insert((llx, lly, urx, ury));
-        bb.0 = bb.0.min(llx);
-        bb.1 = bb.1.min(lly);
-        bb.2 = bb.2.max(urx);
-        bb.3 = bb.3.max(ury);
     }
     let (rllx, rlly, rurx, rury) = bbox.unwrap();
 
@@ -232,11 +270,11 @@ pub fn add_markup_annotation(
     // Multiply blend mode so text shows through like a real highlighter.
     let w = rurx - rllx;
     let h = rury - rlly;
-    let local: Vec<(f32, f32, f32, f32)> = rects_native
-        .iter()
-        .map(|&(a, b, c, d)| (a - rllx, b - rlly, c - rllx, d - rlly))
-        .collect();
-    let content = build_markup_appearance(annot.kind, &local, color);
+    let to_form = |x: f32, y: f32| {
+        let (px, py) = to_pdf(x, y);
+        (px - rllx, py - rlly)
+    };
+    let content = build_markup_appearance(annot.kind, &rects, to_form, color);
     let resources = if matches!(annot.kind, MarkupKind::Highlight) {
         let mut gs = Dictionary::new();
         gs.set("Type", Object::Name(b"ExtGState".to_vec()));
@@ -260,11 +298,14 @@ pub fn add_markup_annotation(
     Ok(annot_id)
 }
 
-/// Build the `/AP /N` content stream for a text-markup annotation. Coordinates
-/// are local to the appearance BBox (page coords minus the bbox origin).
+/// Build the `/AP /N` content stream for a text-markup annotation. `rects`
+/// are the text boxes as displayed (top-origin, y grows down); the marks are
+/// laid out there and every point goes through `to_form` into the space of
+/// the appearance BBox.
 fn build_markup_appearance(
     kind: MarkupKind,
-    quads: &[(f32, f32, f32, f32)],
+    rects: &[(f32, f32, f32, f32)],
+    to_form: impl Fn(f32, f32) -> (f32, f32),
     rgb: [f32; 3],
 ) -> Vec<u8> {
     use std::io::Write;
@@ -274,44 +315,52 @@ fn build_markup_appearance(
         MarkupKind::Highlight => {
             // Multiply blend via the /GShl ExtGState set on the form resources.
             let _ = write!(&mut buf, "q /GShl gs {r:.3} {g:.3} {b:.3} rg\n");
-            for &(x0, y0, x1, y1) in quads {
-                let qw = (x1 - x0).max(0.0);
-                let qh = (y1 - y0).max(0.0);
-                let _ = write!(&mut buf, "{x0:.3} {y0:.3} {qw:.3} {qh:.3} re\n");
+            for &(x0, y0, x1, y1) in rects {
+                // Quarter turns keep a box a box.
+                let (a, c) = (to_form(x0, y0), to_form(x1, y1));
+                let (fx, fy) = (a.0.min(c.0), a.1.min(c.1));
+                let (qw, qh) = ((a.0 - c.0).abs(), (a.1 - c.1).abs());
+                let _ = write!(&mut buf, "{fx:.3} {fy:.3} {qw:.3} {qh:.3} re\n");
             }
             buf.extend_from_slice(b"f Q\n");
         }
         MarkupKind::Underline | MarkupKind::StrikeOut => {
             let _ = write!(&mut buf, "q {r:.3} {g:.3} {b:.3} RG\n");
-            for &(x0, y0, x1, y1) in quads {
+            for &(x0, y0, x1, y1) in rects {
                 let qh = (y1 - y0).max(1.0);
                 let lw = (qh * 0.07).max(0.6);
                 let y = match kind {
                     // Underline sits just above the baseline; strikeout crosses
                     // the vertical middle of the text quad.
-                    MarkupKind::Underline => y0 + qh * 0.08,
+                    MarkupKind::Underline => y1 - qh * 0.08,
                     _ => y0 + qh * 0.5,
                 };
-                let _ = write!(&mut buf, "{lw:.3} w {x0:.3} {y:.3} m {x1:.3} {y:.3} l S\n");
+                let (a, c) = (to_form(x0, y), to_form(x1, y));
+                let _ = write!(
+                    &mut buf,
+                    "{lw:.3} w {:.3} {:.3} m {:.3} {:.3} l S\n",
+                    a.0, a.1, c.0, c.1
+                );
             }
             buf.extend_from_slice(b"Q\n");
         }
         MarkupKind::Squiggly => {
             // A wavy underline drawn as a triangle wave just above the baseline.
             let _ = write!(&mut buf, "q {r:.3} {g:.3} {b:.3} RG\n");
-            for &(x0, y0, x1, y1) in quads {
+            for &(x0, y0, x1, y1) in rects {
                 let qh = (y1 - y0).max(1.0);
                 let lw = (qh * 0.06).max(0.5);
                 let amp = (qh * 0.09).max(1.0);
-                let base = y0 + qh * 0.05;
+                let base = y1 - qh * 0.05;
                 let step = (amp * 1.6).max(2.5);
-                let _ = write!(&mut buf, "{lw:.3} w {x0:.3} {base:.3} m\n");
+                let (sx, sy) = to_form(x0, base);
+                let _ = write!(&mut buf, "{lw:.3} w {sx:.3} {sy:.3} m\n");
                 let mut x = x0;
                 let mut up = true;
                 while x < x1 - 0.01 {
                     let nx = (x + step).min(x1);
-                    let y = if up { base + amp } else { base };
-                    let _ = write!(&mut buf, "{nx:.3} {y:.3} l\n");
+                    let (px, py) = to_form(nx, if up { base - amp } else { base });
+                    let _ = write!(&mut buf, "{px:.3} {py:.3} l\n");
                     x = nx;
                     up = !up;
                 }
@@ -1240,7 +1289,6 @@ pub fn add_freetext_annotation(
     // viewer rotation does, so the text is counter-rotated by both. Without
     // the page part, text on a rotated page (common for CAD plans: portrait
     // MediaBox shown as landscape) came out turned by that angle (#11).
-    let page_quadrant = (view.1 / 90) as u8;
     let content = build_freetext_appearance(
         &annot.text,
         &font_key,
@@ -1250,7 +1298,7 @@ pub fn add_freetext_annotation(
         bg,
         w,
         h,
-        ((annot.rotation_quadrant & 3) + page_quadrant) & 3,
+        screen_turns(view.1, annot.rotation_quadrant),
     );
     let mut font_dict = Dictionary::new();
     font_dict.set(font_key.as_str(), Object::Reference(font_id));
@@ -1313,7 +1361,7 @@ fn build_freetext_appearance(
     bg: Option<[f32; 3]>,
     w: f32,
     h: f32,
-    rotation_quadrant: u8,
+    turns: u8,
 ) -> Vec<u8> {
     use std::io::Write;
     let mut buf: Vec<u8> = Vec::with_capacity(text.len() + 200);
@@ -1333,28 +1381,19 @@ fn build_freetext_appearance(
         );
     }
 
-    // Pick text matrix + first-line origin so the rendered text reads upright
-    // in the user's rotated viewer.  Each quadrant rotates the glyph orientation
-    // by the same angle the viewer is rotated, which cancels out at render time.
-    // The line-advance vector is the displacement between successive baselines,
-    // applied via `Td` (we cannot rely on `T*` because T*'s direction depends on
-    // text-space orientation and would point "up" in the user's view for q=2).
-    let (tm, origin, advance) = match rotation_quadrant {
-        // No rotation: existing behavior — top-left origin, baseline goes +x.
-        0 => ("1 0 0 1", (margin, h - margin - fs), (0.0_f32, -leading)),
-        // 90° CW viewer rotation: text reads bottom-up in PDF (view left-to-right).
-        1 => ("0 1 -1 0", (margin + fs, margin), (leading, 0.0)),
-        // 180° viewer rotation: text reads right-to-left and lines stack downward
-        // in PDF space (= downward in viewer too, since both flip together).
-        2 => ("-1 0 0 -1", (w - margin, margin + fs), (0.0, leading)),
-        // 90° CCW viewer rotation (= 270° CW): text reads top-down in PDF.
-        3 => (
-            "0 -1 1 0",
-            (w - margin - fs, h - margin),
-            (-leading, 0.0),
-        ),
-        _ => ("1 0 0 1", (margin, h - margin - fs), (0.0, -leading)),
-    };
+    // Lay the text out in the box as seen on screen (first line at the top
+    // left, baseline to the right) and map it into form space with the
+    // matrix that counter-rotates the `turns` the appearance is shown turned
+    // by, so it reads upright. The line-advance vector is the displacement
+    // between successive baselines, applied via `Td` (we cannot rely on `T*`
+    // because T*'s direction depends on text-space orientation and would
+    // point "up" in the user's view for a half turn).
+    let m = upright_matrix(turns, w, h);
+    let (_, uh) = upright_size(turns, w, h);
+    let tm = format!("{} {} {} {}", m[0], m[1], m[2], m[3]);
+    let origin = transform(m, (margin, uh - margin - fs));
+    // Only the linear part turns a vector; `+ 0.0` drops negative zeros.
+    let advance = (m[2] * -leading + 0.0, m[3] * -leading + 0.0);
 
     let _ = write!(&mut buf, "q\nBT\n/{font_key} {fs:.2} Tf\n");
     let _ = write!(&mut buf, "{r:.3} {g:.3} {b:.3} rg\n");
@@ -1450,6 +1489,10 @@ pub struct StampAnnotation {
     pub rect: RectPt,
     /// Decoded image bytes (any common format). Will be re-encoded as JPEG.
     pub image: Vec<u8>,
+    /// Viewer rotation at insert time (0/1/2/3 = 0/90/180/270 deg CW), on
+    /// top of the page's /Rotate. Both are compensated in the appearance so
+    /// the image stands upright in the rotated view, like a text box.
+    pub rotation_quadrant: u8,
     pub opacity: f32,
     pub contents: Option<String>,
     pub author: Option<String>,
@@ -1531,12 +1574,24 @@ pub fn add_stamp_annotation(
     let w = (urx - llx).max(1.0);
     let h = (ury - lly).max(1.0);
 
-    // Form XObject acting as the appearance stream. /BBox is local coords;
-    // /Matrix maps it into the annotation rectangle (we use the unit square).
-    let mut form_content: Vec<u8> = Vec::with_capacity(64);
+    // Form XObject acting as the appearance stream. /BBox is local coords.
+    // The image (the unit square) is scaled to the box as seen on screen and
+    // turned into form space against the page's /Rotate and the viewer
+    // rotation, the way a text box's text is. Drawn straight into form
+    // space, a stamp or signature on a rotated page came out turned (#13).
+    let turns = screen_turns(view.1, annot.rotation_quadrant);
+    let m = upright_matrix(turns, w, h);
+    let (uw, uh) = upright_size(turns, w, h);
+    let mut form_content: Vec<u8> = Vec::with_capacity(96);
     let _ = write!(
         &mut form_content,
-        "q\n{w:.4} 0 0 {h:.4} 0 0 cm\n/Im0 Do\nQ\n",
+        "q\n{:.4} {:.4} {:.4} {:.4} {:.4} {:.4} cm\n/Im0 Do\nQ\n",
+        m[0] * uw,
+        m[1] * uw,
+        m[2] * uh,
+        m[3] * uh,
+        m[4],
+        m[5],
     );
     let mut form_dict = Dictionary::new();
     form_dict.set("Type", Object::Name(b"XObject".to_vec()));
@@ -2102,5 +2157,323 @@ mod tests {
                 assert!((top - 2.0).abs() < 0.02, "top margin {top}, {ctx}");
             }
         }
+    }
+
+    /// The page rotations the rotation tests run through: the four quarter
+    /// turns plus values that only normalise to one.
+    const PAGE_ROTATIONS: [i64; 6] = [0, 90, 180, 270, -90, 450];
+
+    fn rotated_page_doc(page_rot: i64) -> Document {
+        let mut doc = one_page_doc();
+        let page_id = doc.page_iter().next().unwrap();
+        doc.get_dictionary_mut(page_id)
+            .unwrap()
+            .set("Rotate", Object::Integer(page_rot));
+        doc
+    }
+
+    fn page_turns(page_rot: i64) -> u32 {
+        (page_rot.rem_euclid(360) / 90) as u32
+    }
+
+    /// A PDF point of the 612 x 792 test page as displayed with its /Rotate:
+    /// top-origin, like the coordinates the UI sends.
+    fn displayed(p: (f32, f32), page_rot: i64) -> (f32, f32) {
+        let ((x, y), (_, h)) = turn_cw(p, (612.0, 792.0), page_turns(page_rot));
+        (x, h - y)
+    }
+
+    fn floats(o: &Object) -> Vec<f32> {
+        o.as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect()
+    }
+
+    fn form_size(form: &Dictionary) -> (f32, f32) {
+        let b = floats(form.get(b"BBox").unwrap());
+        (b[2] - b[0], b[3] - b[1])
+    }
+
+    /// The points a content stream moves and draws to (`m` / `l`), in order.
+    fn path_points(content: &str) -> Vec<(f32, f32)> {
+        let mut nums: Vec<f32> = Vec::new();
+        let mut pts = Vec::new();
+        for tok in content.split_whitespace() {
+            match tok.parse::<f32>() {
+                Ok(v) => nums.push(v),
+                Err(_) => {
+                    if (tok == "m" || tok == "l") && nums.len() >= 2 {
+                        pts.push((nums[nums.len() - 2], nums[nums.len() - 1]));
+                    }
+                    nums.clear();
+                }
+            }
+        }
+        pts
+    }
+
+    fn close(a: (f32, f32), b: (f32, f32)) -> bool {
+        (a.0 - b.0).abs() < 0.02 && (a.1 - b.1).abs() < 0.02
+    }
+
+    /// Encoded 4 x 2 px test image: opaque (written as JPEG) or with an
+    /// alpha channel like a drawn signature (written with an /SMask).
+    fn stamp_image(alpha: bool) -> Vec<u8> {
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+        let rgba = RgbaImage::from_pixel(4, 2, Rgba([20, 40, 160, if alpha { 128 } else { 255 }]));
+        let img = if alpha {
+            DynamicImage::ImageRgba8(rgba)
+        } else {
+            DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(rgba).to_rgb8())
+        };
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn stamp_and_signature_stand_upright_on_rotated_page() {
+        // Issue #13: an image stamp or a placed signature (drawn signatures
+        // are PNGs with alpha, placed as stamps) on a page with its own
+        // /Rotate, or placed in a rotated view, came out turned.
+        let rect = RectPt { x0: 100.0, y0: 150.0, x1: 260.0, y1: 210.0 };
+        let mut bad: Vec<String> = Vec::new();
+        for alpha in [false, true] {
+            for page_rot in PAGE_ROTATIONS {
+                for view_q in 0..4_u8 {
+                    let mut doc = rotated_page_doc(page_rot);
+                    let annot = StampAnnotation {
+                        rect,
+                        image: stamp_image(alpha),
+                        rotation_quadrant: view_q,
+                        opacity: 1.0,
+                        contents: None,
+                        author: None,
+                        print: true,
+                    };
+                    let id = add_stamp_annotation(&mut doc, 0, &annot).unwrap();
+
+                    let (form, content) = markup_ap_stream(&doc, id);
+                    let content = String::from_utf8_lossy(&content);
+                    let kind = if alpha { "signature" } else { "stamp" };
+                    let ctx = format!("{kind}, /Rotate {page_rot}, view {view_q}");
+                    let cm: Vec<f32> = content
+                        .lines()
+                        .find(|l| l.ends_with(" cm"))
+                        .expect("image matrix")
+                        .split_whitespace()
+                        .take(6)
+                        .map(|t| t.parse().unwrap())
+                        .collect();
+                    let size = form_size(&form);
+                    let turns = page_turns(page_rot) + view_q as u32;
+                    // Image space (unit square, row 0 on top) → screen.
+                    let screen = |u: f32, v: f32| {
+                        turn_cw((cm[0] * u + cm[2] * v + cm[4], cm[1] * u + cm[3] * v + cm[5]), size, turns)
+                    };
+                    let (origin, (sw, sh)) = screen(0.0, 0.0);
+                    let (x_end, y_end) = (screen(1.0, 0.0).0, screen(0.0, 1.0).0);
+                    // The box as the user dragged it (the view turns it),
+                    // filled by the upright image: bottom-left corner at the
+                    // bottom left, bottom edge to the right, top edge on top.
+                    let dragged = if view_q % 2 == 1 { (60.0, 160.0) } else { (160.0, 60.0) };
+                    if !close((sw, sh), dragged)
+                        || !close(origin, (0.0, 0.0))
+                        || !close(x_end, (sw, 0.0))
+                        || !close(y_end, (0.0, sh))
+                    {
+                        bad.push(format!(
+                            "{ctx}: image corners (0,0) (1,0) (0,1) on screen at {origin:?} {x_end:?} {y_end:?}, want (0, 0) ({sw}, 0) (0, {sh})"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "not upright:\n{}", bad.join("\n"));
+    }
+
+    #[test]
+    fn text_markup_follows_text_on_rotated_page() {
+        // A line of text as displayed (120 x 12 pt). On a page with /Rotate
+        // the text reads upright as displayed, so the marks must too.
+        let rect = RectPt { x0: 100.0, y0: 200.0, x1: 220.0, y1: 212.0 };
+        let kinds = [
+            MarkupKind::Highlight,
+            MarkupKind::Underline,
+            MarkupKind::StrikeOut,
+            MarkupKind::Squiggly,
+        ];
+        let mut bad: Vec<String> = Vec::new();
+        for page_rot in PAGE_ROTATIONS {
+            for kind in kinds {
+                let mut doc = rotated_page_doc(page_rot);
+                let annot = MarkupAnnotation {
+                    kind,
+                    rects: vec![rect],
+                    color: [0.0, 0.0, 1.0],
+                    opacity: 1.0,
+                    contents: None,
+                    author: None,
+                    print: true,
+                };
+                let id = add_markup_annotation(&mut doc, 0, &annot).unwrap();
+                let d = doc.get_dictionary(id).unwrap().clone();
+                let (_, content) = markup_ap_stream(&doc, id);
+                let content = String::from_utf8_lossy(&content);
+                let ctx = format!("{kind:?}, /Rotate {page_rot}");
+
+                // QuadPoints: upper left, upper right, lower left, lower
+                // right of the text as displayed (the first edge gives the
+                // text direction).
+                let q = floats(d.get(b"QuadPoints").unwrap());
+                let corners: Vec<(f32, f32)> = q.chunks(2).map(|p| displayed((p[0], p[1]), page_rot)).collect();
+                let want = [(100.0, 200.0), (220.0, 200.0), (100.0, 212.0), (220.0, 212.0)];
+                if !corners.iter().zip(want).all(|(got, want)| close(*got, want)) {
+                    bad.push(format!("{ctx}: QuadPoints as displayed {corners:?}, want {want:?}"));
+                }
+
+                // The appearance, mapped from form space onto the page.
+                let r = floats(d.get(b"Rect").unwrap());
+                let on_page = |(x, y): (f32, f32)| displayed((x + r[0], y + r[1]), page_rot);
+                if let MarkupKind::Highlight = kind {
+                    // A filled box over the text, whichever the orientation.
+                    let n: Vec<f32> = content
+                        .lines()
+                        .find(|l| l.ends_with(" re"))
+                        .expect("box")
+                        .split_whitespace()
+                        .take(4)
+                        .map(|t| t.parse().unwrap())
+                        .collect();
+                    let (a, b) = (on_page((n[0], n[1])), on_page((n[0] + n[2], n[1] + n[3])));
+                    let got = (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
+                    if !close((got.0, got.1), (100.0, 200.0)) || !close((got.2, got.3), (220.0, 212.0)) {
+                        bad.push(format!("{ctx}: box as displayed {got:?}"));
+                    }
+                    continue;
+                }
+                // Drawn left to right across the text, at the height the
+                // mark belongs to (display y grows down).
+                let pts: Vec<(f32, f32)> = path_points(&content).into_iter().map(on_page).collect();
+                let band = match kind {
+                    MarkupKind::StrikeOut => 205.0..207.0,
+                    _ => 209.0..212.0,
+                };
+                let ok = pts.len() >= 2
+                    && (pts[0].0 - 100.0).abs() < 0.02
+                    && (pts[pts.len() - 1].0 - 220.0).abs() < 0.02
+                    && pts.windows(2).all(|w| w[1].0 > w[0].0)
+                    && pts.iter().all(|p| band.contains(&p.1));
+                if !ok {
+                    let first_last = (pts.first(), pts.last());
+                    bad.push(format!(
+                        "{ctx}: line as displayed runs {:?} -> {:?}, want x 100 -> 220 at y {band:?}",
+                        first_last.0, first_last.1
+                    ));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "marks off the text:\n{}", bad.join("\n"));
+    }
+
+    #[test]
+    fn drawn_geometry_lands_where_it_was_drawn_on_rotated_page() {
+        // Ink (also the check / cross marks), shapes (also the dot mark) and
+        // sticky notes carry no direction of their own: their points are
+        // taken as displayed, so mapping them back must give the input.
+        let stroke = vec![(100.0, 100.0), (150.0, 130.0), (210.0, 110.0)];
+        let mut bad: Vec<String> = Vec::new();
+        for page_rot in PAGE_ROTATIONS {
+            let back = |v: &[f32]| -> Vec<(f32, f32)> {
+                v.chunks(2).map(|p| displayed((p[0], p[1]), page_rot)).collect()
+            };
+            let same = |got: &[(f32, f32)], want: &[(f32, f32)]| {
+                got.len() == want.len() && got.iter().zip(want).all(|(a, b)| close(*a, *b))
+            };
+            let mut doc = rotated_page_doc(page_rot);
+
+            let ink = InkAnnotation {
+                strokes: vec![stroke.clone()],
+                color: [0.0, 0.0, 0.0],
+                width: 1.6,
+                opacity: 1.0,
+                contents: None,
+                author: None,
+                print: true,
+            };
+            let id = add_ink_annotation(&mut doc, 0, &ink).unwrap();
+            let list = doc.get_dictionary(id).unwrap().get(b"InkList").unwrap().as_array().unwrap()[0].clone();
+            let got = back(&floats(&list));
+            if !same(&got, &stroke) {
+                bad.push(format!("Ink, /Rotate {page_rot}: {got:?}"));
+            }
+
+            let id = add_shape_annotation(&mut doc, 0, &shape(ShapeKind::Polygon { cloudy: false }, stroke.clone())).unwrap();
+            let d = doc.get_dictionary(id).unwrap().clone();
+            let got = back(&floats(d.get(b"Vertices").unwrap()));
+            let r = floats(d.get(b"Rect").unwrap());
+            let (_, content) = markup_ap_stream(&doc, id);
+            let drawn: Vec<(f32, f32)> = path_points(&String::from_utf8_lossy(&content))
+                .into_iter()
+                .map(|(x, y)| displayed((x + r[0], y + r[1]), page_rot))
+                .collect();
+            if !same(&got, &stroke) || !same(&drawn, &stroke) {
+                bad.push(format!("Polygon, /Rotate {page_rot}: vertices {got:?}, drawn {drawn:?}"));
+            }
+
+            let mut line = shape(
+                ShapeKind::Line { arrow_start: LineEnding::None, arrow_end: LineEnding::ClosedArrow },
+                Vec::new(),
+            );
+            line.rect = RectPt { x0: 100.0, y0: 100.0, x1: 220.0, y1: 160.0 };
+            let id = add_shape_annotation(&mut doc, 0, &line).unwrap();
+            let d = doc.get_dictionary(id).unwrap().clone();
+            let ends = [(100.0, 100.0), (220.0, 160.0)];
+            let got = back(&floats(d.get(b"L").unwrap()));
+            let r = floats(d.get(b"Rect").unwrap());
+            let (_, content) = markup_ap_stream(&doc, id);
+            let drawn: Vec<(f32, f32)> = path_points(&String::from_utf8_lossy(&content))
+                .into_iter()
+                .map(|(x, y)| displayed((x + r[0], y + r[1]), page_rot))
+                .collect();
+            // Line, then the arrow head with its tip on the end point.
+            if !same(&got, &ends) || !same(&drawn[..3], &[ends[0], ends[1], ends[1]]) {
+                bad.push(format!("Line, /Rotate {page_rot}: /L {got:?}, drawn {drawn:?}"));
+            }
+
+            for kind in [ShapeKind::Square, ShapeKind::Circle] {
+                let mut s = shape(kind, Vec::new());
+                s.rect = RectPt { x0: 100.0, y0: 100.0, x1: 220.0, y1: 160.0 };
+                let id = add_shape_annotation(&mut doc, 0, &s).unwrap();
+                let c = back(&floats(doc.get_dictionary(id).unwrap().get(b"Rect").unwrap()));
+                let got = [
+                    (c[0].0.min(c[1].0), c[0].1.min(c[1].1)),
+                    (c[0].0.max(c[1].0), c[0].1.max(c[1].1)),
+                ];
+                if !same(&got, &[(100.0, 100.0), (220.0, 160.0)]) {
+                    bad.push(format!("{kind:?}, /Rotate {page_rot}: {got:?}"));
+                }
+            }
+
+            // A sticky note's icon has no appearance of ours: viewers draw
+            // it upright themselves (text annotations behave as NoRotate,
+            // ISO 32000-1 §12.5.6.4), pinned at the /Rect's upper-left
+            // corner. That corner is the clicked point.
+            let note = TextNoteAnnotation {
+                x_pt: 100.0,
+                y_pt: 100.0,
+                contents: "Notiz".into(),
+                color: [1.0, 0.9, 0.2],
+                icon: None,
+                author: None,
+                print: true,
+            };
+            let id = add_text_note_annotation(&mut doc, 0, &note).unwrap();
+            let d = doc.get_dictionary(id).unwrap();
+            let r = floats(d.get(b"Rect").unwrap());
+            let pin = displayed((r[0], r[3]), page_rot);
+            if !close(pin, (100.0, 100.0)) || d.has(b"AP") {
+                bad.push(format!("Text note, /Rotate {page_rot}: upper-left corner at {pin:?}"));
+            }
+        }
+        assert!(bad.is_empty(), "not where drawn:\n{}", bad.join("\n"));
     }
 }
