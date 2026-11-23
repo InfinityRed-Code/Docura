@@ -12,6 +12,8 @@ scope each tag landed.
 ## [Unreleased]
 
 Edit cleanup (#8): more shapes, inline text format, one color picker, more fonts.
+Installer: virtual printer set up during installation (#5), Tesseract bundled
+for OCR (#6), per-machine install.
 
 ### Added
 - **More shapes** in Comment → Shapes, grouped as lines / shapes / symbols:
@@ -46,6 +48,32 @@ Edit cleanup (#8): more shapes, inline text format, one color picker, more fonts
   color) sit directly next to "Text" in the Edit tab instead of only in the
   floating bar; both stay in sync and the ribbon sets the style of the next
   text box when none is open. The last text style is remembered.
+- **The installer installs per machine** (`C:\Program Files\Docura PDF`,
+  administrator prompt) instead of per user. An existing per-user install is
+  removed first (app data and an enabled autostart are kept), so `.pdf` files
+  do not keep opening the old copy.
+- The installer no longer asks whether to install the virtual printer; it
+  always does.
+
+### Fixed
+- **The installer sets up the virtual printer (#5).** It had to be installed
+  again from the app after every installation. The installer ran per user
+  without administrator rights, and adding a printer port / printer needs
+  them; the step also still used the pre-rename names (printer "rustpdf",
+  `rustpdf-spool.ps` under a literal `$PROGRAMDATA` path, which is not an
+  NSIS constant) and passed the driver name unquoted to PowerShell — and
+  every failure was swallowed. The installer now runs elevated, registers
+  "Docura PDF" on `%ProgramData%\DocuraPDF\spool\docura-spool.ps` exactly
+  like the in-app button (`nsis/printer-setup.ps1`, run by the 64-bit
+  PowerShell), logs to `%ProgramData%\DocuraPDF\printer-setup.log`, and
+  shows a message if it fails. Uninstalling removes the printer again.
+- **OCR works right after installation (#6).** The installer ships
+  Tesseract 5.4 (UB-Mannheim build: `tesseract.exe` and the DLLs it loads)
+  with the `deu` and `eng` models in `<install dir>\tesseract`, licenses
+  included. The app uses it first and points it at its own `tessdata`, so no
+  PATH or environment setup is needed. `scripts/fetch-tesseract.ps1`
+  (`just tesseract`) stages it, pinned by SHA-256; the installer build stops
+  if it is missing.
 
 ## [1.3.0] — 2026-11-19
 

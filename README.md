@@ -126,8 +126,10 @@ Full detail in [`docs/architecture.md`](docs/architecture.md).
 - Windows: MSVC C++ Build Tools + Windows SDK + WebView2 runtime
 - Ghostscript (optional — PDF/A export and the virtual printer). The settings
   dialog detects it and links to the installer.
-- Tesseract (optional — OCR). Detected via the `TESSERACT` env var, PATH, or a
-  standard install; the UB-Mannheim build is recommended.
+- Tesseract (OCR). The Windows installer bundles it (UB-Mannheim build with
+  `deu` + `eng`); `just tesseract` stages it into `vendor/tesseract` and needs
+  7-Zip. At runtime the app prefers the bundled copy (debug builds: the staged
+  one), then the `TESSERACT` env var, PATH, or a standard install.
 - LibreOffice (optional — Office → PDF conversion via `soffice --headless`).
 
 ## Build
@@ -160,12 +162,25 @@ looks in subfolders of cwd for `tauri.conf.json`. Incremental rebuilds are
 Release bundle (NSIS installer):
 
 ```
+just build
+```
+
+or by hand:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/fetch-tesseract.ps1
 cd apps/desktop-tauri
 ./ui/node_modules/.bin/tauri build
 ```
 
-The installer ships `pdfium.dll` as a bundle resource and offers to register
-the virtual printer.
+The installer installs per machine (`C:\Program Files\Docura PDF`) and asks
+for administrator rights. It ships `pdfium.dll` as a bundle resource and
+Tesseract in `<install dir>\tesseract` (the build stops if
+`vendor/tesseract` is not staged), and registers the "Docura PDF" virtual
+printer via `nsis/printer-setup.ps1` (log:
+`%ProgramData%\DocuraPDF\printer-setup.log`; a failure is shown, not
+swallowed). An older per-user installation is removed first, app data is
+kept. Hooks: `apps/desktop-tauri/src-tauri/nsis/hooks.nsi`.
 
 ## Versioning
 
@@ -199,3 +214,11 @@ compatible with the above: PDFium is Apache-2.0 / BSD-3-Clause; lopdf,
 pdfium-render, image, lru and the other workspace crates are MIT / Apache-2.0.
 These permissive upstream licenses impose no restriction on the project's own
 noncommercial/commercial dual-licensing.
+
+The Windows installer also ships Tesseract OCR (Apache-2.0) as a separate
+program the app runs, unmodified, with the DLLs it loads. Most of them are
+permissively licensed; `libjbig-0.dll` (GPL-2.0-or-later) and
+`libiconv-2.dll` (LGPL-2.1-or-later) are copyleft and used only by Tesseract.
+The installed `tesseract\THIRD-PARTY-NOTICES.txt`
+(from `scripts/tesseract-THIRD-PARTY-NOTICES.txt`) lists every file, its
+license and where the source is.

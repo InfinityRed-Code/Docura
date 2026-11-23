@@ -1,13 +1,15 @@
 //! OCR integration (milestone v1.0).
 //!
-//! Tesseract is driven as an external CLI — same pattern as Ghostscript
-//! (PDF/A) and LibreOffice (Office→PDF): detect a system install, never
-//! bundle. Recognition runs on page bitmaps rendered by pdfium at a fixed
-//! DPI; the TSV word boxes are mapped back into PDF user space and injected
-//! as an invisible text layer via `pdf_mutate::add_ocr_text_layer`.
+//! Tesseract is driven as an external CLI, like Ghostscript (PDF/A) and
+//! LibreOffice (Office→PDF). The Windows installer ships it (with `deu` and
+//! `eng`) in `<install dir>\tesseract`, which is preferred; a `TESSERACT`
+//! override, PATH and standard system installs are the fallbacks.
+//! Recognition runs on page bitmaps rendered by pdfium at a fixed DPI; the
+//! TSV word boxes are mapped back into PDF user space and injected as an
+//! invisible text layer via `pdf_mutate::add_ocr_text_layer`.
 //!
-//! Language packs are downloaded from the `tessdata_fast` repository into
-//! the app config dir and passed to Tesseract via `--tessdata-dir`.
+//! Further language packs are downloaded from the `tessdata_fast` repository
+//! into the app config dir and passed to Tesseract via `--tessdata-dir`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,6 +47,46 @@ pub struct TesseractInfo {
     languages: Vec<String>,
 }
 
+/// Directories holding a Tesseract bundled with the app: `tesseract\` next to
+/// the executable (installed by nsis/hooks.nsi). Debug builds also accept the
+/// copy staged by scripts/fetch-tesseract.ps1, so `tauri dev` and the tests
+/// run against the bundled build.
+fn bundled_tesseract_dirs() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(dir) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.join("tesseract")))
+        {
+            v.push(dir);
+        }
+        #[cfg(debug_assertions)]
+        v.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../vendor/tesseract"));
+    }
+    v
+}
+
+/// The bundled Tesseract's tessdata dir if `tesseract` is a bundled binary.
+fn bundled_tessdata(tesseract: &Path) -> Option<PathBuf> {
+    let dir = tesseract.parent()?;
+    bundled_tesseract_dirs()
+        .iter()
+        .any(|b| b == dir)
+        .then(|| dir.join("tessdata"))
+}
+
+/// `Command` for a Tesseract binary. A bundled Tesseract always reads its own
+/// models: a TESSDATA_PREFIX inherited from some system install would
+/// otherwise point it at that installation's tessdata.
+fn tesseract_command(tesseract: &str) -> Command {
+    let mut cmd = Command::new(tesseract);
+    if let Some(tessdata) = bundled_tessdata(Path::new(tesseract)) {
+        cmd.env("TESSDATA_PREFIX", tessdata);
+    }
+    cmd
+}
+
 fn tesseract_candidates() -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = Vec::new();
     if let Ok(p) = std::env::var("TESSERACT") {
@@ -52,6 +94,11 @@ fn tesseract_candidates() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
+        v.extend(
+            bundled_tesseract_dirs()
+                .into_iter()
+                .map(|d| d.join("tesseract.exe")),
+        );
         v.push(PathBuf::from("tesseract.exe"));
         for base in [
             std::env::var("ProgramFiles").ok(),
@@ -104,7 +151,7 @@ fn user_tessdata_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 fn system_langs(tesseract: &str) -> Vec<String> {
-    let Ok(out) = no_window(Command::new(tesseract).arg("--list-langs")).output() else {
+    let Ok(out) = no_window(tesseract_command(tesseract).arg("--list-langs")).output() else {
         return Vec::new();
     };
     // First line is a header ("List of available languages in ...").
@@ -473,7 +520,7 @@ fn run_tesseract_tsv(
     )
     .map_err(|e| format!("write temp png: {e}"))?;
 
-    let mut cmd = Command::new(tesseract);
+    let mut cmd = tesseract_command(tesseract);
     cmd.arg(&png)
         .arg("stdout")
         .args(["-l", lang])
@@ -958,6 +1005,32 @@ mod tests {
         out
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn bundled_tesseract_is_preferred_and_reads_its_own_tessdata() {
+        let exe = std::env::current_exe().unwrap();
+        let bundled_dir = exe.parent().unwrap().join("tesseract");
+        let bundled = bundled_dir.join("tesseract.exe");
+
+        let candidates = tesseract_candidates();
+        let pos = |p: &Path| candidates.iter().position(|c| c == p);
+        let bundled_pos = pos(&bundled).expect("bundled path is a candidate");
+        assert!(
+            bundled_pos < pos(Path::new("tesseract.exe")).unwrap(),
+            "bundled Tesseract must win over PATH: {candidates:?}"
+        );
+
+        assert_eq!(
+            bundled_tessdata(Path::new(&bundled.to_string_lossy().to_string())),
+            Some(bundled_dir.join("tessdata"))
+        );
+        assert_eq!(bundled_tessdata(Path::new("tesseract.exe")), None);
+        assert_eq!(
+            bundled_tessdata(Path::new(r"C:\Program Files\Tesseract-OCR\tesseract.exe")),
+            None
+        );
+    }
+
     /// End-to-end against a real Tesseract install: render → preprocess →
     /// recognise → inject → extract. Skips when Tesseract is absent.
     #[test]
@@ -987,6 +1060,15 @@ mod tests {
         let texts: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
         assert!(texts.contains(&"INVOICE"), "words: {texts:?}");
         assert!(texts.iter().any(|t| t.contains("123")), "words: {texts:?}");
+
+        // The installer ships deu + eng; the app's default language is deu.
+        if system_langs(&tesseract).iter().any(|l| l == "deu") {
+            let de = run_tesseract_tsv(&tesseract, None, "deu+eng", &gray, 1).unwrap();
+            assert!(
+                de.iter().any(|w| w.text == "INVOICE"),
+                "deu+eng words: {de:?}"
+            );
+        }
         // Boxes are inside the bitmap.
         for w in &words {
             assert!(w.x >= 0.0 && w.x + w.w <= gray.width() as f32 + 1.0);
