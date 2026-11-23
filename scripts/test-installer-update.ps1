@@ -13,7 +13,9 @@
   printer needs administrator rights). Without elevation it can test a setup
   built per user, e.g.
     tauri build --config '{"bundle":{"windows":{"nsis":{"installMode":"currentUser"}}}}'
-  and skips the printer checks.
+  and skips the printer checks. The printer is machine-wide even then: where
+  Windows lets a standard user remove it, the per-user uninstall at the end
+  removes a "Docura PDF" printer another installation set up.
 
     powershell -ExecutionPolicy Bypass -File scripts\test-installer-update.ps1 `
       -SetupA 'Docura PDF_1.3.98_x64-setup.exe' -SetupB 'Docura PDF_1.3.99_x64-setup.exe'
@@ -155,14 +157,22 @@ Set-Content -LiteralPath $stale -Value 'must be gone after the update'
 
 # --- 2. update A -> B with the app and Tesseract running ---------------------
 Write-Host "`n2. Update $versionA -> $versionB, app and tesseract.exe running"
-$app = Start-Process -FilePath (Join-Path $script:InstDir 'desktop-tauri.exe') -PassThru
+$exe = Join-Path $script:InstDir 'desktop-tauri.exe'
+if ($IsAdmin) {
+    # Start it as the signed-in user, like a real session: an elevated app
+    # would put administrator-owned files into the user's WebView2 profile.
+    Start-Process -FilePath explorer.exe -ArgumentList "`"$exe`""
+} else {
+    Start-Process -FilePath $exe
+}
 # Without input, tesseract waits on stdin and keeps its files open.
 $tess = Start-Process -FilePath (Join-Path $script:InstDir 'tesseract\tesseract.exe') -ArgumentList 'stdin', 'stdout' -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 3
-Write-Check (-not $app.HasExited) 'app running before the update'
+Start-Sleep -Seconds 5
+$app = Get-Process desktop-tauri -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Select-Object -First 1
+Write-Check ($null -ne $app -and -not $app.HasExited) 'app running before the update'
 Write-Check (-not $tess.HasExited) 'bundled tesseract.exe running before the update'
 Write-Check ((Invoke-Setup $SetupB '/S') -eq 0) 'setup B exit code 0'
-Write-Check $app.HasExited 'app was closed by the setup'
+Write-Check ($null -ne $app -and $app.HasExited) 'app was closed by the setup'
 Write-Check $tess.HasExited 'bundled tesseract.exe was stopped by the setup'
 Test-Installed $versionB 'B'
 Write-Check (-not (Test-Path $stale)) 'Tesseract folder replaced (stale file gone)'
