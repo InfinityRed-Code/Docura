@@ -42,6 +42,14 @@ tesseract:
 build: pdfium tesseract
     cd {{tauri_dir}}; & ./ui/node_modules/.bin/tauri.CMD build
 
+# Source archive for the bundled Tesseract into dist/ (GPL/LGPL source offer; attach to the GitHub release, not part of the installer)
+tesseract-sources:
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-tesseract-sources.ps1
+
+# Everything a GitHub release needs: the installer and the Tesseract source archive
+release: build tesseract-sources
+    @Write-Host "Attach to the GitHub release: target/release/bundle/nsis/*-setup.exe and dist/docura-pdf-tesseract-sources-*.zip"
+
 # Clean artifacts then relaunch dev
 rebuild: clean dev
 

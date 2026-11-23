@@ -1,71 +1,95 @@
 Tesseract OCR as bundled with Docura PDF
 ========================================
 
-This directory contains Tesseract OCR and the libraries it needs at runtime.
-Docura PDF starts tesseract.exe as a separate program; it does not link any of
-these files. All files are distributed unmodified.
+This folder contains Tesseract OCR and the libraries it needs at runtime. It
+is NOT part of Docura PDF and is NOT covered by the Docura PDF license
+(PolyForm Noncommercial 1.0.0 / commercial license). Everything in this
+folder is distributed under its own licenses, listed below; their full texts
+are in the licenses\ subfolder.
+
+Docura PDF only starts tesseract.exe as a separate program (command line in,
+text out). It does not link, load or include any file of this folder.
+
+All files are distributed unmodified, as built by their original publishers.
 
 Origin
 ------
-Windows build of Tesseract 5.4.0 by UB Mannheim (built with MSYS2 / MINGW64):
-  https://github.com/UB-Mannheim/tesseract
-  release v5.4.0.20240606, tesseract-ocr-w64-setup-5.4.0.20240606.exe
-Language models deu.traineddata and eng.traineddata from tessdata_fast,
-tag 4.1.0:
-  https://github.com/tesseract-ocr/tessdata_fast
+Windows build of Tesseract 5.4.0 by UB Mannheim, release v5.4.0.20240606
+(https://github.com/UB-Mannheim/tesseract), cross-compiled with MinGW-w64
+against MSYS2 packages. The libraries are the MSYS2 (MINGW64) packages
+listed below. Language models deu and eng from tessdata_fast, tag 4.1.0
+(https://github.com/tesseract-ocr/tessdata_fast). Only tesseract.exe, the
+DLLs it loads, tessdata\configs and the two language models are included.
 
-Only tesseract.exe, the DLLs it loads, tessdata\configs and the two language
-models are included (see scripts/fetch-tesseract.ps1 in the Docura PDF
-sources). Training tools and their libraries are left out.
+License of the program as a whole
+---------------------------------
+tesseract.exe and libtesseract-5.dll (Apache-2.0) load libjbig-0.dll
+(JBIG-KIT, GPL-2.0-or-later) through LibTIFF. The combined program is
+therefore distributed under the GNU General Public License version 3 or
+later (licenses\GPL-3.0.txt); Apache-2.0 code may be combined into a
+GPL-3.0 work. Each component keeps its own license as well, as listed below.
 
 Components and licenses
 -----------------------
-File(s)                       Component                License (SPDX)
+File(s)                    Component (MSYS2 package release)       License (SPDX) / text in licenses\
 tesseract.exe,
-libtesseract-5.dll            Tesseract OCR 5.4.0      Apache-2.0 (LICENSE, AUTHORS)
+libtesseract-5.dll         Tesseract OCR 5.4.0 (UB Mannheim        Apache-2.0
+                           v5.4.0.20240606)                        Apache-2.0.txt, ..\LICENSE.txt, ..\AUTHORS.txt
 tessdata\*.traineddata,
-tessdata\configs\*            Tesseract data           Apache-2.0
-libleptonica-6.dll            Leptonica                BSD-2-Clause
-libarchive-13.dll             libarchive               BSD-2-Clause
-libb2-1.dll                   BLAKE2 (libb2)           CC0-1.0
-libbz2-1.dll                  bzip2                    bzip2-1.0.6
-libcrypto-3-x64.dll           OpenSSL 3.3.1            Apache-2.0
-libdeflate.dll                libdeflate               MIT
-libexpat-1.dll                Expat                    MIT
-libgif-7.dll                  GIFLIB                   MIT
-libiconv-2.dll                GNU libiconv 1.17        LGPL-2.1-or-later
-libjbig-0.dll                 JBIG-KIT                 GPL-2.0-or-later
-libjpeg-8.dll                 libjpeg-turbo            IJG AND BSD-3-Clause AND Zlib
-libLerc.dll                   LERC                     Apache-2.0
-liblz4.dll                    LZ4 1.9.4                BSD-2-Clause
-liblzma-5.dll                 XZ Utils 5.6.2           0BSD
-libopenjp2-7.dll              OpenJPEG                 BSD-2-Clause
-libpng16-16.dll               libpng                   Libpng-2.0
+tessdata\configs\*         tessdata_fast 4.1.0, Tesseract configs  Apache-2.0      Apache-2.0.txt
+libjbig-0.dll              JBIG-KIT 2.1 (jbigkit 2.1-5)            GPL-2.0-or-later  GPL-2.0.txt, GPL-3.0.txt
+libiconv-2.dll             GNU libiconv 1.17 (libiconv 1.17-4)     LGPL-2.1-or-later LGPL-2.1.txt
+libleptonica-6.dll         Leptonica 1.84.1 (leptonica 1.84.1-1)   BSD-2-Clause    leptonica-license.txt
+libtiff-6.dll              LibTIFF 4.6.0 (libtiff 4.6.0-1)         libtiff         libtiff-LICENSE.md.txt
+libarchive-13.dll          libarchive 3.7.4 (libarchive 3.7.4-1)   BSD-2-Clause    libarchive-COPYING.txt
+libb2-1.dll                libb2 0.98.1 (libb2 0.98.1-2)           CC0-1.0         libb2-COPYING.txt
+libbz2-1.dll               bzip2 1.0.8 (bzip2 1.0.8-3)             bzip2-1.0.6     bzip2-LICENSE.txt
+libcrypto-3-x64.dll        OpenSSL 3.3.1 (openssl 3.3.1-1)         Apache-2.0      openssl-LICENSE.txt
+libdeflate.dll             libdeflate 1.20 (libdeflate 1.20-1)     MIT             libdeflate-COPYING.txt
+libexpat-1.dll             Expat 2.6.2 (expat 2.6.2-1)             MIT             expat-COPYING.txt
+libgif-7.dll               GIFLIB 5.2.2 (giflib 5.2.2-1)           MIT             giflib-COPYING.txt
+libjpeg-8.dll              libjpeg-turbo 3.0.3                     IJG AND BSD-3-Clause AND Zlib
+                           (libjpeg-turbo 3.0.3-1)                 libjpeg-turbo-LICENSE.md.txt, libjpeg-turbo-README.ijg.txt
+libLerc.dll                LERC 4.0.0 (lerc 4.0.0-1)               Apache-2.0      lerc-LICENSE.txt, lerc-NOTICE.txt
+liblz4.dll                 LZ4 1.9.4 (lz4 1.9.4-1)                 BSD-2-Clause    lz4-lib-LICENSE.txt
+liblzma-5.dll              XZ Utils 5.6.2 (xz 5.6.2-2)             0BSD            xz-COPYING.txt, xz-COPYING.0BSD.txt
+libopenjp2-7.dll           OpenJPEG 2.5.2 (openjpeg2 2.5.2-1)      BSD-2-Clause    openjpeg-LICENSE.txt
+libpng16-16.dll            libpng 1.6.43 (libpng 1.6.43-1)         Libpng-2.0      libpng-LICENSE.txt
 libsharpyuv-0.dll,
 libwebp-7.dll,
-libwebpmux-3.dll              libwebp                  BSD-3-Clause
-libtiff-6.dll                 LibTIFF                  libtiff
-libzstd.dll                   Zstandard                BSD-3-Clause
-zlib1.dll                     zlib                     Zlib
+libwebpmux-3.dll           libwebp 1.4.0 (libwebp 1.4.0-1)         BSD-3-Clause    libwebp-COPYING.txt, libwebp-PATENTS.txt
+libzstd.dll                Zstandard 1.5.6 (zstd 1.5.6-2)          BSD-3-Clause    zstd-LICENSE.txt
+zlib1.dll                  zlib 1.3.1 (zlib 1.3.1-1)               Zlib            zlib-LICENSE.txt
 libgcc_s_seh-1.dll,
-libstdc++-6.dll               GCC runtime libraries    GPL-3.0-or-later WITH GCC-exception-3.1
-libwinpthread-1.dll           mingw-w64 winpthreads    MIT AND BSD-3-Clause
+libstdc++-6.dll            GCC 14.1.0 runtime (gcc-libs 14.1.0-3)  GPL-3.0-or-later WITH GCC-exception-3.1
+                                                                   GPL-3.0.txt, GCC-exception-3.1.txt
+libwinpthread-1.dll        mingw-w64 winpthreads                   MIT AND BSD-3-Clause
+                           (libwinpthread-git 12.0.0.r32.gf977e1c38-1)  winpthreads-COPYING.txt
 
-Source code
------------
-Tesseract:        https://github.com/tesseract-ocr/tesseract (tag 5.4.0)
-Windows build:    https://github.com/UB-Mannheim/tesseract
-All libraries:    MSYS2 MINGW64 packages, https://packages.msys2.org/ ;
-                  build recipes and source references in
-                  https://github.com/msys2/MINGW-packages
-                  (mingw-w64-jbigkit, mingw-w64-libiconv, mingw-w64-gcc, ...)
+Source code (written offer)
+---------------------------
+The complete corresponding source code for this folder is published with
+every Docura PDF release that ships it, as the release asset
 
-libjbig-0.dll (GPL-2.0-or-later) and libiconv-2.dll (LGPL-2.1-or-later) are
-used only by Tesseract (through LibTIFF and libarchive). Their complete
-corresponding source code is available from the MSYS2 source packages named
-above and from the upstream projects:
-  JBIG-KIT:     https://www.cl.cam.ac.uk/~mgk25/jbigkit/
-  GNU libiconv: https://www.gnu.org/software/libiconv/
-License texts: https://www.gnu.org/licenses/ (GPL, LGPL),
-https://www.apache.org/licenses/LICENSE-2.0 and https://spdx.org/licenses/
-for the identifiers above.
+  docura-pdf-tesseract-sources-5.4.0.20240606.zip
+
+on the release page of that Docura PDF version:
+
+  https://github.com/InfinityRed-Code/rustpdf/releases
+
+It contains the Tesseract source at the UB Mannheim tag (with UB Mannheim's
+build scripts) and, for every library above except the GCC runtime and
+winpthreads, the MSYS2 build recipe (PKGBUILD and patches) together with
+the upstream source it builds, including JBIG-KIT, GNU libiconv, LibTIFF and
+Leptonica. Its README.txt says where the GCC runtime and winpthreads source
+is, and SHA256SUMS.txt lists a checksum for every file. The archive stays
+available there for at least three years after the last Docura PDF release
+that ships this Tesseract bundle, at no charge.
+
+Upstream projects:
+  Tesseract     https://github.com/tesseract-ocr/tesseract
+  JBIG-KIT      https://www.cl.cam.ac.uk/~mgk25/jbigkit/
+  GNU libiconv  https://www.gnu.org/software/libiconv/
+  LibTIFF       https://libtiff.gitlab.io/libtiff/
+  Leptonica     http://www.leptonica.org/
+  MSYS2 recipes https://github.com/msys2/MINGW-packages

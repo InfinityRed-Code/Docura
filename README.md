@@ -182,6 +182,32 @@ printer via `nsis/printer-setup.ps1` (log:
 swallowed). An older per-user installation is removed first, app data is
 kept. Hooks: `apps/desktop-tauri/src-tauri/nsis/hooks.nsi`.
 
+### Publishing a release
+
+Every GitHub release whose installer ships the Tesseract bundle must also
+carry its source archive: the installed `tesseract\THIRD-PARTY-NOTICES.txt`
+promises it there (GPL/LGPL source offer for JBIG-KIT and GNU libiconv,
+plus Tesseract, Leptonica, LibTIFF and the other libraries). It is not part
+of the installer.
+
+```
+just release          # = just build + just tesseract-sources
+gh release create v<version> -R InfinityRed-Code/rustpdf \
+  "target/release/bundle/nsis/Docura PDF_<version>_x64-setup.exe" \
+  dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip
+```
+
+For an existing release: `gh release upload v<version>
+dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip`. The archive only
+changes with the Tesseract bundle, so the same file is attached again for
+each release. `scripts/fetch-tesseract-sources.ps1` builds it
+(~75 MB, every input pinned by SHA-256; `README.txt` and `SHA256SUMS.txt`
+inside). When bumping Tesseract, update `fetch-tesseract.ps1`,
+`fetch-tesseract-sources.ps1`, `tesseract-THIRD-PARTY-NOTICES.txt` and
+`tesseract-licenses/` together; `fetch-tesseract.ps1` refuses to stage if
+the versions disagree. The offer requires the archive to stay downloadable
+for at least three years after the last release that ships the bundle.
+
 ## Versioning
 
 See [`CHANGELOG.md`](CHANGELOG.md). The workspace version, the Tauri bundle
@@ -215,10 +241,14 @@ pdfium-render, image, lru and the other workspace crates are MIT / Apache-2.0.
 These permissive upstream licenses impose no restriction on the project's own
 noncommercial/commercial dual-licensing.
 
-The Windows installer also ships Tesseract OCR (Apache-2.0) as a separate
-program the app runs, unmodified, with the DLLs it loads. Most of them are
-permissively licensed; `libjbig-0.dll` (GPL-2.0-or-later) and
-`libiconv-2.dll` (LGPL-2.1-or-later) are copyleft and used only by Tesseract.
-The installed `tesseract\THIRD-PARTY-NOTICES.txt`
-(from `scripts/tesseract-THIRD-PARTY-NOTICES.txt`) lists every file, its
-license and where the source is.
+The Windows installer also ships Tesseract OCR in `<install dir>\tesseract`
+as a separate program the app only starts; it is not covered by the
+PolyForm / commercial license above. The folder holds the unmodified
+UB-Mannheim build with the DLLs it loads, mostly permissively licensed;
+`libjbig-0.dll` is GPL-2.0-or-later and `libiconv-2.dll` LGPL-2.1-or-later,
+so Tesseract as a whole is distributed under GPL-3.0-or-later. Full license
+texts ship in `tesseract\licenses\` (from `scripts/tesseract-licenses/`),
+`tesseract\THIRD-PARTY-NOTICES.txt` (from
+`scripts/tesseract-THIRD-PARTY-NOTICES.txt`) maps every file to its license
+and points to the source archive on the GitHub release (see "Publishing a
+release").

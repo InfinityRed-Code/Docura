@@ -12,6 +12,13 @@
       tools, ICU, cairo, pango etc. are not needed at runtime.
     - tessdata_fast language models deu + eng (the same model family the app
       downloads for further languages).
+  Plus, from this repo: THIRD-PARTY-NOTICES.txt and licenses\ (full GPL,
+  LGPL, Apache and per-library license texts), see
+  tesseract-THIRD-PARTY-NOTICES.txt and tesseract-licenses\.
+
+  The matching corresponding-source archive is built separately by
+  fetch-tesseract-sources.ps1 and attached to the GitHub release; bump both
+  scripts and the notices together.
 
   Requires 7-Zip (7z.exe on PATH or in Program Files).
 
@@ -52,8 +59,30 @@ $Dest   = Join-Path $Root 'vendor\tesseract'
 $Stamp  = Join-Path $Dest 'VERSION.txt'
 $StampText = "Tesseract $Version (UB Mannheim build), tessdata_fast $TessdataTag ($($Models.Keys -join ', '))"
 
+# Notices and full license texts (GPL/LGPL included) live in the repo next
+# to this script; refreshed on every run, also when the binaries are current.
+function Copy-Notices {
+    # The notice's source offer must name the archive that
+    # fetch-tesseract-sources.ps1 builds for exactly this bundle.
+    $notices = Join-Path $PSScriptRoot 'tesseract-THIRD-PARTY-NOTICES.txt'
+    if ((Get-Content $notices -Raw) -notmatch [regex]::Escape("docura-pdf-tesseract-sources-$Version.zip")) {
+        throw "tesseract-THIRD-PARTY-NOTICES.txt does not name docura-pdf-tesseract-sources-$Version.zip"
+    }
+    if ((Get-Content (Join-Path $PSScriptRoot 'fetch-tesseract-sources.ps1') -Raw) -notmatch [regex]::Escape("`$Bundle = '$Version'")) {
+        throw "fetch-tesseract-sources.ps1 is not pinned to Tesseract $Version"
+    }
+    Copy-Item -Force $notices (Join-Path $Dest 'THIRD-PARTY-NOTICES.txt')
+    $licenses = Join-Path $Dest 'licenses'
+    if (Test-Path $licenses) { Remove-Item -Recurse -Force $licenses }
+    Copy-Item -Recurse (Join-Path $PSScriptRoot 'tesseract-licenses') $licenses
+    foreach ($required in 'GPL-2.0.txt', 'GPL-3.0.txt', 'LGPL-2.1.txt', 'Apache-2.0.txt', 'GCC-exception-3.1.txt') {
+        if (-not (Test-Path (Join-Path $licenses $required))) { throw "license text missing: $required" }
+    }
+}
+
 if (-not $Force -and (Test-Path $Stamp) -and ((Get-Content $Stamp -Raw).Trim() -eq $StampText)) {
-    Write-Host "up to date: $Dest ($StampText)"
+    Copy-Notices
+    Write-Host "up to date: $Dest ($StampText), notices refreshed"
     exit 0
 }
 
@@ -91,7 +120,7 @@ try {
     foreach ($f in $Runtime) { Copy-Item (Join-Path $unpacked $f) $Dest }
     Copy-Item (Join-Path $unpacked 'doc\LICENSE') (Join-Path $Dest 'LICENSE.txt')
     Copy-Item (Join-Path $unpacked 'doc\AUTHORS') (Join-Path $Dest 'AUTHORS.txt')
-    Copy-Item (Join-Path $PSScriptRoot 'tesseract-THIRD-PARTY-NOTICES.txt') (Join-Path $Dest 'THIRD-PARTY-NOTICES.txt')
+    Copy-Notices
     Copy-Item -Recurse (Join-Path $unpacked 'tessdata\configs') (Join-Path $Dest 'tessdata\configs')
     Copy-Item (Join-Path $unpacked 'tessdata\pdf.ttf') (Join-Path $Dest 'tessdata')
 

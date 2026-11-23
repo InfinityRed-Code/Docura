@@ -73,7 +73,14 @@ for OCR (#6), per-machine install.
   included. The app uses it first and points it at its own `tessdata`, so no
   PATH or environment setup is needed. `scripts/fetch-tesseract.ps1`
   (`just tesseract`) stages it, pinned by SHA-256; the installer build stops
-  if it is missing.
+  if it is missing. The bundle carries full license texts in
+  `tesseract\licenses\` (GPL-2.0, GPL-3.0, LGPL-2.1, Apache-2.0, GCC runtime
+  exception and every library's own license) and a notice that it is under
+  its own licenses, not Docura's. Its complete corresponding source
+  (Tesseract at the UB Mannheim tag plus MSYS2 recipe and upstream source of
+  every bundled library, JBIG-KIT and GNU libiconv included) is built by
+  `scripts/fetch-tesseract-sources.ps1` (`just tesseract-sources`) and
+  attached to each GitHub release, not put into the installer.
 
 ## [1.3.0] — 2026-11-19
 
