@@ -163,6 +163,40 @@ fn lists_lines_and_replaces_them() {
         assert!(engine.extract_text(id, p).unwrap().contains("Привет 5 €"));
     }
 
+    // A bundled font is embedded and recognised again when the line is
+    // reopened, so a second edit keeps the family.
+    let blocks = engine.page_text_blocks(id, p).unwrap();
+    let new = blocks.iter().find(|b| b.text == "Grüße ändern").expect("new line");
+    let edit = TextReplace {
+        objects: new.objects.clone(),
+        text: "Roboto – Grüße €".into(),
+        font_size: 20.0,
+        font_family: "Roboto".into(),
+        bold: true,
+        italic: true,
+        color: [0.0, 0.0, 0.0],
+        cover: None,
+        font_file: None,
+    };
+    let bytes = engine.replace_page_text(id, p, &edit).unwrap();
+    engine.reload_bytes(id, bytes).unwrap();
+    assert!(engine.extract_text(id, p).unwrap().contains("Roboto – Grüße €"));
+    let blocks = engine.page_text_blocks(id, p).unwrap();
+    let roboto = blocks.iter().find(|b| b.text == "Roboto – Grüße €").expect("roboto line");
+    assert_eq!(roboto.font_family, "Roboto");
+    assert!(roboto.bold && roboto.italic && roboto.font_file.is_none());
+    let size_once = engine.document_bytes(id).unwrap().len();
+    let edit = TextReplace { objects: roboto.objects.clone(), text: "Noch einmal".into(), ..edit };
+    let bytes = engine.replace_page_text(id, p, &edit).unwrap();
+    assert!(
+        bytes.len() < size_once + 20_000,
+        "the font embedded by the first edit is reused ({} -> {})",
+        size_once,
+        bytes.len()
+    );
+    engine.reload_bytes(id, bytes).unwrap();
+    assert!(engine.extract_text(id, p).unwrap().contains("Noch einmal"));
+
     // Empty text just removes the line; stale indices are rejected.
     let blocks = engine.page_text_blocks(id, p).unwrap();
     let second = blocks.iter().find(|b| b.text == "Second line stays").unwrap();

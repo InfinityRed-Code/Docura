@@ -51,6 +51,8 @@ function setAnnotTool(k: MarkupKind | null) {
   if (k !== null) {
     state.shapeTool = null; clearSignToolUi(); clearEraseMode();
     if (state.wheelZoomMode) setWheelZoomMode(false);
+    cancelPoly();
+    syncShapeMenu(null);
   }
   document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.annot === k);
@@ -63,7 +65,27 @@ function setAnnotTool(k: MarkupKind | null) {
   syncTextEditMode();
 }
 
+/** The "Shapes" menu button shows (and highlights) the armed shape. */
+function syncShapeMenu(k: ShapeKindUi | null) {
+  const menuBtn = document.getElementById("shapeMenuBtn");
+  if (!menuBtn) return;
+  const item = k ? document.querySelector<HTMLElement>(`#shapeToolGroup [data-shape="${k}"]`) : null;
+  menuBtn.classList.toggle("active", !!item);
+  const icon = item?.dataset.icon ?? "shapes";
+  const cur = menuBtn.querySelector("svg, i");
+  // Lucide keeps the icon name on the generated <svg> as a class.
+  const curName = cur?.getAttribute("data-lucide")
+    ?? Array.from(cur?.classList ?? []).find((c) => c.startsWith("lucide-"))?.slice(7);
+  if (cur && curName !== icon) {
+    const i = document.createElement("i");
+    i.setAttribute("data-lucide", icon);
+    cur.replaceWith(i);
+    refreshIcons();
+  }
+}
+
 export function setShapeTool(k: ShapeKindUi | null) {
+  if (poly && poly.kind !== k) cancelPoly();
   state.shapeTool = k;
   if (k !== null) {
     state.annotTool = null; clearSignToolUi(); clearEraseMode();
@@ -72,6 +94,8 @@ export function setShapeTool(k: ShapeKindUi | null) {
   document.querySelectorAll<HTMLButtonElement>(".shapeTool").forEach((b) => {
     b.classList.toggle("active", b.dataset.shape === k);
   });
+  syncShapeMenu(k);
+  if (k === "polygon" || k === "polyline") setStatus(t("hint.polyDraw"));
   document.querySelectorAll<HTMLButtonElement>(".annotTool").forEach((b) => {
     b.classList.toggle("active", false);
   });
@@ -93,6 +117,8 @@ function setEraseMode(on: boolean) {
     if (state.wheelZoomMode) setWheelZoomMode(false);
     state.annotTool = null;
     state.shapeTool = null;
+    cancelPoly();
+    syncShapeMenu(null);
     clearSignToolUi();
     document.querySelectorAll<HTMLButtonElement>(".annotTool,.shapeTool").forEach((b) => {
       b.classList.remove("active");
@@ -283,39 +309,139 @@ function ensureDrawLayerViewBox(slot: Slot) {
   slot.drawLayer.setAttribute("height", `${bb.height}`);
 }
 
+type Pt = { x: number; y: number };
+
+/** Shapes drawn by dragging a box, stored as a polygon / polyline through
+ * these corner points. */
+const BOX_VERTEX_SHAPES = new Set<ShapeKindUi>(["triangle", "diamond", "hexagon", "star", "callout", "check", "cloud"]);
+/** Shapes with an interior (take the fill color). */
+const CLOSED_SHAPES = new Set<ShapeKindUi>(["rect", "circle", "triangle", "diamond", "hexagon", "star", "callout", "cloud", "polygon"]);
+
+/** Fill color of closed shapes (#rrggbb), or null for none. */
+function shapeFill(): string | null {
+  const v = (document.getElementById("shapeFill") as HTMLInputElement | null)?.value ?? "";
+  return /^#[0-9a-f]{6}$/i.test(v) ? v : null;
+}
+
+/** Corner points of a box-drawn shape spanning the drag from `s` to `c`
+ * (slot pixels). */
+function shapeVertices(kind: ShapeKindUi, s: Pt, c: Pt): Pt[] {
+  const x0 = Math.min(s.x, c.x), y0 = Math.min(s.y, c.y);
+  const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
+  const at = (fx: number, fy: number): Pt => ({ x: x0 + fx * w, y: y0 + fy * h });
+  switch (kind) {
+    case "triangle": return [at(0.5, 0), at(1, 1), at(0, 1)];
+    case "diamond": return [at(0.5, 0), at(1, 0.5), at(0.5, 1), at(0, 0.5)];
+    case "hexagon": return [at(0.25, 0), at(0.75, 0), at(1, 0.5), at(0.75, 1), at(0.25, 1), at(0, 0.5)];
+    case "star": {
+      // Five-pointed star, stretched to fill the box.
+      const raw: Pt[] = [];
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 ? 0.382 : 1;
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        raw.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+      }
+      const minX = Math.min(...raw.map((p) => p.x)), maxX = Math.max(...raw.map((p) => p.x));
+      const minY = Math.min(...raw.map((p) => p.y)), maxY = Math.max(...raw.map((p) => p.y));
+      return raw.map((p) => at((p.x - minX) / (maxX - minX), (p.y - minY) / (maxY - minY)));
+    }
+    case "callout":
+      return [at(0, 0), at(1, 0), at(1, 0.72), at(0.42, 0.72), at(0.16, 1), at(0.24, 0.72), at(0, 0.72)];
+    case "check": return [at(0, 0.55), at(0.36, 1), at(1, 0)];
+    case "cloud": return [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
+    default: return [];
+  }
+}
+
+/** Slot pixels per PDF point on a page at the current zoom. */
+function pxPerPt(slot: Slot, pageIdx: number): number {
+  const sz = state.pageSizes[pageIdx];
+  if (!sz) return 1;
+  const rot = effectiveRotation(pageIdx);
+  const w = slot.wrap.getBoundingClientRect().width;
+  const dw = rot === 1 || rot === 3 ? sz.height_pt : sz.width_pt;
+  return dw > 0 && w > 0 ? w / dw : 1;
+}
+
+/** SVG path of a cloud around `pts` (screen coordinates, y down): every
+ * edge split into half circles bulging outwards, as the backend draws it. */
+function cloudPathD(pts: Pt[], r: number): string {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    area += a.x * b.y - b.x * a.y;
+  }
+  // Positive area = clockwise on screen; sweeping clockwise from the
+  // segment start then bulges outward.
+  const sweep = area >= 0 ? 1 : 0;
+  let d = "";
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 0.5) continue;
+    const n = Math.max(1, Math.round(len / (2 * r)));
+    if (!d) d = `M${a.x},${a.y}`;
+    const rr = len / n / 2;
+    for (let k = 1; k <= n; k++) {
+      const x = a.x + ((b.x - a.x) * k) / n, y = a.y + ((b.y - a.y) * k) / n;
+      d += ` A${rr},${rr} 0 0 ${sweep} ${x},${y}`;
+    }
+  }
+  return d ? `${d} Z` : "";
+}
+
+function arrowHeadPoints(tip: Pt, from: Pt, size = 10): string {
+  const dx = tip.x - from.x, dy = tip.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const bx = tip.x - ux * size, by = tip.y - uy * size;
+  const px = -uy * size * 0.5, py = ux * size * 0.5;
+  return `${tip.x},${tip.y} ${bx + px},${by + py} ${bx - px},${by - py}`;
+}
+
 function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
   const ns = "http://www.w3.org/2000/svg";
-  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region" || kind === "redact") {
+  const fill = CLOSED_SHAPES.has(kind) ? shapeFill() : null;
+  const styled = <T extends SVGElement>(el: T): T => {
+    el.setAttribute("stroke", color);
+    el.setAttribute("stroke-width", "2");
+    el.setAttribute("stroke-linejoin", "round");
+    el.setAttribute("stroke-linecap", "round");
+    el.setAttribute("fill", fill ?? "none");
+    if (fill) el.setAttribute("fill-opacity", "0.6");
+    return el;
+  };
+  if (kind === "freetext" || kind === "stamp" || kind === "region" || kind === "redact") {
     const el = document.createElementNS(ns, "rect");
     el.setAttribute("fill", kind === "region" ? "rgba(74,140,255,0.12)" : kind === "redact" ? "rgba(0,0,0,0.55)" : "none");
     el.setAttribute("stroke", kind === "region" ? "#4a8cff" : kind === "redact" ? "#d23b3b" : color);
     el.setAttribute("stroke-width", "2");
-    if (kind !== "rect") el.setAttribute("stroke-dasharray", "5 4");
+    el.setAttribute("stroke-dasharray", "5 4");
     return el;
   }
-  if (kind === "circle") {
-    const el = document.createElementNS(ns, "ellipse");
-    el.setAttribute("fill", "none");
-    el.setAttribute("stroke", color);
-    el.setAttribute("stroke-width", "2");
-    return el;
-  }
+  if (kind === "rect") return styled(document.createElementNS(ns, "rect"));
+  if (kind === "circle") return styled(document.createElementNS(ns, "ellipse"));
+  if (kind === "cloud") return styled(document.createElementNS(ns, "path"));
+  if (kind === "check" || kind === "polyline") return styled(document.createElementNS(ns, "polyline"));
+  if (BOX_VERTEX_SHAPES.has(kind) || kind === "polygon") return styled(document.createElementNS(ns, "polygon"));
   if (kind === "line") {
     const el = document.createElementNS(ns, "line");
     el.setAttribute("stroke", color);
     el.setAttribute("stroke-width", "2");
     return el;
   }
-  if (kind === "arrow") {
+  if (kind === "arrow" || kind === "arrow2") {
     const g = document.createElementNS(ns, "g");
     const ln = document.createElementNS(ns, "line");
     ln.setAttribute("stroke", color);
     ln.setAttribute("stroke-width", "2");
     g.appendChild(ln);
-    const head = document.createElementNS(ns, "polygon");
-    head.setAttribute("fill", color);
-    head.setAttribute("stroke", color);
-    g.appendChild(head);
+    for (let i = 0; i < (kind === "arrow2" ? 2 : 1); i++) {
+      const head = document.createElementNS(ns, "polygon");
+      head.setAttribute("fill", color);
+      head.setAttribute("stroke", color);
+      g.appendChild(head);
+    }
     return g;
   }
   const el = document.createElementNS(ns, "polyline");
@@ -344,25 +470,23 @@ function updatePreview(kind: ShapeKindUi, el: SVGElement, s: { x: number; y: num
     const ln = el as SVGLineElement;
     ln.setAttribute("x1", `${s.x}`); ln.setAttribute("y1", `${s.y}`);
     ln.setAttribute("x2", `${c.x}`); ln.setAttribute("y2", `${c.y}`);
-  } else if (kind === "arrow") {
+  } else if (kind === "arrow" || kind === "arrow2") {
     const g = el as SVGGElement;
     const ln = g.firstElementChild as SVGLineElement;
     ln.setAttribute("x1", `${s.x}`); ln.setAttribute("y1", `${s.y}`);
     ln.setAttribute("x2", `${c.x}`); ln.setAttribute("y2", `${c.y}`);
-    const head = g.lastElementChild as SVGPolygonElement;
-    const dx = c.x - s.x, dy = c.y - s.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len, uy = dy / len;
-    const size = 10;
-    const tipX = c.x, tipY = c.y;
-    const baseX = c.x - ux * size, baseY = c.y - uy * size;
-    const px = -uy * size * 0.5, py = ux * size * 0.5;
-    head.setAttribute(
-      "points",
-      `${tipX},${tipY} ${baseX + px},${baseY + py} ${baseX - px},${baseY - py}`,
-    );
+    const heads = g.querySelectorAll("polygon");
+    heads[0]?.setAttribute("points", arrowHeadPoints(c, s));
+    heads[1]?.setAttribute("points", arrowHeadPoints(s, c));
+  } else if (kind === "cloud") {
+    const slot = state.drawState?.slot;
+    const ppp = slot && state.drawState ? pxPerPt(slot, state.drawState.pageIdx) : 1;
+    // Same bump size as the backend: a tenth of the shorter side, 3–12 pt.
+    const r = Math.max(3 * ppp, Math.min(12 * ppp, Math.min(Math.abs(c.x - s.x), Math.abs(c.y - s.y)) / 10));
+    el.setAttribute("d", cloudPathD(shapeVertices(kind, s, c), r));
+  } else if (BOX_VERTEX_SHAPES.has(kind)) {
+    el.setAttribute("points", shapeVertices(kind, s, c).map((p) => `${p.x},${p.y}`).join(" "));
   }
-  void s; void c;
 }
 
 function updateInkPreview(el: SVGElement, points: { x: number; y: number }[]) {
@@ -399,7 +523,8 @@ const TOOL_KIND: Record<string, string> = {
 
 /** Localized noun for an annotation tool ("Hervorhebung", "Rechteck", …). */
 function toolNoun(tool: string | null): string {
-  if (tool === "arrow") return t("tip.arrow");
+  if (tool && (tool === "arrow" || tool === "arrow2" || BOX_VERTEX_SHAPES.has(tool as ShapeKindUi)
+    || tool === "polygon" || tool === "polyline")) return t(`tip.${tool}`);
   const kind = tool ? TOOL_KIND[tool] : undefined;
   return kind ? t(`kind.${kind}`) : (tool ?? "");
 }
@@ -424,6 +549,117 @@ export function findSlotFromTarget(target: EventTarget | null): { slot: Slot; id
     node = node.parentElement;
   }
   return null;
+}
+
+// ---------- Shape annotations ----------
+
+type ShapeRequest = {
+  page: number;
+  kind: string;
+  rect?: RectPt;
+  vertices?: [number, number][];
+  fill?: [number, number, number] | null;
+  border_width?: number;
+};
+
+async function addShape(label: string, req: ShapeRequest) {
+  if (!state.currentDoc) return;
+  setStatus(t("st.adding", { label }));
+  try {
+    const snap = await invoke<DocSnapshot>("add_shape", {
+      document: state.currentDoc,
+      args: {
+        border_width: 1.5,
+        subject: label,
+        ...req,
+        stroke: hexToRgb01(dom.annotColorInput.value),
+        opacity: 1.0,
+        print: state.printAnnotations,
+      },
+    });
+    applyDocSnapshot(snap);
+    setStatus(t("st.added", { label }));
+  } catch (e) {
+    setStatus(t("st.addError", { label, e: String(e) }));
+  }
+}
+
+/** Slot pixels → page points for a list of corner points. */
+function toPageVertices(slot: Slot, pageIdx: number, pts: Pt[]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const p of pts) {
+    const q = imagePxToPagePt(slot, pageIdx, p.x, p.y);
+    if (q) out.push([q.x, q.y]);
+  }
+  return out;
+}
+
+// ---------- Free polygon / polyline (click by click) ----------
+
+type PolyDraw = {
+  kind: "polygon" | "polyline";
+  pageIdx: number;
+  slot: Slot;
+  pts: Pt[];
+  cursor: Pt;
+  preview: SVGElement;
+};
+
+let poly: PolyDraw | null = null;
+
+function renderPoly() {
+  if (!poly) return;
+  const pts = [...poly.pts, poly.cursor];
+  poly.preview.setAttribute("points", pts.map((p) => `${p.x},${p.y}`).join(" "));
+}
+
+function cancelPoly() {
+  poly?.preview.remove();
+  poly = null;
+}
+
+async function finishPoly() {
+  const p = poly;
+  if (!p) return;
+  cancelPoly();
+  const min = p.kind === "polygon" ? 3 : 2;
+  if (p.pts.length < min) return;
+  await addShape(toolNoun(p.kind), {
+    page: p.pageIdx,
+    kind: p.kind,
+    vertices: toPageVertices(p.slot, p.pageIdx, p.pts),
+    fill: p.kind === "polygon" && shapeFill() ? hexToRgb01(shapeFill()!) : null,
+  });
+}
+
+/** A press with the polygon / polyline tool: start, add a corner, or (on
+ * the first corner) close the polygon. */
+function polyPress(slot: Slot, pageIdx: number, at: Pt) {
+  const kind = state.shapeTool as "polygon" | "polyline";
+  if (!poly) {
+    ensureDrawLayerViewBox(slot);
+    // The rubber band is an open polyline either way; a polygon shows
+    // closed once it is committed.
+    const preview = makePreviewElement("polyline", dom.annotColorInput.value);
+    if (kind === "polygon") {
+      const fill = shapeFill();
+      if (fill) { preview.setAttribute("fill", fill); preview.setAttribute("fill-opacity", "0.35"); }
+    }
+    slot.drawLayer.appendChild(preview);
+    poly = { kind, pageIdx, slot, pts: [at], cursor: at, preview };
+    renderPoly();
+    return;
+  }
+  if (pageIdx !== poly.pageIdx) return;
+  const first = poly.pts[0], last = poly.pts[poly.pts.length - 1];
+  if (poly.kind === "polygon" && poly.pts.length >= 3 && Math.hypot(at.x - first.x, at.y - first.y) <= 8) {
+    void finishPoly();
+    return;
+  }
+  // The second press of a double click lands on the same spot.
+  if (Math.hypot(at.x - last.x, at.y - last.y) < 3) return;
+  poly.pts.push(at);
+  renderPoly();
 }
 
 function spawnTextNoteEditor(
@@ -494,6 +730,8 @@ const SUBTYPE_ICON: Record<string, string> = {
   Square: "square",
   Circle: "circle",
   Line: "slash",
+  Polygon: "pentagon",
+  PolyLine: "spline",
   Ink: "pen-line",
   FreeText: "type",
   Stamp: "stamp",
@@ -537,7 +775,7 @@ function renderComments() {
     for (const a of byPage.get(p)!) {
       const icon = `<i data-lucide="${Object.hasOwn(SUBTYPE_ICON, a.subtype) ? SUBTYPE_ICON[a.subtype] : "dot"}"></i>`;
       const kindKey = `kind.${a.subtype}`;
-      const kindLabel = t(kindKey) === kindKey ? a.subtype : t(kindKey);
+      const kindLabel = a.subject || (t(kindKey) === kindKey ? a.subtype : t(kindKey));
       const author = a.author ? `<span class="author">${escapeHtml(a.author)}</span>` : "";
       const date = a.modified ? `<span class="date">${escapeHtml(formatPdfDate(a.modified))}</span>` : "";
       const noprint = a.print ? "" : `<span class="nopaint">${escapeHtml(t("comments.noPrint"))}</span>`;
@@ -1117,6 +1355,10 @@ export function initAnnot() {
     const hit = findSlotFromTarget(ev.target);
     if (!hit) return;
     ev.preventDefault();
+    if (state.shapeTool === "polygon" || state.shapeTool === "polyline") {
+      polyPress(hit.slot, hit.idx, imagePxFromEvent(hit.slot, ev));
+      return;
+    }
     ensureDrawLayerViewBox(hit.slot);
     const start = imagePxFromEvent(hit.slot, ev);
     const preview = makePreviewElement(state.shapeTool, dom.annotColorInput.value);
@@ -1137,6 +1379,34 @@ export function initAnnot() {
     }
     hit.slot.drawLayer.setPointerCapture(ev.pointerId);
   });
+
+  // Free polygon / polyline: rubber band to the pointer, double click or
+  // Enter finishes, Backspace drops the last corner, Escape cancels.
+  document.addEventListener("pointermove", (ev) => {
+    if (!poly) return;
+    poly.cursor = imagePxFromEvent(poly.slot, ev);
+    renderPoly();
+  });
+  document.addEventListener("dblclick", (ev) => {
+    if (!poly) return;
+    ev.preventDefault();
+    void finishPoly();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (!poly) return;
+    const typing = (ev.target as Element | null)?.closest?.("input, textarea, select, [contenteditable]");
+    if (typing) return;
+    if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); void finishPoly(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cancelPoly(); }
+    else if (ev.key === "Backspace") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      poly.pts.pop();
+      if (poly.pts.length === 0) cancelPoly();
+      else renderPoly();
+    }
+  }, true);
+  document.addEventListener("rustpdf:doc-changed", cancelPoly);
 
   document.addEventListener("pointermove", (ev) => {
     if (!state.drawState || !state.shapeTool) return;
@@ -1282,9 +1552,25 @@ export function initAnnot() {
       return;
     }
 
-    // rect / circle / line / arrow
+    const fillHex = CLOSED_SHAPES.has(tool) ? shapeFill() : null;
+    const fill = fillHex ? hexToRgb01(fillHex) : null;
+
+    // Triangle, star, cloud, …: a polygon / polyline through corner points
+    // computed on screen, so they come out upright on rotated pages too.
+    if (BOX_VERTEX_SHAPES.has(tool)) {
+      await addShape(toolNoun(tool), {
+        page: ds.pageIdx,
+        kind: tool === "check" ? "polyline" : tool === "cloud" ? "cloud" : "polygon",
+        vertices: toPageVertices(ds.slot, ds.pageIdx, shapeVertices(tool, sx, cx)),
+        fill,
+        border_width: tool === "check" ? 2.5 : 1.5,
+      });
+      return;
+    }
+
+    // rect / circle / line / arrow / double arrow
     let rect: RectPt;
-    if (tool === "line" || tool === "arrow") {
+    if (tool === "line" || tool === "arrow" || tool === "arrow2") {
       rect = { x0: start.x, y0: start.y, x1: end.x, y1: end.y };
     } else {
       rect = {
@@ -1294,26 +1580,7 @@ export function initAnnot() {
         y1: Math.max(start.y, end.y),
       };
     }
-    const stroke = hexToRgb01(dom.annotColorInput.value);
-    setStatus(t("st.adding", { label: toolNoun(tool) }));
-    try {
-      const snap = await invoke<DocSnapshot>("add_shape", {
-        document: state.currentDoc,
-        args: {
-          page: ds.pageIdx,
-          kind: tool,
-          rect,
-          stroke,
-          border_width: 1.5,
-          opacity: 1.0,
-          print: state.printAnnotations,
-        },
-      });
-      applyDocSnapshot(snap);
-      setStatus(t("st.added", { label: toolNoun(tool) }));
-    } catch (e) {
-      setStatus(t("st.addError", { label: toolNoun(tool), e: String(e) }));
-    }
+    await addShape(toolNoun(tool), { page: ds.pageIdx, kind: tool, rect, fill });
   });
 
   // Comments panel buttons

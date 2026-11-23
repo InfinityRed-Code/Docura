@@ -36,7 +36,18 @@
         "mimeType": "application/pdf"
       }
     ],
-    "resources": ["resources/pdfium.dll"],
+    "resources": {
+      "resources/pdfium.dll": "resources/pdfium.dll",
+      "../../../crates/pdf_fonts/fonts/README.md": "licenses/fonts/README.md",
+      "../../../crates/pdf_fonts/fonts/roboto/OFL.txt": "licenses/fonts/Roboto-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/opensans/OFL.txt": "licenses/fonts/OpenSans-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/lato/OFL.txt": "licenses/fonts/Lato-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/montserrat/OFL.txt": "licenses/fonts/Montserrat-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/lora/OFL.txt": "licenses/fonts/Lora-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/sourceserif4/OFL.txt": "licenses/fonts/SourceSerif4-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/robotomono/OFL.txt": "licenses/fonts/RobotoMono-OFL.txt",
+      "../../../crates/pdf_fonts/fonts/caveat/OFL.txt": "licenses/fonts/Caveat-OFL.txt"
+    },
     "windows": {
       "nsis": {
         "installerHooks": "nsis/hooks.nsi"

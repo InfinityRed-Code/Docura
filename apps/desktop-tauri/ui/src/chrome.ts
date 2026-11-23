@@ -19,6 +19,7 @@ import {
 } from "./doc";
 import { deleteSelectedPages, triggerPrint } from "./edit";
 import { disarmAllTools } from "./annot";
+import { isColorPopoverOpenIn } from "./colorpicker";
 
 // ---------- Window controls (custom title bar) ----------
 //
@@ -99,6 +100,7 @@ function ribbonBusy(): boolean {
   const ribbon = ribbonEl();
   if (ribbon.querySelector(".tabStrip:hover, .ribbonBody:hover")) return true;
   if (dom.ribbonBody.querySelector(".popover:not(.hidden), .menu:not(.hidden)")) return true;
+  if (isColorPopoverOpenIn(dom.ribbonBody)) return true;
   const ae = document.activeElement as HTMLElement | null;
   if (!ae || !(dom.ribbonBody.contains(ae) || ae.closest(".tabStrip"))) return false;
   // Keyboard navigation through the ribbon, or typing into one of its fields.
@@ -190,6 +192,8 @@ function initRibbonAutoHide() {
     scheduleRibbonHide();
   };
   body.addEventListener("change", endNativePopup);
+  // The color popover lives outside the ribbon; hide once it closes.
+  document.addEventListener("rustpdf:colorpop-closed", () => scheduleRibbonHide());
   body.addEventListener("focusout", endNativePopup);
   // Closed without a choice: the page gets pointer moves again.
   document.addEventListener("pointermove", () => {

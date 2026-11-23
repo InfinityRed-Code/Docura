@@ -103,6 +103,17 @@ import {
   MoveHorizontal,
   RectangleVertical,
   SaveAll,
+  Baseline,
+  Cloud,
+  Diamond,
+  Hexagon,
+  MessageSquare,
+  MoveDiagonal2,
+  MoveUpRight,
+  Pentagon,
+  Spline,
+  Star,
+  Triangle,
 } from "lucide";
 
 const icons = {
@@ -205,6 +216,17 @@ const icons = {
   MoveHorizontal,
   RectangleVertical,
   SaveAll,
+  Baseline,
+  Cloud,
+  Diamond,
+  Hexagon,
+  MessageSquare,
+  MoveDiagonal2,
+  MoveUpRight,
+  Pentagon,
+  Spline,
+  Star,
+  Triangle,
 };
 
 /** Replace all `data-lucide` placeholders in the document with SVGs.

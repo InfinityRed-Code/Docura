@@ -243,6 +243,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
             let contents = read_string_field(doc, dict, b"Contents");
             let author = read_string_field(doc, dict, b"T");
             let modified = read_string_field(doc, dict, b"M");
+            let subject = read_string_field(doc, dict, b"Subj");
             let icon = dict
                 .get(b"Name")
                 .ok()
@@ -265,6 +266,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
                 author,
                 modified,
                 icon,
+                subject,
             });
         }
     }

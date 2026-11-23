@@ -11,6 +11,36 @@ scope each tag landed.
 
 ## [Unreleased]
 
+Edit cleanup (#8): more shapes, inline text format, one color picker, more fonts.
+
+### Added
+- **More shapes** in Comment → Shapes, grouped as lines / shapes / symbols:
+  double arrow, polyline, triangle, diamond, hexagon, star, free polygon,
+  cloud, speech bubble and check mark, besides rectangle, ellipse, line and
+  arrow. They are saved as real PDF annotations (/Polygon, /PolyLine, /Line;
+  the cloud is a /Polygon with the cloudy border effect Acrobat uses) with
+  their own appearance streams, and named in the comment list via /Subj.
+  Polygon and polyline are placed click by click (double click or Enter
+  finishes, Backspace removes the last point, Esc cancels).
+- **Fill color** for closed shapes (none by default).
+- **Color picker** for every color button (markup / shape color, fill, sign
+  marks, text and background color): 16 preset colors, recently used custom
+  colors and a custom picker (saturation / brightness field, hue slider, hex
+  and R/G/B fields). Background and fill offer "none".
+- **Bundled open fonts** for text boxes and page text: Roboto, Open Sans,
+  Lato, Montserrat, Lora, Source Serif 4, Roboto Mono and Caveat (SIL Open
+  Font License 1.1, license files shipped under `licenses/fonts/`). A text box
+  embeds the font once per document (Type0 / Identity-H with /ToUnicode, so
+  copy and search work); edited page text embeds it via PDFium and is
+  recognized again on the next edit. Adds about 4 MB to the executable
+  (about 1.3 MB to the compressed installer).
+
+### Changed
+- The text format controls (font, size, bold, italic, text and background
+  color) sit directly next to "Text" in the Edit tab instead of only in the
+  floating bar; both stay in sync and the ribbon sets the style of the next
+  text box when none is open. The last text style is remembered.
+
 ## [1.3.0] — 2026-11-19
 
 Text editing reworked (#7); zooming large plans is fast.

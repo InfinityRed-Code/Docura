@@ -420,6 +420,8 @@ fn write_one(doc: &mut Document, ann: &ParsedAnnot) -> MutateResult<()> {
             let s = ShapeAnnotation {
                 kind: ShapeKind::Square,
                 rect,
+                vertices: Vec::new(),
+                subject: None,
                 stroke_color: color,
                 fill_color: None,
                 border_width: 1.5,
@@ -434,6 +436,8 @@ fn write_one(doc: &mut Document, ann: &ParsedAnnot) -> MutateResult<()> {
             let s = ShapeAnnotation {
                 kind: ShapeKind::Circle,
                 rect,
+                vertices: Vec::new(),
+                subject: None,
                 stroke_color: color,
                 fill_color: None,
                 border_width: 1.5,
@@ -451,6 +455,8 @@ fn write_one(doc: &mut Document, ann: &ParsedAnnot) -> MutateResult<()> {
                     arrow_end: annotations::LineEnding::None,
                 },
                 rect,
+                vertices: Vec::new(),
+                subject: None,
                 stroke_color: color,
                 fill_color: None,
                 border_width: 1.5,

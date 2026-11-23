@@ -20,6 +20,7 @@ mod inspect;
 mod ocr;
 mod overlay;
 mod read;
+mod truetype;
 mod redact;
 mod xfdf;
 

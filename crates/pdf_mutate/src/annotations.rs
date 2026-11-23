@@ -569,13 +569,25 @@ pub enum ShapeKind {
         arrow_start: LineEnding,
         arrow_end: LineEnding,
     },
+    /// Closed outline through `ShapeAnnotation::vertices` (PDF /Polygon):
+    /// triangles, stars, speech bubbles, free polygons. `cloudy` draws the
+    /// border as a row of arcs — Acrobat's cloud (/BE /S /C, /IT
+    /// /PolygonCloud).
+    Polygon { cloudy: bool },
+    /// Open path through `ShapeAnnotation::vertices` (PDF /PolyLine).
+    PolyLine,
 }
 
 #[derive(Clone, Debug)]
 pub struct ShapeAnnotation {
     pub kind: ShapeKind,
     /// Top-origin RectPt. For Square/Circle: bounding rect. For Line: x0/y0 = start, x1/y1 = end.
+    /// Unused for Polygon / PolyLine.
     pub rect: RectPt,
+    /// Polygon / PolyLine corner points, top-origin page points.
+    pub vertices: Vec<(f32, f32)>,
+    /// /Subj — the shape's name as shown in comment lists ("Stern").
+    pub subject: Option<String>,
     pub stroke_color: [f32; 3],
     pub fill_color: Option<[f32; 3]>,
     pub border_width: f32,
@@ -593,6 +605,10 @@ pub fn add_shape_annotation(
     let page_id = page_id_for(doc, page_index)?;
     let view = page_view(doc, page_id);
     let bw = annot.border_width.max(0.0);
+
+    if let ShapeKind::Polygon { .. } | ShapeKind::PolyLine = annot.kind {
+        return add_path_shape(doc, page_id, view, annot);
+    }
 
     let (subtype, rect_native, line_endpoints) = match annot.kind {
         ShapeKind::Square => {
@@ -615,6 +631,7 @@ pub fn add_shape_annotation(
             let ury = p0y.max(p1y) + pad;
             ("Line", (llx, lly, urx, ury), Some((p0x, p0y, p1x, p1y)))
         }
+        ShapeKind::Polygon { .. } | ShapeKind::PolyLine => unreachable!("handled above"),
     };
 
     let mut d = base_annot_dict(
@@ -687,9 +704,185 @@ pub fn add_shape_annotation(
         // renders both natively, so for now we leave them without /AP.
     }
 
+    if let Some(s) = &annot.subject {
+        d.set("Subj", pdf_string_utf16be(s));
+    }
     let annot_id = doc.add_object(Object::Dictionary(d));
     append_annot_to_page(doc, page_id, annot_id)?;
     Ok(annot_id)
+}
+
+fn color_array(c: [f32; 3]) -> Object {
+    Object::Array(c.iter().map(|v| Object::Real(v.clamp(0.0, 1.0))).collect())
+}
+
+/// Bump radius of a cloud border: proportional to the shape, within the
+/// range Acrobat's intensity 1 produces.
+fn cloud_radius(pts: &[(f32, f32)]) -> f32 {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for &(x, y) in pts {
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    ((x1 - x0).min(y1 - y0) / 10.0).clamp(3.0, 12.0)
+}
+
+/// /Polygon or /PolyLine through `annot.vertices`, with an explicit
+/// appearance stream (PDFium does not generate one for these subtypes).
+fn add_path_shape(
+    doc: &mut Document,
+    page_id: ObjectId,
+    view: ([f32; 4], i32),
+    annot: &ShapeAnnotation,
+) -> MutateResult<ObjectId> {
+    let closed = matches!(annot.kind, ShapeKind::Polygon { .. });
+    let cloudy = matches!(annot.kind, ShapeKind::Polygon { cloudy: true });
+    let min = if closed { 3 } else { 2 };
+    if annot.vertices.len() < min {
+        return Err(MutateError::Parse(format!("shape: needs at least {min} vertices")));
+    }
+    let bw = annot.border_width.max(0.0);
+    let pts: Vec<(f32, f32)> = annot
+        .vertices
+        .iter()
+        .map(|&(x, y)| crate::point_to_pdf_space(x, y, view.0, view.1))
+        .collect();
+    let radius = if cloudy { cloud_radius(&pts) } else { 0.0 };
+    // /Rect encloses the outline, the stroke and (cloud) the bumps.
+    let pad = bw / 2.0 + radius + 2.0;
+    let llx = pts.iter().map(|p| p.0).fold(f32::MAX, f32::min) - pad;
+    let lly = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min) - pad;
+    let urx = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max) + pad;
+    let ury = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max) + pad;
+
+    let mut d = base_annot_dict(
+        page_id,
+        if closed { "Polygon" } else { "PolyLine" },
+        (llx, lly, urx, ury),
+        annot.stroke_color,
+        annot.opacity,
+        annot.contents.as_deref(),
+        annot.author.as_deref(),
+        annot.print,
+    );
+    d.set(
+        "Vertices",
+        Object::Array(pts.iter().flat_map(|&(x, y)| [Object::Real(x), Object::Real(y)]).collect()),
+    );
+    d.set("BS", dictionary! { "Type" => "Border", "W" => bw, "S" => "S" });
+    let fill = annot.fill_color.filter(|_| closed);
+    if let Some(fill) = fill {
+        d.set("IC", color_array(fill));
+    }
+    if cloudy {
+        d.set("BE", dictionary! { "S" => "C", "I" => 1 });
+        d.set("IT", Object::Name(b"PolygonCloud".to_vec()));
+    }
+
+    let local: Vec<(f32, f32)> = pts.iter().map(|&(x, y)| (x - llx, y - lly)).collect();
+    let content = build_path_appearance(&local, closed, cloudy.then_some(radius), bw.max(0.5), annot.stroke_color, fill);
+    let form_id = make_form_xobject(doc, urx - llx, ury - lly, content, None);
+    d.set("AP", dictionary! { "N" => form_id });
+    if let Some(s) = &annot.subject {
+        d.set("Subj", pdf_string_utf16be(s));
+    }
+
+    let annot_id = doc.add_object(Object::Dictionary(d));
+    append_annot_to_page(doc, page_id, annot_id)?;
+    Ok(annot_id)
+}
+
+/// Appearance of a polygon / polyline: the path through `pts` (form space),
+/// or for a cloud a chain of outward arcs along every edge.
+fn build_path_appearance(
+    pts: &[(f32, f32)],
+    closed: bool,
+    cloud: Option<f32>,
+    width: f32,
+    stroke: [f32; 3],
+    fill: Option<[f32; 3]>,
+) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(64 + pts.len() * 40);
+    let [r, g, b] = stroke.map(|v| v.clamp(0.0, 1.0));
+    let _ = writeln!(s, "q\n{r:.3} {g:.3} {b:.3} RG\n{width:.3} w\n1 j 1 J");
+    if let Some([r, g, b]) = fill.map(|f| f.map(|v| v.clamp(0.0, 1.0))) {
+        let _ = writeln!(s, "{r:.3} {g:.3} {b:.3} rg");
+    }
+    match cloud {
+        Some(radius) => cloud_path(&mut s, pts, radius),
+        None => {
+            for (i, (x, y)) in pts.iter().enumerate() {
+                let _ = writeln!(s, "{x:.3} {y:.3} {}", if i == 0 { "m" } else { "l" });
+            }
+            if closed {
+                s.push_str("h\n");
+            }
+        }
+    }
+    s.push_str(if closed && fill.is_some() { "B\n" } else { "S\n" });
+    s.push_str("Q\n");
+    s.into_bytes()
+}
+
+/// Closed cloud outline around the polygon `pts`: every edge is split into
+/// segments of about two radii, each drawn as a half circle bulging away from
+/// the polygon.
+fn cloud_path(s: &mut String, pts: &[(f32, f32)], radius: f32) {
+    use std::f32::consts::PI;
+    use std::fmt::Write as _;
+    // Signed area: positive = counter-clockwise (y up). Its outside lies to
+    // the right of each edge, which a counter-clockwise sweep from the
+    // segment start passes through.
+    let area: f32 = pts
+        .iter()
+        .zip(pts.iter().cycle().skip(1))
+        .map(|(a, b)| a.0 * b.1 - b.0 * a.1)
+        .sum();
+    let outward = if area >= 0.0 { 1.0 } else { -1.0 };
+    let mut first = true;
+    for (i, &a) in pts.iter().enumerate() {
+        let b = pts[(i + 1) % pts.len()];
+        let len = (b.0 - a.0).hypot(b.1 - a.1);
+        if len < 1e-3 {
+            continue;
+        }
+        let n = (len / (2.0 * radius)).round().max(1.0) as usize;
+        for k in 0..n {
+            let t0 = k as f32 / n as f32;
+            let t1 = (k + 1) as f32 / n as f32;
+            let p0 = (a.0 + (b.0 - a.0) * t0, a.1 + (b.1 - a.1) * t0);
+            let p1 = (a.0 + (b.0 - a.0) * t1, a.1 + (b.1 - a.1) * t1);
+            let c = ((p0.0 + p1.0) / 2.0, (p0.1 + p1.1) / 2.0);
+            let r = len / n as f32 / 2.0;
+            if first {
+                let _ = writeln!(s, "{:.3} {:.3} m", p0.0, p0.1);
+                first = false;
+            }
+            // Half circle from p0 to p1; the sign picks the outer side.
+            let start = (p0.1 - c.1).atan2(p0.0 - c.0);
+            let sweep = outward * PI;
+            for half in 0..2 {
+                let a0 = start + sweep / 2.0 * half as f32;
+                let a1 = a0 + sweep / 2.0;
+                let kk = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan();
+                let (s0, c0) = a0.sin_cos();
+                let (s1, c1) = a1.sin_cos();
+                let q0 = (c.0 + r * c0, c.1 + r * s0);
+                let q3 = (c.0 + r * c1, c.1 + r * s1);
+                let q1 = (q0.0 - kk * r * s0, q0.1 + kk * r * c0);
+                let q2 = (q3.0 + kk * r * s1, q3.1 - kk * r * c1);
+                let _ = writeln!(
+                    s,
+                    "{:.3} {:.3} {:.3} {:.3} {:.3} {:.3} c",
+                    q1.0, q1.1, q2.0, q2.1, q3.0, q3.1
+                );
+            }
+        }
+    }
+    s.push_str("h\n");
 }
 
 fn build_line_appearance(
@@ -788,12 +981,16 @@ pub(crate) fn std_font(family: &str, bold: bool, italic: bool) -> (&'static str,
     }
 }
 
-/// Ensures the document catalog has an /AcroForm /DR /Font /<key> entry
-/// pointing at the standard Type1 font `base_font`. Returns the font's object
-/// id (may be reused for later annotations). Idempotent. An existing AcroForm
-/// (inline or indirect) and its /DR fonts are extended, never replaced — the
-/// AcroForm carries the document's form /Fields.
-fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResult<ObjectId> {
+/// Ensures the document catalog has an /AcroForm /DR /Font /<key> entry,
+/// creating the font with `create` when there is none yet. Returns the font's
+/// object id (reused by later annotations). An existing AcroForm (inline or
+/// indirect) and its /DR fonts are extended, never replaced — the AcroForm
+/// carries the document's form /Fields.
+fn ensure_dr_font(
+    doc: &mut Document,
+    key: &str,
+    create: impl FnOnce(&mut Document) -> MutateResult<ObjectId>,
+) -> MutateResult<ObjectId> {
     let root_id = doc
         .trailer
         .get(b"Root")
@@ -840,18 +1037,15 @@ fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResu
     let dr_entry = doc.get_dictionary(af_id).ok().and_then(|d| d.get(b"DR").ok().cloned());
     let (dr_ref, mut dr) = resolve(doc, dr_entry);
     let (font_ref, mut fonts) = resolve(doc, dr.get(b"Font").ok().cloned());
-    if let Ok(Object::Reference(helv_id)) = fonts.get(key.as_bytes()) {
-        return Ok(*helv_id);
+    if let Ok(Object::Reference(font_id)) = fonts.get(key.as_bytes()) {
+        if doc.get_dictionary(*font_id).is_ok() {
+            return Ok(*font_id);
+        }
     }
 
     // Create the font and register it next to the existing ones.
-    let helv_id = doc.add_object(dictionary! {
-        "Type" => "Font",
-        "Subtype" => "Type1",
-        "BaseFont" => Object::Name(base_font.as_bytes().to_vec()),
-        "Encoding" => "WinAnsiEncoding",
-    });
-    fonts.set(key, Object::Reference(helv_id));
+    let font_id = create(doc)?;
+    fonts.set(key, Object::Reference(font_id));
     match font_ref {
         Some(r) => {
             if let Ok(o) = doc.get_object_mut(r) {
@@ -874,7 +1068,65 @@ fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResu
             }
         }
     }
-    Ok(helv_id)
+    Ok(font_id)
+}
+
+/// The standard Type1 font `base_font`, registered in /DR as `key`.
+fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResult<ObjectId> {
+    ensure_dr_font(doc, key, |doc| {
+        Ok(doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => Object::Name(base_font.as_bytes().to_vec()),
+            "Encoding" => "WinAnsiEncoding",
+        }))
+    })
+}
+
+/// The font a FreeText box is written with.
+enum TextFont {
+    /// One of the standard 14 fonts; strings are WinAnsi bytes.
+    Standard,
+    /// A bundled TrueType face, embedded as a Type0 font; strings are
+    /// glyph ids.
+    Embedded(Box<ttf_parser::Face<'static>>),
+}
+
+impl TextFont {
+    fn encode(&self, line: &str) -> Vec<u8> {
+        match self {
+            TextFont::Standard => pdf_literal_string(line),
+            TextFont::Embedded(face) => crate::truetype::encode(face, line),
+        }
+    }
+}
+
+/// Resource key, font object and encoder for a FreeText font: a bundled
+/// family (see `pdf_fonts`) is embedded once per document and style, the
+/// standard families use the standard 14 fonts.
+fn freetext_font(
+    doc: &mut Document,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> MutateResult<(String, ObjectId, TextFont)> {
+    if let Some(fam) = pdf_fonts::family(family) {
+        let (bold, italic) = fam.effective_style(bold, italic);
+        let data = fam.face(bold, italic);
+        let suffix = match (bold, italic) {
+            (false, false) => "",
+            (true, false) => "B",
+            (false, true) => "I",
+            (true, true) => "BI",
+        };
+        let key = format!("RP{}{suffix}", fam.id);
+        let serif = fam.category == pdf_fonts::Category::Serif;
+        let id = ensure_dr_font(doc, &key, |doc| crate::truetype::add_type0_font(doc, data, serif))?;
+        return Ok((key, id, TextFont::Embedded(Box::new(crate::truetype::parse(data)?))));
+    }
+    let (key, base_font) = std_font(family, bold, italic);
+    let id = ensure_std_font(doc, key, base_font)?;
+    Ok((key.to_string(), id, TextFont::Standard))
 }
 
 pub fn add_freetext_annotation(
@@ -884,8 +1136,12 @@ pub fn add_freetext_annotation(
 ) -> MutateResult<ObjectId> {
     let page_id = page_id_for(doc, page_index)?;
     let view = page_view(doc, page_id);
-    let (font_key, base_font) = std_font(&annot.font_family, annot.bold, annot.italic);
-    let helv_id = ensure_std_font(doc, font_key, base_font)?;
+    let (font_key, font_id, font) =
+        freetext_font(doc, &annot.font_family, annot.bold, annot.italic)?;
+    // A family without a bold / italic face is written (and recorded) upright
+    // or regular.
+    let (bold, italic) = pdf_fonts::family(&annot.font_family)
+        .map_or((annot.bold, annot.italic), |f| f.effective_style(annot.bold, annot.italic));
 
     let (llx, lly, urx, ury) = rect_native(&annot.rect, view);
     let mut d = base_annot_dict(
@@ -928,11 +1184,12 @@ pub fn add_freetext_annotation(
     let mut style = Dictionary::new();
     let family = match annot.font_family.as_str() {
         f @ ("Times" | "Cour") => f,
+        f if pdf_fonts::is_bundled(f) => f,
         _ => "Helv",
     };
     style.set("Font", Object::Name(family.as_bytes().to_vec()));
-    style.set("Bold", Object::Boolean(annot.bold));
-    style.set("Italic", Object::Boolean(annot.italic));
+    style.set("Bold", Object::Boolean(bold));
+    style.set("Italic", Object::Boolean(italic));
     style.set("Rot", Object::Integer((annot.rotation_quadrant & 3) as i64));
     if let Some(bg) = bg {
         style.set("BG", Object::Array(bg.iter().map(|v| Object::Real(*v)).collect()));
@@ -941,7 +1198,8 @@ pub fn add_freetext_annotation(
 
     let content = build_freetext_appearance(
         &annot.text,
-        font_key,
+        &font_key,
+        &font,
         fs,
         c,
         bg,
@@ -950,7 +1208,7 @@ pub fn add_freetext_annotation(
         annot.rotation_quadrant & 3,
     );
     let mut font_dict = Dictionary::new();
-    font_dict.set(font_key, Object::Reference(helv_id));
+    font_dict.set(font_key.as_str(), Object::Reference(font_id));
     let mut resources = Dictionary::new();
     resources.set("Font", Object::Dictionary(font_dict));
     let form_id = make_form_xobject(doc, w, h, content, Some(resources));
@@ -1004,6 +1262,7 @@ fn pdf_literal_string(s: &str) -> Vec<u8> {
 fn build_freetext_appearance(
     text: &str,
     font_key: &str,
+    font: &TextFont,
     fs: f32,
     rgb: [f32; 3],
     bg: Option<[f32; 3]>,
@@ -1061,8 +1320,7 @@ fn build_freetext_appearance(
             let _ = write!(&mut buf, "{ax:.2} {ay:.2} Td\n", ax = advance.0, ay = advance.1);
         }
         first = false;
-        let s = pdf_literal_string(line);
-        buf.extend_from_slice(&s);
+        buf.extend_from_slice(&font.encode(line));
         buf.extend_from_slice(b" Tj\n");
     }
     buf.extend_from_slice(b"ET\nQ\n");
@@ -1527,6 +1785,156 @@ mod tests {
         let fonts = doc.get_dictionary(af).unwrap().get(b"DR").unwrap().as_dict().unwrap()
             .get(b"Font").unwrap().as_dict().unwrap();
         assert!(fonts.has(b"TiBo") && fonts.has(b"HeOb"), "fonts: {fonts:?}");
+    }
+
+    fn dr_fonts(doc: &Document) -> Dictionary {
+        let cat_id = doc.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        let af = doc.get_dictionary(cat_id).unwrap().get(b"AcroForm").unwrap().as_reference().unwrap();
+        doc.get_dictionary(af).unwrap().get(b"DR").unwrap().as_dict().unwrap()
+            .get(b"Font").unwrap().as_dict().unwrap().clone()
+    }
+
+    fn count_type0_fonts(doc: &Document) -> usize {
+        doc.objects
+            .values()
+            .filter(|o| o.as_dict().is_ok_and(|d| d.get(b"Subtype").is_ok_and(|s| s.as_name().is_ok_and(|n| n == b"Type0"))))
+            .count()
+    }
+
+    #[test]
+    fn freetext_with_bundled_font_embeds_it_once() {
+        let mut doc = one_page_doc();
+        let mut annot = freetext("Grüße €");
+        annot.font_family = "Roboto".into();
+        annot.bold = true;
+        let id = add_freetext_annotation(&mut doc, 0, &annot).unwrap();
+        add_freetext_annotation(&mut doc, 0, &annot).unwrap();
+        assert_eq!(count_type0_fonts(&doc), 1, "the face is embedded once and reused");
+
+        let fonts = dr_fonts(&doc);
+        let font_id = fonts.get(b"RPRobotoB").unwrap().as_reference().unwrap();
+        let font = doc.get_dictionary(font_id).unwrap();
+        assert_eq!(font.get(b"BaseFont").unwrap().as_name().unwrap(), b"Roboto-Bold");
+        assert_eq!(font.get(b"Encoding").unwrap().as_name().unwrap(), b"Identity-H");
+        let cid = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        let desc = doc.get_dictionary(cid).unwrap().get(b"FontDescriptor").unwrap().as_reference().unwrap();
+        let file = doc.get_dictionary(desc).unwrap().get(b"FontFile2").unwrap().as_reference().unwrap();
+        let data = pdf_fonts::family("Roboto").unwrap().face(true, false);
+        let stream = doc.get_object(file).unwrap().as_stream().unwrap();
+        assert_eq!(stream.dict.get(b"Length1").unwrap().as_i64().unwrap(), data.len() as i64);
+
+        // The appearance draws glyph ids with the embedded font.
+        let (form, content) = markup_ap_stream(&doc, id);
+        let res_fonts = form.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        assert!(res_fonts.has(b"RPRobotoB"));
+        let content = String::from_utf8_lossy(&content);
+        let face = crate::truetype::parse(data).unwrap();
+        let g = face.glyph_index('G').unwrap().0;
+        assert!(content.contains("/RPRobotoB 12.00 Tf"), "{content}");
+        assert!(content.contains(&format!("<{g:04X}")), "{content}");
+
+        let listed = crate::read::list_annotations(&doc);
+        let style = listed[0].freetext.as_ref().unwrap();
+        assert_eq!(style.font_family, "Roboto");
+        assert!(style.bold && !style.italic);
+    }
+
+    #[test]
+    fn freetext_records_the_style_a_family_really_has() {
+        let mut doc = one_page_doc();
+        let mut annot = freetext("Notiz");
+        annot.font_family = "Caveat".into();
+        annot.italic = true;
+        add_freetext_annotation(&mut doc, 0, &annot).unwrap();
+        assert!(dr_fonts(&doc).has(b"RPCaveat"));
+        let style = crate::read::list_annotations(&doc)[0].freetext.clone().unwrap();
+        assert_eq!(style.font_family, "Caveat");
+        assert!(!style.italic, "Caveat has no italic face");
+    }
+
+    fn shape(kind: ShapeKind, vertices: Vec<(f32, f32)>) -> ShapeAnnotation {
+        ShapeAnnotation {
+            kind,
+            rect: RectPt { x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0 },
+            vertices,
+            subject: Some("Stern".into()),
+            stroke_color: [0.8, 0.1, 0.1],
+            fill_color: Some([1.0, 1.0, 0.0]),
+            border_width: 1.5,
+            opacity: 1.0,
+            contents: None,
+            author: None,
+            print: true,
+        }
+    }
+
+    #[test]
+    fn polygon_and_polyline_carry_vertices_and_appearance() {
+        let mut doc = one_page_doc();
+        let tri = vec![(100.0, 100.0), (150.0, 200.0), (50.0, 200.0)];
+        let id = add_shape_annotation(&mut doc, 0, &shape(ShapeKind::Polygon { cloudy: false }, tri)).unwrap();
+        let d = doc.get_dictionary(id).unwrap().clone();
+        assert_eq!(d.get(b"Subtype").unwrap().as_name().unwrap(), b"Polygon");
+        let v: Vec<f32> = d.get(b"Vertices").unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect();
+        // Top-origin (100, 100) on a 792pt page is PDF (100, 692).
+        assert_eq!(&v[..2], &[100.0, 692.0]);
+        assert_eq!(v.len(), 6);
+        assert!(d.has(b"IC") && !d.has(b"BE"));
+        let (_, content) = markup_ap_stream(&doc, id);
+        let content = String::from_utf8_lossy(&content);
+        assert!(content.contains(" m\n") && content.contains("h\nB\n"), "{content}");
+        // /Rect encloses every vertex.
+        let r: Vec<f32> = d.get(b"Rect").unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect();
+        assert!(r[0] <= 50.0 && r[1] <= 592.0 && r[2] >= 150.0 && r[3] >= 692.0, "{r:?}");
+
+        let check = vec![(10.0, 20.0), (15.0, 28.0), (30.0, 5.0)];
+        let id = add_shape_annotation(&mut doc, 0, &shape(ShapeKind::PolyLine, check)).unwrap();
+        let d = doc.get_dictionary(id).unwrap();
+        assert_eq!(d.get(b"Subtype").unwrap().as_name().unwrap(), b"PolyLine");
+        assert!(!d.has(b"IC"), "an open path has no interior");
+        let (_, content) = markup_ap_stream(&doc, id);
+        assert!(String::from_utf8_lossy(&content).ends_with("S\nQ\n"));
+
+        let listed = crate::read::list_annotations(&doc);
+        assert_eq!(listed.iter().map(|a| a.subtype.as_str()).collect::<Vec<_>>(), ["Polygon", "PolyLine"]);
+        assert_eq!(listed[0].subject.as_deref(), Some("Stern"));
+
+        assert!(add_shape_annotation(&mut doc, 0, &shape(ShapeKind::Polygon { cloudy: false }, vec![(0.0, 0.0), (1.0, 1.0)])).is_err());
+    }
+
+    #[test]
+    fn cloud_bulges_outward_whatever_the_vertex_order() {
+        let square = vec![(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0)];
+        for pts in [square.clone(), square.into_iter().rev().collect()] {
+            let mut doc = one_page_doc();
+            let id = add_shape_annotation(&mut doc, 0, &shape(ShapeKind::Polygon { cloudy: true }, pts)).unwrap();
+            let d = doc.get_dictionary(id).unwrap().clone();
+            let be = d.get(b"BE").unwrap().as_dict().unwrap();
+            assert_eq!(be.get(b"S").unwrap().as_name().unwrap(), b"C");
+            assert_eq!(d.get(b"IT").unwrap().as_name().unwrap(), b"PolygonCloud");
+            let r: Vec<f32> = d.get(b"Rect").unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect();
+            let (_, content) = markup_ap_stream(&doc, id);
+            let content = String::from_utf8_lossy(&content);
+            // Every curve point lies outside the square (form space: the
+            // square spans pad..pad+100) and inside the form box.
+            let pad = 100.0 - (r[0]);
+            let nums: Vec<f32> = content
+                .lines()
+                .filter(|l| l.ends_with(" c"))
+                .flat_map(|l| l.split_whitespace().take(6).map(|t| t.parse::<f32>().unwrap()).collect::<Vec<_>>())
+                .collect();
+            assert!(nums.len() > 6 * 8, "several arcs per edge");
+            let (w, h) = (r[2] - r[0], r[3] - r[1]);
+            for xy in nums.chunks(2).skip(2).step_by(3) {
+                let (x, y) = (xy[0], xy[1]);
+                let inside = x > pad + 0.5 && x < pad + 99.5 && y > pad + 0.5 && y < pad + 99.5;
+                assert!(!inside, "arc end ({x}, {y}) inside the square");
+                assert!((-0.01..=w + 0.01).contains(&x) && (-0.01..=h + 0.01).contains(&y));
+            }
+            // Arc mid points (the second end point of each half) sit outside.
+            let mids: Vec<(f32, f32)> = nums.chunks(6).step_by(2).map(|c| (c[4], c[5])).collect();
+            assert!(mids.iter().all(|&(x, y)| x < pad || x > pad + 100.0 || y < pad || y > pad + 100.0), "bumps point inward: {mids:?}");
+        }
     }
 
     #[test]

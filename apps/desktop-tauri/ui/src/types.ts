@@ -51,7 +51,9 @@ export type InsertWhere = "before" | "after" | "end";
 export type MergeFile = { path: string; name: string };
 export type MarkupKind = "highlight" | "underline" | "strikeout" | "squiggly";
 export type ShapeKindUi =
-  | "rect" | "circle" | "line" | "arrow"
+  | "rect" | "circle" | "line" | "arrow" | "arrow2"
+  | "triangle" | "diamond" | "hexagon" | "star" | "cloud" | "callout" | "check"
+  | "polygon" | "polyline"
   | "freetext" | "ink" | "stamp" | "region" | "note" | "redact";
 // Click-to-place Fill & Sign marks (signature/initials reuse the stamp tool).
 export type SignTool = "check" | "cross" | "dot" | "date" | "text";
@@ -182,6 +184,8 @@ export interface AnnotationInfo {
   icon: string | null;
   /** Styling of a FreeText box (null for other subtypes). */
   freetext?: FreeTextStyle | null;
+  /** /Subj: the shape's name ("Stern") where the subtype does not say it. */
+  subject?: string | null;
 }
 
 export interface FreeTextStyle {
