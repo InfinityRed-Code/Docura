@@ -9,7 +9,7 @@ traits so the same binary plan applies once the Linux PDFium binary is in place.
 > The application is branded **Docura PDF** (`com.docura.pdf`). The repository,
 > crates, and internal keys stay named `rustpdf` for historical reasons.
 
-Current status: **v1.3.1** — milestones v0.1 through v1.0 (Reader, Navigation,
+Current status: **v1.3.2** — milestones v0.1 through v1.0 (Reader, Navigation,
 Organise, Export & Virtual printer, Annotation, Forms, Fill & Sign, Security &
 Redaction, Export & Conversion, OCR) are shipped; v1.1 "Performance & Polish"
 is largely done (simplified UI, render pool, caches, tray, accessibility —
@@ -210,6 +210,8 @@ release needs that asset and a `v<version>` tag. Debug builds accept
 Coming from 1.3.0 or older (installed per user): the first per-machine setup
 looks like a new installation (directory page), removes the per-user copy
 and keeps its app data and autostart; later updates are in place.
+Coming from 1.3.1: it has no update hint yet, so 1.3.2 is installed once by
+hand; its setup updates 1.3.1 in place.
 
 The in-place update lives in `nsis/installer.nsi`, a copy of the Tauri CLI's
 NSIS template (`bundle.windows.nsis.template`): the stock template shows an
