@@ -419,6 +419,19 @@ export function buildHtml(): string {
       <button id="fitPageBtn" class="sbBtn" title="${t("tip.fitPage")}"><i data-lucide="rectangle-vertical"></i></button>
     </div>
   </footer>
+  <div id="updateHint" class="updateHint hidden" role="status" aria-live="polite">
+    <div class="updateHintHead">
+      <i data-lucide="arrow-down-to-line"></i>
+      <strong id="updateHintTitle"></strong>
+      <button id="updateHintClose" class="propsClose" title="${t("tip.close")}">✕</button>
+    </div>
+    <div id="updateHintInstalled" class="updateHintSub"></div>
+    <div id="updateHintNotes" class="updateHintNotes"></div>
+    <div class="updateHintActions">
+      <button id="updateHintRelease">${t("upd.releaseNotes")}</button>
+      <button id="updateHintDownload" class="primaryBtn">${t("upd.download")}</button>
+    </div>
+  </div>
   <div id="dropOverlay" class="dropOverlay hidden">${t("drop.here")}</div>
   <div id="propsOverlay" class="propsOverlay hidden">
     <div class="propsModal">
@@ -443,6 +456,7 @@ export function buildHtml(): string {
           <button class="settingsNavItem" data-sec="secPdfa">${t("set.pdfaExport")}</button>
           <button class="settingsNavItem" data-sec="secVprinter">${t("set.vprinter")}</button>
           <button class="settingsNavItem" data-sec="secSystem">${t("set.system")}</button>
+          <button class="settingsNavItem" data-sec="secUpdates">${t("set.updates")}</button>
         </nav>
         <div class="settingsBody" id="settingsBody">
           <section id="secAppearance" class="wmPanel settingsSection">
@@ -515,6 +529,13 @@ export function buildHtml(): string {
             <div style="font-size:0.78rem;color:var(--text-3);">${t("set.runInBackgroundHint")}</div>
             <label class="settingsCheck" style="margin-top:0.6rem;"><input id="autostartCheck" type="checkbox" /> ${t("set.autostart")}</label>
             <div style="font-size:0.78rem;color:var(--text-3);">${t("set.autostartHint")}</div>
+          </section>
+          <section id="secUpdates" class="wmPanel settingsSection">
+            <h3 style="margin:0 0 0.3rem 0;font-size:0.95rem;">${t("set.updates")}</h3>
+            <div id="updateStatus" style="font-size:0.85rem;color:var(--text-2);"></div>
+            <label class="settingsCheck"><input id="updateAutoCheck" type="checkbox" /> ${t("set.updateAuto")}</label>
+            <div style="font-size:0.78rem;color:var(--text-3);">${t("set.updateHint")}</div>
+            <div class="wmActions"><button id="updateCheckBtn">${t("btn.checkUpdates")}</button><button id="updateDownloadBtn" class="primaryBtn hidden">${t("upd.download")}</button></div>
           </section>
         </div>
       </div>
@@ -1090,6 +1111,21 @@ export const CSS = `
   .ocrBanner button:not(.propsClose) { background:var(--accent); color:#fff; border:none;
     border-radius:5px; padding:0.3rem 0.7rem; cursor:pointer; }
   .ocrBanner button:not(.propsClose):hover { background:var(--accent-strong); }
+  /* Update hint (update.ts): small card above the status bar, closable,
+     below dialogs (.propsOverlay is z-index 40). */
+  .updateHint { position:fixed; right:14px; bottom:42px; z-index:35; width:340px; max-width:calc(100vw - 28px);
+    display:flex; flex-direction:column; gap:0.35rem; font-size:0.85rem;
+    background:var(--bg); color:var(--text); border:1px solid var(--border-2);
+    border-radius:8px; padding:0.6rem 0.75rem; box-shadow:0 6px 24px rgba(0,0,0,0.28); }
+  .updateHint.hidden { display:none; }
+  .updateHintHead { display:flex; align-items:center; gap:0.45rem; }
+  .updateHintHead svg { width:18px; height:18px; color:var(--accent); flex:none; }
+  .updateHintHead strong { flex:1; }
+  .updateHintSub { color:var(--text-3); font-size:0.78rem; }
+  .updateHintNotes { color:var(--text-2); display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+  .updateHintNotes:empty { display:none; }
+  .updateHintActions { display:flex; gap:0.4rem; justify-content:flex-end; margin-top:0.2rem; }
+  #updateDownloadBtn.hidden { display:none; }
   /* Welcome screen (no document open). */
   /* margin:auto on the card (not align-items:center) keeps it scrollable
      when the window is shorter than the card. */

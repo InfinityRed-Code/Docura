@@ -969,6 +969,7 @@ dependencies = [
  "pdf_sign",
  "pdf_types",
  "regex",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

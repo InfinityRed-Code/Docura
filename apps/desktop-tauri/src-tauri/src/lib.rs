@@ -7,6 +7,7 @@ use base64::Engine;
 use parking_lot::Mutex;
 
 mod ocr;
+mod update;
 mod vprinter;
 
 use pdf_cache::{CacheKey, CachedImage, RenderCache};
@@ -3497,6 +3498,15 @@ struct PersistedSettings {
     /// the print-to-PDF spool watcher stays active in the background.
     #[serde(default)]
     run_in_background: bool,
+    /// Look for a newer release on GitHub at startup (update.rs). `None` = on.
+    #[serde(default)]
+    update_check: Option<bool>,
+    /// Unix time of the last startup check (at most one a day).
+    #[serde(default)]
+    update_last_check: Option<u64>,
+    /// Version whose update hint the user closed; not shown again at startup.
+    #[serde(default)]
+    update_dismissed: Option<String>,
 }
 
 fn load_settings(path: &Path) -> PersistedSettings {
@@ -3865,7 +3875,11 @@ pub fn run() {
             get_cache_mb,
             set_cache_mb,
             get_run_in_background,
-            set_run_in_background
+            set_run_in_background,
+            update::check_for_update,
+            update::get_update_settings,
+            update::set_update_check,
+            update::dismiss_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -198,6 +198,15 @@ Unattended: `"Docura PDF_<version>_x64-setup.exe" /S` updates or installs
 without any dialog and closes a running app without asking; add `/R` to start
 the app afterwards. Exit code 0 means success.
 
+The app looks for a newer release at startup, at most once a day
+(`src-tauri/src/update.rs`, GitHub `releases/latest`), and on "Check for
+updates" in Settings → Updates, where the startup check can also be turned
+off. A newer version shows a hint whose "Download" opens the release's setup
+asset (`*_x64-setup.exe`, else the release page) in the browser, so every
+release needs that asset and a `v<version>` tag. Debug builds accept
+`DOCURA_FAKE_VERSION=1.3.0` (pretend an older app) and `DOCURA_UPDATE_URL`
+(another endpoint) to try it in `tauri dev`; release builds ignore both.
+
 Coming from 1.3.0 or older (installed per user): the first per-machine setup
 looks like a new installation (directory page), removes the per-user copy
 and keeps its app data and autostart; later updates are in place.
