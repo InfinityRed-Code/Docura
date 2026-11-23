@@ -114,6 +114,7 @@ pub fn corpus() -> Vec<Case> {
         Case { name: "ocr_layer", bytes: ocr_layer(), expect: Expect::Ok },
         Case { name: "optional_content", bytes: optional_content(), expect: Expect::Ok },
         Case { name: "legacy_misc", bytes: legacy_misc(), expect: Expect::Ok },
+        Case { name: "tagged_input", bytes: tagged_input(), expect: Expect::Ok },
     ];
     for c in &mut v {
         if c.expect == Expect::Ok && c.name != "attachments" {
@@ -600,6 +601,32 @@ pub fn legacy_misc() -> Vec<u8> {
     out.clear();
     doc.save_to(&mut out).unwrap();
     out
+}
+
+/// Already tagged input with a custom structure type in the role map.
+pub fn tagged_input() -> Vec<u8> {
+    let mut b = B::new();
+    let f = helv(&mut b);
+    let page = b.page(
+        b"/Heading <</MCID 0>> BDC BT /F1 20 Tf 72 760 Td (Titel) Tj ET EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 720 Td (Absatz) Tj ET EMC",
+        font_res(f),
+        dictionary! { "StructParents" => 0 },
+    );
+    let root = b.doc.new_object_id();
+    let docel = b.doc.new_object_id();
+    let h = b.doc.add_object(dictionary! { "Type" => "StructElem", "S" => "Heading", "P" => docel, "Pg" => page, "K" => 0 });
+    let p = b.doc.add_object(dictionary! { "Type" => "StructElem", "S" => "P", "P" => docel, "Pg" => page, "K" => 1 });
+    b.doc.objects.insert(docel, Object::Dictionary(dictionary! { "Type" => "StructElem", "S" => "Document", "P" => root, "K" => vec![h.into(), p.into()] }));
+    let pt = b.doc.add_object(dictionary! { "Nums" => vec![0.into(), Object::Array(vec![h.into(), p.into()])] });
+    b.doc.objects.insert(root, Object::Dictionary(dictionary! {
+        "Type" => "StructTreeRoot", "K" => docel, "ParentTree" => pt, "ParentTreeNextKey" => 1,
+        "RoleMap" => dictionary! { "Heading" => "Title", "Title" => "Heading", "P" => "Para" },
+    }));
+    b.finish_with(dictionary! {
+        "StructTreeRoot" => root,
+        "MarkInfo" => dictionary! { "Marked" => true },
+        "Lang" => Object::string_literal("de_DE"),
+    })
 }
 
 /// Plain (code-per-byte) LZW encoder (TIFF/PDF flavour, early change).

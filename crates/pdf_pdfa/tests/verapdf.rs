@@ -52,7 +52,8 @@ fn verapdf_matrix() {
                     continue;
                 }
             }
-            let opts = Options::new(level).with_rasterizer(raster.clone());
+            let mut opts = Options::new(level).with_rasterizer(raster.clone());
+            opts.lang = Some("de-DE".into());
             let res = convert(&c.bytes, &opts);
             let expect_4f_error = c.expect == Expect::AttachmentRequiredFor4f && id == "4f";
             match (res, c.expect) {

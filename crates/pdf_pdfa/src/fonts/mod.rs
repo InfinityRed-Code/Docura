@@ -130,6 +130,10 @@ fn existing_tounicode(doc: &Document, d: &Dictionary) -> BTreeMap<Code, String> 
     }
 }
 
+fn has_pua(s: &str) -> bool {
+    s.chars().any(|c| matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD))
+}
+
 fn valid_unicode(s: &str) -> bool {
     !s.is_empty() && !s.contains('\0') && !s.contains('\u{FEFF}') && !s.contains('\u{FFFE}')
 }
@@ -276,7 +280,7 @@ fn fix_simple(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resu
     let Some(prog) = prog else {
         if u.rendered.is_empty() {
             if level.needs_unicode() {
-                ensure_tounicode(&mut ctx.doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace);
+                ensure_tounicode(&mut ctx.doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace, level.needs_structure());
             }
             return Ok(Outcome::Kept);
         }
@@ -321,7 +325,7 @@ fn fix_simple(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resu
             let ok = chk.rules && chk.missing.is_empty() && chk.widths.is_empty() && (level.part() == 1 || chk.notdef.is_empty());
             if ok {
                 if level.needs_unicode() {
-                    ensure_tounicode(&mut ctx.doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace);
+                    ensure_tounicode(&mut ctx.doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace, level.needs_structure());
                 }
                 return Ok(Outcome::Kept);
             }
@@ -400,7 +404,7 @@ fn fix_simple(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resu
                 outcome = Outcome::Fixed;
             }
             if level.needs_unicode() {
-                ensure_tounicode(&mut ctx.doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace);
+                ensure_tounicode(&mut ctx.doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace, level.needs_structure());
             }
             Ok(outcome)
         }
@@ -611,7 +615,7 @@ fn fix_type0(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resul
     let Some(prog) = prog else {
         if u.rendered.is_empty() {
             if level.needs_unicode() {
-                ensure_tounicode_codes(&mut ctx.doc, fid, &u.codes, &unicode, &cmap.codespace);
+                ensure_tounicode_codes(&mut ctx.doc, fid, &u.codes, &unicode, &cmap.codespace, level.needs_structure());
             }
             return Ok(Outcome::Kept);
         }
@@ -691,7 +695,7 @@ fn fix_type0(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resul
                     }
                 }
                 if level.needs_unicode() {
-                    ensure_tounicode_codes(&mut ctx.doc, fid, &u.codes, &unicode, &cmap.codespace);
+                    ensure_tounicode_codes(&mut ctx.doc, fid, &u.codes, &unicode, &cmap.codespace, level.needs_structure());
                 }
                 return Ok(Outcome::Kept);
             }
@@ -752,7 +756,7 @@ fn fix_type0(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resul
                 return Ok(Outcome::Unfixable("glyphs missing in the embedded font".into()));
             }
             if level.needs_unicode() {
-                ensure_tounicode_codes(&mut ctx.doc, fid, &u.codes, &unicode, &cmap.codespace);
+                ensure_tounicode_codes(&mut ctx.doc, fid, &u.codes, &unicode, &cmap.codespace, level.needs_structure());
             }
             Ok(Outcome::Kept)
         }
@@ -866,7 +870,7 @@ fn fix_type3(ctx: &mut Ctx, fid: ObjectId, d: &Dictionary, u: &FontUse) -> Resul
                 .cloned()
                 .or_else(|| names2[code as usize & 0xFF].as_deref().and_then(encoding::glyph_unicode))
         };
-        ensure_tounicode(doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace);
+        ensure_tounicode(doc, fid, &u.codes, &unicode, &CMap::one_byte().codespace, level.needs_structure());
     }
     Ok(if changed { Outcome::Fixed } else { Outcome::Kept })
 }
@@ -900,11 +904,13 @@ fn set_glyph_width(data: &[u8], w: f64) -> Option<Vec<u8>> {
 
 /// Make sure the font maps every code in `codes` to Unicode (keeping
 /// existing entries); unknown codes get U+FFFD.
-fn ensure_tounicode(doc: &mut Document, fid: ObjectId, codes: &BTreeSet<Code>, unicode: &dyn Fn(u32) -> Option<String>, codespace: &[(Vec<u8>, Vec<u8>)]) {
-    ensure_tounicode_codes(doc, fid, codes, &|c: Code| unicode(c.0), codespace)
+fn ensure_tounicode(doc: &mut Document, fid: ObjectId, codes: &BTreeSet<Code>, unicode: &dyn Fn(u32) -> Option<String>, codespace: &[(Vec<u8>, Vec<u8>)], no_pua: bool) {
+    ensure_tounicode_codes(doc, fid, codes, &|c: Code| unicode(c.0), codespace, no_pua)
 }
 
-fn ensure_tounicode_codes(doc: &mut Document, fid: ObjectId, codes: &BTreeSet<Code>, unicode: &dyn Fn(Code) -> Option<String>, codespace: &[(Vec<u8>, Vec<u8>)]) {
+fn ensure_tounicode_codes(doc: &mut Document, fid: ObjectId, codes: &BTreeSet<Code>, unicode: &dyn Fn(Code) -> Option<String>, codespace: &[(Vec<u8>, Vec<u8>)], no_pua: bool) {
+    // Level a: Private Use Area values would need ActualText; avoid them.
+    let valid_unicode = |s: &str| valid_unicode(s) && !(no_pua && has_pua(s));
     let Some(d) = doc.objects.get(&fid).and_then(|o| o.as_dict().ok()).cloned() else { return };
     let mut map = existing_tounicode(doc, &d);
     let mut complete = d.has(b"ToUnicode");
