@@ -1,6 +1,7 @@
 //! U3D (ECMA-363, Universal 3D File Format, 4th edition).
 
 pub mod bits;
+mod clod;
 mod read;
 mod write;
 
@@ -54,6 +55,7 @@ pub struct Scene {
     pub shaders: Vec<Shader>,
     pub materials: Vec<Material>,
     pub lights: Vec<LightResource>,
+    pub textures: Vec<Texture>,
     /// Things the decoder skipped (unsupported blocks, damaged data).
     pub warnings: Vec<String>,
 }
@@ -136,6 +138,17 @@ pub struct Shader {
     pub name: String,
     pub attributes: u32,
     pub material: String,
+    /// Texture names of the active texture layers.
+    pub textures: Vec<String>,
+}
+
+/// A texture image (PNG or JPEG) from texture continuation blocks.
+#[derive(Debug, Clone, Serialize)]
+pub struct Texture {
+    pub name: String,
+    pub mime: String,
+    #[serde(skip)]
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]

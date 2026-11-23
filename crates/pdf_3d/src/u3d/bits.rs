@@ -6,7 +6,7 @@
 
 /// Context for uncompressed 8-bit values.
 pub const CONTEXT8: u32 = 0;
-/// Contexts `>= STATIC_FULL` are static: `context - STATIC_FULL` equally
+/// Contexts `> STATIC_FULL` are static: `context - STATIC_FULL` equally
 /// likely symbols.
 pub const STATIC_FULL: u32 = 0x400;
 /// Values written with a context `>= MAX_RANGE` are uncompressed.
@@ -44,12 +44,15 @@ struct Contexts {
 impl Contexts {
     fn new() -> Self {
         Self {
-            hist: (0..STATIC_FULL).map(|_| None).collect(),
+            hist: (0..=STATIC_FULL).map(|_| None).collect(),
         }
     }
 
     fn is_dynamic(context: u32) -> bool {
-        context < STATIC_FULL && context != CONTEXT8
+        // The reference implementation treats STATIC_FULL itself (a static
+        // context with zero symbols) as dynamic; encoders rely on it for
+        // the first split position of a progressive mesh.
+        context <= STATIC_FULL && context != CONTEXT8
     }
 
     fn add_symbol(&mut self, context: u32, symbol: u32) {

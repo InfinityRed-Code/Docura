@@ -1,11 +1,14 @@
-//! U3D file parser: block walk, declaration blocks, CLOD base meshes.
+//! U3D file parser: block walk, declaration blocks, CLOD meshes, textures.
 
 use super::bits::{BitReader, STATIC_FULL};
+use super::clod::Clod;
 use super::*;
 
 /// Upper bound for any element count in one mesh. Keeps a malformed or
 /// hostile file from requesting gigabytes before the data runs out.
 const MAX_ELEMENTS: u32 = 20_000_000;
+/// Upper bound for one texture image.
+const MAX_TEXTURE_BYTES: usize = 64 << 20;
 
 /// ECMA-363 context for base mesh shading IDs (`cShading`).
 const CONTEXT_BASE_SHADING_ID: u32 = 1;
@@ -15,7 +18,7 @@ struct RawBlock<'a> {
     data: &'a [u8],
 }
 
-/// Walks the blocks of `bytes` starting at `pos`.
+/// Walks the blocks of `bytes`.
 fn blocks(bytes: &[u8]) -> impl Iterator<Item = Result<RawBlock<'_>, U3dError>> {
     let mut pos = 0usize;
     std::iter::from_fn(move || {
@@ -34,13 +37,22 @@ fn blocks(bytes: &[u8]) -> impl Iterator<Item = Result<RawBlock<'_>, U3dError>> 
             ))));
         };
         let data = &bytes[start..end];
-        pos = start + data_size.div_ceil(4) * 4 + meta_size.div_ceil(4) * 4;
+        pos = start
+            .saturating_add(data_size.div_ceil(4) * 4)
+            .saturating_add(meta_size.div_ceil(4) * 4);
         Some(Ok(RawBlock { block_type, data }))
     })
 }
 
 /// Decodes a U3D file (as stored in a PDF `/3D` stream with `/Subtype /U3D`).
+///
+/// Damage inside one mesh or texture is recorded in `Scene::warnings` and
+/// the rest of the scene is still returned; only a broken file structure is
+/// an error.
 pub fn parse(bytes: &[u8]) -> Result<Scene, U3dError> {
+    if !bytes.starts_with(&block::FILE_HEADER.to_le_bytes()) {
+        return Err(U3dError::NotU3d);
+    }
     let mut it = blocks(bytes);
     let header = it.next().ok_or(U3dError::NotU3d)??;
     if header.block_type != block::FILE_HEADER {
@@ -62,17 +74,31 @@ pub fn parse(bytes: &[u8]) -> Result<Scene, U3dError> {
             ..Default::default()
         },
         no_compression: profile & 0x4 != 0,
+        clods: Vec::new(),
+        texture_parts: Vec::new(),
     };
     for b in it {
         let b = b?;
         p.block(&b, None)?;
     }
+    p.finish();
     Ok(p.scene)
+}
+
+/// A texture declaration and the image data collected for it.
+struct TextureParts {
+    name: String,
+    /// (compression type, channels, collected data) per continuation image.
+    images: Vec<(u8, u8, Vec<u8>)>,
 }
 
 struct Parser {
     scene: Scene,
     no_compression: bool,
+    /// Reconstruction state per entry of `scene.meshes`; `None` once the
+    /// mesh was found damaged.
+    clods: Vec<Option<Clod>>,
+    texture_parts: Vec<TextureParts>,
 }
 
 impl Parser {
@@ -101,21 +127,18 @@ impl Parser {
             }
             block::SHADING_MODIFIER => self.shading_modifier(b.data, chain_node)?,
             block::CLOD_MESH_DECLARATION => self.mesh_declaration(b.data)?,
-            block::CLOD_BASE_MESH => self.base_mesh(b.data)?,
-            block::CLOD_PROGRESSIVE_MESH => {
-                self.warn("progressive mesh refinement not decoded (base mesh only)".into())
-            }
+            block::CLOD_BASE_MESH => self.mesh_continuation(b.data, false),
+            block::CLOD_PROGRESSIVE_MESH => self.mesh_continuation(b.data, true),
             block::LIT_TEXTURE_SHADER => self.shader(b.data)?,
             block::MATERIAL_RESOURCE => self.material(b.data)?,
             block::LIGHT_RESOURCE => self.light(b.data)?,
             block::VIEW_RESOURCE => {}
-            block::TEXTURE_DECLARATION | block::TEXTURE_CONTINUATION => {
-                self.warn("textures not decoded".into())
-            }
+            block::TEXTURE_DECLARATION => self.texture_declaration(b.data),
+            block::TEXTURE_CONTINUATION => self.texture_continuation(b.data),
             block::POINT_SET_DECLARATION
             | block::POINT_SET_CONTINUATION
             | block::LINE_SET_DECLARATION
-            | block::LINE_SET_CONTINUATION => self.warn("point and line sets not decoded".into()),
+            | block::LINE_SET_CONTINUATION => self.warn("point and line sets not shown".into()),
             other => self.warn(format!("block {other:#010x} skipped")),
         }
         Ok(None)
@@ -274,28 +297,73 @@ impl Parser {
                 texture_layers,
             });
         }
+        let _min_resolution = r.u32();
+        let final_resolution = r.u32();
+        for _ in 0..3 {
+            r.u32(); // quality factors
+        }
+        let mut inverse_quant = [0f32; 5];
+        for q in &mut inverse_quant {
+            *q = r.f32();
+        }
+        // Normal crease / update / tolerance and the skeleton follow; the
+        // viewer needs neither.
         if r.overrun() {
             return Err(U3dError::Damaged(format!("mesh declaration {name}")));
         }
+        let exclude_normals = attributes & 1 != 0;
+        self.clods.push(Some(Clod::new(
+            exclude_normals,
+            shading.clone(),
+            inverse_quant,
+            final_resolution.max(max_positions),
+            max_faces,
+        )));
         self.scene.meshes.push(Mesh {
             name,
-            exclude_normals: attributes & 1 != 0,
+            exclude_normals,
             shading,
             max_faces,
-            max_positions,
+            max_positions: final_resolution.max(max_positions),
             ..Default::default()
         });
         Ok(())
     }
 
-    fn base_mesh(&mut self, data: &[u8]) -> Result<(), U3dError> {
+    /// Base or progressive mesh continuation. Damage is a warning: the mesh
+    /// keeps what was decoded before.
+    fn mesh_continuation(&mut self, data: &[u8], progressive: bool) {
         let mut r = self.reader(data);
         let name = r.string();
         let _chain_index = r.u32();
         let Some(mi) = self.scene.meshes.iter().position(|m| m.name == name) else {
-            self.warn(format!("base mesh {name} without declaration"));
-            return Ok(());
+            self.warn(format!("mesh data for undeclared mesh {name}"));
+            return;
         };
+        let Some(mut clod) = self.clods[mi].take() else {
+            return;
+        };
+        let result = if progressive {
+            clod.progressive(&mut r)
+        } else {
+            self.base_mesh(&mut r, &name, &mut clod)
+        };
+        match result {
+            Ok(()) => self.clods[mi] = Some(clod),
+            Err(e) => {
+                self.warn(format!("mesh {name}: {e}"));
+                // Keep what was decoded so far.
+                clod.finish(&mut self.scene.meshes[mi]);
+            }
+        }
+    }
+
+    fn base_mesh(
+        &mut self,
+        r: &mut BitReader,
+        name: &str,
+        clod: &mut Clod,
+    ) -> Result<(), U3dError> {
         let counts: Vec<u32> = (0..6).map(|_| r.u32()).collect();
         let (faces, positions, normals, diffuse, specular, tex) = (
             counts[0], counts[1], counts[2], counts[3], counts[4], counts[5],
@@ -303,28 +371,48 @@ impl Parser {
         if counts.iter().any(|c| *c > MAX_ELEMENTS) {
             return Err(U3dError::TooLarge(format!("base mesh {name}")));
         }
-        // Every position needs 12 bytes, every color/coord 16: cheap sanity
-        // check before allocating.
-        let need =
-            positions as u64 * 12 + normals as u64 * 12 + (diffuse + specular + tex) as u64 * 16;
-        if need > data.len() as u64 {
-            return Err(U3dError::Damaged(format!(
-                "base mesh {name}: counts exceed data"
-            )));
-        }
-        let mesh = &self.scene.meshes[mi];
-        let shading = mesh.shading.clone();
-        let exclude_normals = mesh.exclude_normals;
+        let shading = clod.shading.clone();
+        let exclude_normals = clod.exclude_normals;
+        let layers = shading
+            .iter()
+            .map(|s| s.texture_layers as usize)
+            .max()
+            .unwrap_or(0);
 
         let v3 = |r: &mut BitReader| [r.f32(), r.f32(), r.f32()];
         let v4 = |r: &mut BitReader| [r.f32(), r.f32(), r.f32(), r.f32()];
-        let p: Vec<[f32; 3]> = (0..positions).map(|_| v3(&mut r)).collect();
-        let n: Vec<[f32; 3]> = (0..normals).map(|_| v3(&mut r)).collect();
-        let d: Vec<[f32; 4]> = (0..diffuse).map(|_| v4(&mut r)).collect();
-        let s: Vec<[f32; 4]> = (0..specular).map(|_| v4(&mut r)).collect();
-        let t: Vec<[f32; 4]> = (0..tex).map(|_| v4(&mut r)).collect();
+        let read3 = |r: &mut BitReader, n: u32| -> Result<Vec<[f32; 3]>, U3dError> {
+            let mut v = Vec::new();
+            for _ in 0..n {
+                if r.overrun() {
+                    return Err(U3dError::Damaged(format!(
+                        "base mesh {name}: data ends early"
+                    )));
+                }
+                v.push(v3(r));
+            }
+            Ok(v)
+        };
+        let read4 = |r: &mut BitReader, n: u32| -> Result<Vec<[f32; 4]>, U3dError> {
+            let mut v = Vec::new();
+            for _ in 0..n {
+                if r.overrun() {
+                    return Err(U3dError::Damaged(format!(
+                        "base mesh {name}: data ends early"
+                    )));
+                }
+                v.push(v4(r));
+            }
+            Ok(v)
+        };
+        let p = read3(r, positions)?;
+        let n = read3(r, normals)?;
+        let d = read4(r, diffuse)?;
+        let s = read4(r, specular)?;
+        let t = read4(r, tex)?;
 
-        let mut f = Vec::with_capacity(faces.min(positions.saturating_mul(4)) as usize);
+        let mut f = Vec::new();
+        let mut tex_faces: Vec<Vec<[u32; 3]>> = vec![Vec::new(); layers];
         for _ in 0..faces {
             if r.overrun() {
                 return Err(U3dError::Damaged(format!("base mesh {name}: faces")));
@@ -341,7 +429,7 @@ impl Parser {
             let mut nrm = [0u32; 3];
             let mut dif = [0u32; 3];
             let mut spe = [0u32; 3];
-            let mut tx = [0u32; 3];
+            let mut tx = vec![[0u32; 3]; layers];
             for c in 0..3 {
                 face.position[c] = r.compressed_u32(STATIC_FULL + positions);
                 if !exclude_normals {
@@ -353,33 +441,27 @@ impl Parser {
                 if desc.attributes & 2 != 0 {
                     spe[c] = r.compressed_u32(STATIC_FULL + specular);
                 }
-                for layer in 0..desc.texture_layers {
+                for layer in 0..desc.texture_layers as usize {
                     let i = r.compressed_u32(STATIC_FULL + tex);
-                    if layer == 0 {
-                        tx[c] = i;
+                    if let Some(l) = tx.get_mut(layer) {
+                        l[c] = i;
                     }
                 }
             }
-            let ok = |idx: &[u32; 3], len: u32| idx.iter().all(|i| *i < len);
-            if !ok(&face.position, positions) {
+            if face.position.iter().any(|i| *i >= positions) {
                 return Err(U3dError::Damaged(format!(
                     "base mesh {name}: position index"
                 )));
             }
-            face.normal = (!exclude_normals && ok(&nrm, normals)).then_some(nrm);
-            face.diffuse = (desc.attributes & 1 != 0 && ok(&dif, diffuse)).then_some(dif);
-            face.specular = (desc.attributes & 2 != 0 && ok(&spe, specular)).then_some(spe);
-            face.tex = (desc.texture_layers > 0 && ok(&tx, tex)).then_some(tx);
+            face.normal = (!exclude_normals).then_some(nrm);
+            face.diffuse = (desc.attributes & 1 != 0).then_some(dif);
+            face.specular = (desc.attributes & 2 != 0).then_some(spe);
+            for (l, v) in tx.into_iter().enumerate() {
+                tex_faces[l].push(v);
+            }
             f.push(face);
         }
-        let mesh = &mut self.scene.meshes[mi];
-        mesh.positions = p;
-        mesh.normals = n;
-        mesh.diffuse = d;
-        mesh.specular = s;
-        mesh.tex_coords = t;
-        mesh.faces = f;
-        Ok(())
+        clod.set_base(p, n, d, s, t, f, tex_faces)
     }
 
     fn shader(&mut self, data: &[u8]) -> Result<(), U3dError> {
@@ -390,13 +472,31 @@ impl Parser {
         let _alpha_fn = r.u32();
         let _blend_fn = r.u32();
         let _passes = r.u32();
-        let _channels = r.u32();
+        let channels = r.u32();
         let _alpha_channels = r.u32();
         let material = r.string();
+        let mut textures = Vec::new();
+        for _ in 0..(channels & 0xFF).count_ones() {
+            if r.overrun() {
+                break;
+            }
+            let texture = r.string();
+            r.f32(); // intensity
+            r.u8(); // blend function
+            r.u8(); // blend source
+            r.f32(); // blend constant
+            r.u8(); // texture mode
+            for _ in 0..32 {
+                r.f32(); // texture and wrap transforms
+            }
+            r.u8(); // repeat
+            textures.push(texture);
+        }
         self.scene.shaders.push(Shader {
             name,
             attributes,
             material,
+            textures,
         });
         Ok(())
     }
@@ -445,5 +545,89 @@ impl Parser {
             intensity,
         });
         Ok(())
+    }
+
+    fn texture_declaration(&mut self, data: &[u8]) {
+        let mut r = self.reader(data);
+        let name = r.string();
+        let _height = r.u32();
+        let _width = r.u32();
+        let _image_type = r.u8();
+        let count = r.u32().min(16);
+        let mut images = Vec::new();
+        for _ in 0..count {
+            let compression = r.u8();
+            let channels = r.u8();
+            let attributes = r.u16();
+            if attributes & 1 != 0 {
+                let urls = r.u32().min(64);
+                for _ in 0..urls {
+                    r.string();
+                }
+                self.warn(format!(
+                    "texture {name}: external image files are not loaded"
+                ));
+            } else {
+                r.u32(); // byte count
+            }
+            images.push((compression, channels, Vec::new()));
+        }
+        self.texture_parts.retain(|t| t.name != name);
+        self.texture_parts.push(TextureParts { name, images });
+    }
+
+    fn texture_continuation(&mut self, data: &[u8]) {
+        let mut r = self.reader(data);
+        let name = r.string();
+        let index = r.u32() as usize;
+        // Image data is raw bytes after the two fields (byte-aligned: no
+        // compressed value precedes them).
+        let start = r.byte_position().min(data.len());
+        let Some(t) = self.texture_parts.iter_mut().find(|t| t.name == name) else {
+            return;
+        };
+        if let Some(img) = t.images.get_mut(index) {
+            if img.2.len() + data.len() - start <= MAX_TEXTURE_BYTES {
+                img.2.extend_from_slice(&data[start..]);
+            }
+        }
+    }
+
+    fn finish(&mut self) {
+        for (mi, clod) in self.clods.iter_mut().enumerate() {
+            if let Some(c) = clod.take() {
+                c.finish(&mut self.scene.meshes[mi]);
+            }
+        }
+        for t in std::mem::take(&mut self.texture_parts) {
+            // The color image is the one carrying red (or luminance); alpha
+            // images composed on top are not applied.
+            let color = t
+                .images
+                .iter()
+                .find(|(_, ch, d)| ch & 0x18 != 0 && !d.is_empty())
+                .or_else(|| t.images.iter().find(|(_, _, d)| !d.is_empty()));
+            let Some((compression, _, bytes)) = color else {
+                continue;
+            };
+            let mime = match compression {
+                1 | 3 => "image/jpeg",
+                2 => "image/png",
+                _ => {
+                    self.scene
+                        .warnings
+                        .push(format!("texture {}: TIFF images are not shown", t.name));
+                    continue;
+                }
+            };
+            if t.images.len() > 1 {
+                self.warn(format!("texture {}: only the color image is used", t.name));
+            }
+            self.scene.textures.push(Texture {
+                name: t.name,
+                mime: mime.into(),
+                data: bytes.clone(),
+            });
+        }
     }
 }
