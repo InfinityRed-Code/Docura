@@ -392,3 +392,28 @@ fn encode_ps(cmd: &str) -> String {
     }
     base64::engine::general_purpose::STANDARD.encode(&bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The installer registers the printer through nsis/printer-setup.ps1.
+    /// Its names and paths must match this module, or the app reports the
+    /// printer as missing and never sees its jobs: the installer step still
+    /// used the pre-rename names ("rustpdf") until #5.
+    #[test]
+    fn installer_printer_setup_matches_app() {
+        let script = include_str!("../nsis/printer-setup.ps1");
+        let hooks = include_str!("../nsis/hooks.nsi");
+        assert!(script.contains(&format!("$PrinterName = '{PRINTER_NAME}'")));
+        assert!(hooks.contains(&format!("!define DOCURA_PRINTER_NAME \"{PRINTER_NAME}\"")));
+        assert!(script.contains("$DriverName  = 'Microsoft PS Class Driver'"));
+
+        let name = |p: &Path| p.file_name().unwrap().to_string_lossy().into_owned();
+        let spool = spool_dir();
+        let base = name(spool.parent().unwrap());
+        assert!(script.contains(&format!("Join-Path $env:ProgramData '{base}'")));
+        assert!(script.contains(&format!("Join-Path $BaseDir '{}'", name(&spool))));
+        assert!(script.contains(&format!("Join-Path $SpoolDir '{}'", name(&port_path()))));
+    }
+}

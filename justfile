@@ -34,9 +34,21 @@ stop:
     -Get-Process desktop-tauri -ErrorAction SilentlyContinue | Stop-Process -Force
     -Get-NetTCPConnection -LocalPort 1420 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 
-# Release build of desktop app
-build: pdfium
+# Stage Tesseract OCR into vendor/tesseract (the installer bundles it; needs 7-Zip)
+tesseract:
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-tesseract.ps1
+
+# Release build of desktop app (NSIS installer)
+build: pdfium tesseract
     cd {{tauri_dir}}; & ./ui/node_modules/.bin/tauri.CMD build
+
+# Source archive for the bundled Tesseract into dist/ (GPL/LGPL source offer; attach to the GitHub release, not part of the installer)
+tesseract-sources:
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-tesseract-sources.ps1
+
+# Everything a GitHub release needs: the installer and the Tesseract source archive
+release: build tesseract-sources
+    @Write-Host "Attach to the GitHub release: target/release/bundle/nsis/*-setup.exe and dist/docura-pdf-tesseract-sources-*.zip"
 
 # Clean artifacts then relaunch dev
 rebuild: clean dev
@@ -82,3 +94,5 @@ doctor:
     @Write-Host "== pdfium =="
     @if (Test-Path vendor/pdfium/pdfium.dll) { Write-Host "ok: vendor/pdfium/pdfium.dll" } else { Write-Host "MISSING: vendor/pdfium/pdfium.dll"; exit 1 }
     @if (Test-Path {{res_dll}}) { Write-Host "ok: {{res_dll}}" } else { Write-Host "MISSING (run: just pdfium): {{res_dll}}" }
+    @Write-Host "== tesseract (installer only) =="
+    @if (Test-Path vendor/tesseract/tesseract.exe) { Write-Host "ok: vendor/tesseract" } else { Write-Host "MISSING (run: just tesseract): vendor/tesseract" }

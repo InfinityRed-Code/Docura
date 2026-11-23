@@ -18,6 +18,9 @@ vendor/pdfium/*.so
 vendor/pdfium/*.dylib
 vendor/pdfium/*.lib
 
+# Tesseract OCR staged for the installer (scripts/fetch-tesseract.ps1)
+vendor/tesseract/
+
 # IDE
 .idea/
 .vscode/*

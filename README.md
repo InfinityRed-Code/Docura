@@ -126,8 +126,10 @@ Full detail in [`docs/architecture.md`](docs/architecture.md).
 - Windows: MSVC C++ Build Tools + Windows SDK + WebView2 runtime
 - Ghostscript (optional — PDF/A export and the virtual printer). The settings
   dialog detects it and links to the installer.
-- Tesseract (optional — OCR). Detected via the `TESSERACT` env var, PATH, or a
-  standard install; the UB-Mannheim build is recommended.
+- Tesseract (OCR). The Windows installer bundles it (UB-Mannheim build with
+  `deu` + `eng`); `just tesseract` stages it into `vendor/tesseract` and needs
+  7-Zip. At runtime the app prefers the bundled copy (debug builds: the staged
+  one), then the `TESSERACT` env var, PATH, or a standard install.
 - LibreOffice (optional — Office → PDF conversion via `soffice --headless`).
 
 ## Build
@@ -160,12 +162,51 @@ looks in subfolders of cwd for `tauri.conf.json`. Incremental rebuilds are
 Release bundle (NSIS installer):
 
 ```
+just build
+```
+
+or by hand:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/fetch-tesseract.ps1
 cd apps/desktop-tauri
 ./ui/node_modules/.bin/tauri build
 ```
 
-The installer ships `pdfium.dll` as a bundle resource and offers to register
-the virtual printer.
+The installer installs per machine (`C:\Program Files\Docura PDF`) and asks
+for administrator rights. It ships `pdfium.dll` as a bundle resource and
+Tesseract in `<install dir>\tesseract` (the build stops if
+`vendor/tesseract` is not staged), and registers the "Docura PDF" virtual
+printer via `nsis/printer-setup.ps1` (log:
+`%ProgramData%\DocuraPDF\printer-setup.log`; a failure is shown, not
+swallowed). An older per-user installation is removed first, app data is
+kept. Hooks: `apps/desktop-tauri/src-tauri/nsis/hooks.nsi`.
+
+### Publishing a release
+
+Every GitHub release whose installer ships the Tesseract bundle must also
+carry its source archive: the installed `tesseract\THIRD-PARTY-NOTICES.txt`
+promises it there (GPL/LGPL source offer for JBIG-KIT and GNU libiconv,
+plus Tesseract, Leptonica, LibTIFF and the other libraries). It is not part
+of the installer.
+
+```
+just release          # = just build + just tesseract-sources
+gh release create v<version> -R InfinityRed-Code/rustpdf \
+  "target/release/bundle/nsis/Docura PDF_<version>_x64-setup.exe" \
+  dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip
+```
+
+For an existing release: `gh release upload v<version>
+dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip`. The archive only
+changes with the Tesseract bundle, so the same file is attached again for
+each release. `scripts/fetch-tesseract-sources.ps1` builds it
+(~75 MB, every input pinned by SHA-256; `README.txt` and `SHA256SUMS.txt`
+inside). When bumping Tesseract, update `fetch-tesseract.ps1`,
+`fetch-tesseract-sources.ps1`, `tesseract-THIRD-PARTY-NOTICES.txt` and
+`tesseract-licenses/` together; `fetch-tesseract.ps1` refuses to stage if
+the versions disagree. The offer requires the archive to stay downloadable
+for at least three years after the last release that ships the bundle.
 
 ## Versioning
 
@@ -199,3 +240,15 @@ compatible with the above: PDFium is Apache-2.0 / BSD-3-Clause; lopdf,
 pdfium-render, image, lru and the other workspace crates are MIT / Apache-2.0.
 These permissive upstream licenses impose no restriction on the project's own
 noncommercial/commercial dual-licensing.
+
+The Windows installer also ships Tesseract OCR in `<install dir>\tesseract`
+as a separate program the app only starts; it is not covered by the
+PolyForm / commercial license above. The folder holds the unmodified
+UB-Mannheim build with the DLLs it loads, mostly permissively licensed;
+`libjbig-0.dll` is GPL-2.0-or-later and `libiconv-2.dll` LGPL-2.1-or-later,
+so Tesseract as a whole is distributed under GPL-3.0-or-later. Full license
+texts ship in `tesseract\licenses\` (from `scripts/tesseract-licenses/`),
+`tesseract\THIRD-PARTY-NOTICES.txt` (from
+`scripts/tesseract-THIRD-PARTY-NOTICES.txt`) maps every file to its license
+and points to the source archive on the GitHub release (see "Publishing a
+release").
