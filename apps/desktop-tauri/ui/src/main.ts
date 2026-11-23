@@ -17,6 +17,7 @@ import { initOcr } from "./ocr";
 import { initChrome } from "./chrome";
 import { initColorPopover } from "./colorpicker";
 import { initFonts } from "./fonts";
+import { initUpdates } from "./update";
 import { dom } from "./dom";
 
 // 0. Resolve language (German default) before the template renders.
@@ -41,6 +42,7 @@ initProtect();
 initExport();
 initOcr();
 initChrome();
+initUpdates();
 
 // 3. Thumb-click goto bridge — edit.ts dispatches this when a thumb is clicked
 // in the Reader tab (avoids a viewer<->edit import cycle).

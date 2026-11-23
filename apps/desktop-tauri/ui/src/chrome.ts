@@ -548,11 +548,20 @@ export function initChrome() {
   const navItems = Array.from(
     document.querySelectorAll<HTMLButtonElement>("#settingsNav .settingsNavItem"),
   );
+  // The last sections are too short to scroll to the top, so the scrollspy
+  // would keep an earlier tab lit: a clicked tab stays active until the user
+  // scrolls by hand.
+  let pinnedNav: HTMLButtonElement | null = null;
   navItems.forEach((btn) => {
     btn.addEventListener("click", () => {
+      pinnedNav = btn;
+      navItems.forEach((n) => n.classList.toggle("active", n === btn));
       document.getElementById(btn.dataset.sec!)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   });
+  for (const ev of ["wheel", "keydown", "pointerdown"]) {
+    settingsBody.addEventListener(ev, () => { pinnedNav = null; }, { passive: true });
+  }
   // Each callback only reports sections whose intersection *changed*, so we
   // keep a running map of all sections' visibility and pick the topmost one in
   // DOM order — otherwise the last-changed section wins and highlighting sticks.
@@ -560,6 +569,7 @@ export function initChrome() {
   const spy = new IntersectionObserver(
     (entries) => {
       entries.forEach((e) => secVisible.set(e.target.id, e.isIntersecting));
+      if (pinnedNav) return;
       const active = navItems.find((n) => secVisible.get(n.dataset.sec!));
       if (active) navItems.forEach((n) => n.classList.toggle("active", n === active));
     },

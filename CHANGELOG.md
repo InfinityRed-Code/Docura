@@ -12,7 +12,18 @@ scope each tag landed.
 ## [Unreleased]
 
 Installer: a new version installs over the installed one, no uninstall first
-(#4).
+(#4). The app points out new versions (#18).
+
+### Added
+- **Update hint (#18).** At startup (at most once a day) and on "Check for
+  updates" in Settings → Updates, the app asks GitHub for the latest release.
+  A newer version shows a small card above the status bar with the version,
+  the first paragraph of the release notes, "Download" (opens the release's
+  setup in the browser; it updates in place since #4) and "Release notes".
+  Closing the card hides that version at startup; a newer one shows again.
+  The startup check can be turned off in Settings → Updates. Without a
+  network, or when GitHub answers with an error, it stays silent. Only the
+  request itself is sent: no identifiers, no version or usage data.
 
 ### Fixed
 - **Updating no longer means uninstalling first (#4).** The setup of a newer
