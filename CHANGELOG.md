@@ -11,8 +11,15 @@ scope each tag landed.
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-11-23
+
 Installer: a new version installs over the installed one, no uninstall first
 (#4). The app points out new versions (#18).
+
+Coming from 1.3.1: install 1.3.2 once by hand, since 1.3.1 does not look for
+new versions yet. Run the setup over the installed copy; it updates it in
+place (no uninstall; settings, signatures, shortcuts and the printer stay).
+From 1.3.2 on, the app points out newer versions itself.
 
 ### Added
 - **Update hint (#18).** At startup (at most once a day) and on "Check for
