@@ -554,6 +554,40 @@ impl LineEnding {
             LineEnding::ClosedArrow => b"ClosedArrow",
         }
     }
+
+    /// The ending for a PDF / XFDF line-ending name; styles this writer
+    /// cannot draw (Circle, Square, …) come back as `None`.
+    pub fn from_name(name: &str) -> LineEnding {
+        match name {
+            "OpenArrow" => LineEnding::OpenArrow,
+            "ClosedArrow" => LineEnding::ClosedArrow,
+            _ => LineEnding::None,
+        }
+    }
+}
+
+/// Path operators for a line ending whose tip is at `tip`, pointing along
+/// `dir`: stroked (open arrow) or filled and stroked (closed arrow).
+fn line_ending_ops(tip: (f32, f32), dir: (f32, f32), kind: LineEnding, width: f32) -> String {
+    let head_size = (width * 6.0).max(8.0);
+    let len = dir.0.hypot(dir.1).max(1e-6);
+    let (ux, uy) = (dir.0 / len, dir.1 / len);
+    // Perpendicular.
+    let (perp_x, perp_y) = (-uy, ux);
+    let (base_x, base_y) = (tip.0 - ux * head_size, tip.1 - uy * head_size);
+    let half = head_size * 0.45;
+    let (p1x, p1y) = (base_x + perp_x * half, base_y + perp_y * half);
+    let (p2x, p2y) = (base_x - perp_x * half, base_y - perp_y * half);
+    let (tx, ty) = tip;
+    match kind {
+        LineEnding::None => String::new(),
+        LineEnding::OpenArrow => {
+            format!("{p1x:.3} {p1y:.3} m {tx:.3} {ty:.3} l {p2x:.3} {p2y:.3} l S\n")
+        }
+        LineEnding::ClosedArrow => {
+            format!("{tx:.3} {ty:.3} m {p1x:.3} {p1y:.3} l {p2x:.3} {p2y:.3} l h B\n")
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -574,8 +608,9 @@ pub enum ShapeKind {
     /// border as a row of arcs — Acrobat's cloud (/BE /S /C, /IT
     /// /PolygonCloud).
     Polygon { cloudy: bool },
-    /// Open path through `ShapeAnnotation::vertices` (PDF /PolyLine).
-    PolyLine,
+    /// Open path through `ShapeAnnotation::vertices` (PDF /PolyLine), with
+    /// optional endings at the first and the last point.
+    PolyLine { start: LineEnding, end: LineEnding },
 }
 
 #[derive(Clone, Debug)]
@@ -606,7 +641,7 @@ pub fn add_shape_annotation(
     let view = page_view(doc, page_id);
     let bw = annot.border_width.max(0.0);
 
-    if let ShapeKind::Polygon { .. } | ShapeKind::PolyLine = annot.kind {
+    if let ShapeKind::Polygon { .. } | ShapeKind::PolyLine { .. } = annot.kind {
         return add_path_shape(doc, page_id, view, annot);
     }
 
@@ -631,7 +666,7 @@ pub fn add_shape_annotation(
             let ury = p0y.max(p1y) + pad;
             ("Line", (llx, lly, urx, ury), Some((p0x, p0y, p1x, p1y)))
         }
-        ShapeKind::Polygon { .. } | ShapeKind::PolyLine => unreachable!("handled above"),
+        ShapeKind::Polygon { .. } | ShapeKind::PolyLine { .. } => unreachable!("handled above"),
     };
 
     let mut d = base_annot_dict(
@@ -750,8 +785,17 @@ fn add_path_shape(
         .map(|&(x, y)| crate::point_to_pdf_space(x, y, view.0, view.1))
         .collect();
     let radius = if cloudy { cloud_radius(&pts) } else { 0.0 };
-    // /Rect encloses the outline, the stroke and (cloud) the bumps.
-    let pad = bw / 2.0 + radius + 2.0;
+    let endings = match annot.kind {
+        ShapeKind::PolyLine { start, end } => (start, end),
+        _ => (LineEnding::None, LineEnding::None),
+    };
+    let has_endings = endings != (LineEnding::None, LineEnding::None);
+    // /Rect encloses the outline, the stroke, the bumps (cloud) and the
+    // line endings.
+    let mut pad = bw / 2.0 + radius + 2.0;
+    if has_endings {
+        pad = pad.max((bw * 6.0).max(8.0) + bw + 2.0);
+    }
     let llx = pts.iter().map(|p| p.0).fold(f32::MAX, f32::min) - pad;
     let lly = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min) - pad;
     let urx = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max) + pad;
@@ -780,9 +824,30 @@ fn add_path_shape(
         d.set("BE", dictionary! { "S" => "C", "I" => 1 });
         d.set("IT", Object::Name(b"PolygonCloud".to_vec()));
     }
+    if has_endings {
+        d.set(
+            "LE",
+            Object::Array(vec![
+                Object::Name(endings.0.name().to_vec()),
+                Object::Name(endings.1.name().to_vec()),
+            ]),
+        );
+    }
 
     let local: Vec<(f32, f32)> = pts.iter().map(|&(x, y)| (x - llx, y - lly)).collect();
-    let content = build_path_appearance(&local, closed, cloudy.then_some(radius), bw.max(0.5), annot.stroke_color, fill);
+    let mut content = build_path_appearance(&local, closed, cloudy.then_some(radius), bw.max(0.5), annot.stroke_color, fill);
+    if has_endings {
+        // Heads at the first and the last point, pointing outwards, filled
+        // with the stroke color.
+        let n = local.len();
+        let [r, g, b] = annot.stroke_color.map(|v| v.clamp(0.0, 1.0));
+        let mut heads = format!("q\n{r:.3} {g:.3} {b:.3} RG\n{r:.3} {g:.3} {b:.3} rg\n{:.3} w\n", bw.max(0.5));
+        let dir = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0, a.1 - b.1);
+        heads += &line_ending_ops(local[0], dir(local[0], local[1]), endings.0, bw.max(0.5));
+        heads += &line_ending_ops(local[n - 1], dir(local[n - 1], local[n - 2]), endings.1, bw.max(0.5));
+        heads.push_str("Q\n");
+        content.extend_from_slice(heads.as_bytes());
+    }
     let form_id = make_form_xobject(doc, urx - llx, ury - lly, content, None);
     d.set("AP", dictionary! { "N" => form_id });
     if let Some(s) = &annot.subject {
@@ -901,35 +966,9 @@ fn build_line_appearance(
     // Line itself.
     let _ = write!(&mut buf, "{x0:.3} {y0:.3} m {x1:.3} {y1:.3} l S\n");
 
-    let head_size = (width * 6.0).max(8.0);
-    let emit_head = |tip_x: f32, tip_y: f32, dir_x: f32, dir_y: f32, kind: LineEnding, buf: &mut Vec<u8>| {
-        let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(1e-6);
-        let ux = dir_x / len;
-        let uy = dir_y / len;
-        // Perpendicular.
-        let perp_x = -uy;
-        let perp_y = ux;
-        let base_x = tip_x - ux * head_size;
-        let base_y = tip_y - uy * head_size;
-        let half = head_size * 0.45;
-        let p1x = base_x + perp_x * half;
-        let p1y = base_y + perp_y * half;
-        let p2x = base_x - perp_x * half;
-        let p2y = base_y - perp_y * half;
-        match kind {
-            LineEnding::None => {}
-            LineEnding::OpenArrow => {
-                let _ = write!(buf, "{p1x:.3} {p1y:.3} m {tip_x:.3} {tip_y:.3} l {p2x:.3} {p2y:.3} l S\n");
-            }
-            LineEnding::ClosedArrow => {
-                let _ = write!(buf, "{tip_x:.3} {tip_y:.3} m {p1x:.3} {p1y:.3} l {p2x:.3} {p2y:.3} l h B\n");
-            }
-        }
-    };
-    // End head: direction from start → end.
-    emit_head(x1, y1, x1 - x0, y1 - y0, le_end, &mut buf);
-    // Start head: direction from end → start.
-    emit_head(x0, y0, x0 - x1, y0 - y1, le_start, &mut buf);
+    // End head: direction from start → end; start head: end → start.
+    buf.extend_from_slice(line_ending_ops((x1, y1), (x1 - x0, y1 - y0), le_end, width).as_bytes());
+    buf.extend_from_slice(line_ending_ops((x0, y0), (x0 - x1, y0 - y1), le_start, width).as_bytes());
 
     buf.extend_from_slice(b"Q\n");
     buf
@@ -1888,7 +1927,7 @@ mod tests {
         assert!(r[0] <= 50.0 && r[1] <= 592.0 && r[2] >= 150.0 && r[3] >= 692.0, "{r:?}");
 
         let check = vec![(10.0, 20.0), (15.0, 28.0), (30.0, 5.0)];
-        let id = add_shape_annotation(&mut doc, 0, &shape(ShapeKind::PolyLine, check)).unwrap();
+        let id = add_shape_annotation(&mut doc, 0, &shape(ShapeKind::PolyLine { start: LineEnding::None, end: LineEnding::None }, check)).unwrap();
         let d = doc.get_dictionary(id).unwrap();
         assert_eq!(d.get(b"Subtype").unwrap().as_name().unwrap(), b"PolyLine");
         assert!(!d.has(b"IC"), "an open path has no interior");
@@ -1900,6 +1939,24 @@ mod tests {
         assert_eq!(listed[0].subject.as_deref(), Some("Stern"));
 
         assert!(add_shape_annotation(&mut doc, 0, &shape(ShapeKind::Polygon { cloudy: false }, vec![(0.0, 0.0), (1.0, 1.0)])).is_err());
+    }
+
+    #[test]
+    fn polyline_endings_are_written_and_drawn() {
+        let mut doc = one_page_doc();
+        let pts = vec![(100.0, 100.0), (160.0, 140.0), (220.0, 100.0)];
+        let kind = ShapeKind::PolyLine { start: LineEnding::OpenArrow, end: LineEnding::ClosedArrow };
+        let id = add_shape_annotation(&mut doc, 0, &shape(kind, pts)).unwrap();
+        let d = doc.get_dictionary(id).unwrap().clone();
+        let le: Vec<&[u8]> = d.get(b"LE").unwrap().as_array().unwrap().iter().map(|o| o.as_name().unwrap()).collect();
+        assert_eq!(le, [b"OpenArrow".as_slice(), b"ClosedArrow".as_slice()]);
+        let (_, content) = markup_ap_stream(&doc, id);
+        let content = String::from_utf8_lossy(&content);
+        // One open head (stroked), one closed head (filled).
+        assert!(content.contains(" l S\n") && content.contains(" l h B\n"), "{content}");
+        // /Rect leaves room for the heads around the end points.
+        let r: Vec<f32> = d.get(b"Rect").unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect();
+        assert!(r[0] <= 100.0 - 8.0 && r[2] >= 220.0 + 8.0, "{r:?}");
     }
 
     #[test]

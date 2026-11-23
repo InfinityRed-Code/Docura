@@ -23,6 +23,12 @@ Edit cleanup (#8): more shapes, inline text format, one color picker, more fonts
   Polygon and polyline are placed click by click (double click or Enter
   finishes, Backspace removes the last point, Esc cancels).
 - **Fill color** for closed shapes (none by default).
+- **XFDF export / import of shapes** now carries polygons (incl. the cloud)
+  and polylines with their `<vertices>`, plus for every shape the fill
+  (`interior-color`), border `width`, cloudy border (`style`, `intensity`),
+  `intent`, line endpoints (`start` / `end`, so arrows keep their direction),
+  line endings (`head` / `tail`, polylines can now carry arrow heads too) and
+  `subject`. Acrobat-style `x,y;x,y` vertex lists are read as well.
 - **Color picker** for every color button (markup / shape color, fill, sign
   marks, text and background color): 16 preset colors, recently used custom
   colors and a custom picker (saturation / brightness field, hue slider, hex

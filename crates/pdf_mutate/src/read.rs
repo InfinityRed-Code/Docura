@@ -65,7 +65,12 @@ fn read_string_field(doc: &Document, dict: &lopdf::Dictionary, key: &[u8]) -> Op
 }
 
 fn read_color(doc: &Document, dict: &lopdf::Dictionary) -> Option<[f32; 3]> {
-    let obj = dict.get(b"C").ok()?;
+    read_color_key(doc, dict, b"C")
+}
+
+/// An RGB color array (gray and CMYK converted) under `key`.
+fn read_color_key(doc: &Document, dict: &lopdf::Dictionary, key: &[u8]) -> Option<[f32; 3]> {
+    let obj = dict.get(key).ok()?;
     let arr = obj_as_array(doc, obj)?;
     match arr.len() {
         1 => {
@@ -197,8 +202,87 @@ fn read_freetext_style(doc: &Document, dict: &lopdf::Dictionary) -> FreeTextStyl
     style
 }
 
+/// Geometry and border styling of a shape annotation (Square, Circle, Line,
+/// Polygon, PolyLine) beyond what `AnnotationInfo` carries — what XFDF
+/// needs to write the shape back. Points are in displayed top-origin space,
+/// like `AnnotationInfo::rect_pt`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ShapeDetail {
+    /// /Vertices of a Polygon / PolyLine.
+    pub vertices: Vec<(f32, f32)>,
+    /// /L of a Line: start and end point.
+    pub line: Option<[(f32, f32); 2]>,
+    /// /IC interior (fill) color.
+    pub interior: Option<[f32; 3]>,
+    /// /BS /W (or /Border [h v w]).
+    pub border_width: Option<f32>,
+    /// /BE /I when the border effect is cloudy (/S /C).
+    pub cloudy: Option<f32>,
+    /// /IT intent name ("PolygonCloud", "LineArrow", …).
+    pub intent: Option<String>,
+    /// /LE line-ending names at start and end.
+    pub endings: Option<(String, String)>,
+}
+
+fn read_shape_detail(
+    doc: &Document,
+    dict: &lopdf::Dictionary,
+    subtype: &str,
+    vb: [f32; 4],
+    rot: i32,
+) -> Option<ShapeDetail> {
+    if !matches!(subtype, "Square" | "Circle" | "Line" | "Polygon" | "PolyLine") {
+        return None;
+    }
+    let get = |key: &[u8]| dict.get(key).ok().and_then(|o| resolve_obj(doc, o));
+    let nums = |key: &[u8]| -> Vec<f32> {
+        get(key)
+            .and_then(|o| o.as_array().ok())
+            .map(|a| a.iter().filter_map(obj_to_f32).collect())
+            .unwrap_or_default()
+    };
+    let points = |v: Vec<f32>| -> Vec<(f32, f32)> {
+        v.chunks_exact(2).map(|c| pdf_to_view(c[0], c[1], vb, rot)).collect()
+    };
+    let name = |o: &Object| o.as_name().ok().map(|n| String::from_utf8_lossy(n).to_string());
+
+    let mut d = ShapeDetail {
+        interior: read_color_key(doc, dict, b"IC"),
+        intent: get(b"IT").and_then(name),
+        ..Default::default()
+    };
+    if matches!(subtype, "Polygon" | "PolyLine") {
+        d.vertices = points(nums(b"Vertices"));
+    }
+    if subtype == "Line" {
+        let l = points(nums(b"L"));
+        if l.len() == 2 {
+            d.line = Some([l[0], l[1]]);
+        }
+    }
+    d.border_width = get(b"BS")
+        .and_then(|o| o.as_dict().ok())
+        .and_then(|bs| bs.get(b"W").ok().and_then(obj_to_f32))
+        .or_else(|| nums(b"Border").get(2).copied());
+    if let Some(be) = get(b"BE").and_then(|o| o.as_dict().ok()) {
+        if be.get(b"S").ok().and_then(name).as_deref() == Some("C") {
+            d.cloudy = Some(be.get(b"I").ok().and_then(obj_to_f32).unwrap_or(0.0));
+        }
+    }
+    if let Some(le) = get(b"LE").and_then(|o| o.as_array().ok()) {
+        let n = |i: usize| le.get(i).and_then(name).unwrap_or_else(|| "None".into());
+        d.endings = Some((n(0), n(1)));
+    }
+    Some(d)
+}
+
 pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
-    let mut out: Vec<AnnotationInfo> = Vec::new();
+    list_annotations_detailed(doc).into_iter().map(|(a, _)| a).collect()
+}
+
+/// `list_annotations` plus the shape geometry XFDF export writes.
+pub(crate) fn list_annotations_detailed(doc: &Document) -> Vec<(AnnotationInfo, Option<ShapeDetail>)> {
+    let mut out: Vec<(AnnotationInfo, Option<ShapeDetail>)> = Vec::new();
     for (page_idx, page_id) in doc.page_iter().enumerate() {
         let Ok(page_dict) = doc.get_dictionary(page_id) else {
             continue;
@@ -252,8 +336,9 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
             let id = read_string_field(doc, dict, b"NM").unwrap_or_else(|| fallback_id(annot_oid));
 
             let freetext = (subtype == "FreeText").then(|| read_freetext_style(doc, dict));
+            let shape = read_shape_detail(doc, dict, &subtype, vb, rot);
 
-            out.push(AnnotationInfo {
+            out.push((AnnotationInfo {
                 freetext,
                 id,
                 page: page_idx as u32,
@@ -267,7 +352,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotationInfo> {
                 modified,
                 icon,
                 subject,
-            });
+            }, shape));
         }
     }
     out

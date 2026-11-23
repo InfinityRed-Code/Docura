@@ -2176,7 +2176,10 @@ async fn add_shape(
         },
         "polygon" => pdf_mutate::ShapeKind::Polygon { cloudy: false },
         "cloud" => pdf_mutate::ShapeKind::Polygon { cloudy: true },
-        "polyline" => pdf_mutate::ShapeKind::PolyLine,
+        "polyline" => pdf_mutate::ShapeKind::PolyLine {
+            start: pdf_mutate::LineEnding::None,
+            end: pdf_mutate::LineEnding::None,
+        },
         other => return Err(format!("unknown shape kind: {other}")),
     };
     let engine = state.engine.clone();
