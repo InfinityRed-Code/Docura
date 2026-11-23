@@ -54,6 +54,7 @@ class DomRefs {
   gsStatusEl!: HTMLDivElement;
   gsInstallEl!: HTMLDivElement;
   pdfaLevelEl!: HTMLSelectElement;
+  pdfaEngineEl!: HTMLSelectElement;
   vpStatusEl!: HTMLDivElement;
   vpPathRowEl!: HTMLDivElement;
   vpOutRowEl!: HTMLDivElement;
@@ -130,6 +131,7 @@ export function initDom() {
   dom.gsStatusEl = document.getElementById("gsStatus") as HTMLDivElement;
   dom.gsInstallEl = document.getElementById("gsInstall") as HTMLDivElement;
   dom.pdfaLevelEl = document.getElementById("pdfaLevel") as HTMLSelectElement;
+  dom.pdfaEngineEl = document.getElementById("pdfaEngine") as HTMLSelectElement;
   dom.vpStatusEl = document.getElementById("vpStatus") as HTMLDivElement;
   dom.vpPathRowEl = document.getElementById("vpPathRow") as HTMLDivElement;
   dom.vpOutRowEl = document.getElementById("vpOutRow") as HTMLDivElement;

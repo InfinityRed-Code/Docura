@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { PDFA_LEVELS, isBuiltin, pdfaErrorText, pdfaLang, pdfaNotesText, syncLevelSelect, type PdfaSaved } from "./pdfa";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -295,9 +296,18 @@ const BAD_COLOR = "var(--danger)";
 
 async function loadDefaultPdfa() {
   try {
-    const v = await invoke<string>("get_default_pdfa");
-    if (["off", "1b", "2b", "3b", "4"].includes(v)) dom.pdfaLevelEl.value = v;
+    const e = await invoke<string>("get_pdfa_engine");
+    if (e === "builtin" || e === "ghostscript") {
+      state.pdfaEngine = e;
+      dom.pdfaEngineEl.value = e;
+    }
   } catch {}
+  try {
+    const v = await invoke<string>("get_default_pdfa");
+    if (v === "off" || (PDFA_LEVELS as readonly string[]).includes(v)) dom.pdfaLevelEl.value = v;
+  } catch {}
+  syncLevelSelect(dom.pdfaLevelEl);
+  syncLevelSelect(dom.convertLevelEl);
 }
 
 async function refreshGhostscript() {
@@ -325,10 +335,12 @@ async function refreshGhostscript() {
 /** Save a PDF/A copy of the open document (Convert tab + Settings). */
 async function runSaveAsPdfa() {
   if (!state.currentDoc) { setStatus(t("st.openFirst")); return; }
-  if (!state.gsInfo.available) await refreshGhostscript();
-  if (!state.gsInfo.available) {
-    setStatus(t("st.gsRequired"));
-    return;
+  if (!isBuiltin()) {
+    if (!state.gsInfo.available) await refreshGhostscript();
+    if (!state.gsInfo.available) {
+      setStatus(t("st.gsRequired"));
+      return;
+    }
   }
   const level = dom.pdfaLevelEl.value === "off" ? "2b" : dom.pdfaLevelEl.value;
   const dest = await save({
@@ -337,20 +349,21 @@ async function runSaveAsPdfa() {
     title: t("lbl.saveAsPdfa"),
   });
   if (!dest || typeof dest !== "string") return;
-  if (!(await confirmFormsLostInPdfa(level))) {
+  if (!isBuiltin() && !(await confirmFormsLostInPdfa(level))) {
     setStatus(t("st.cancelled"));
     return;
   }
   dom.settingsOverlay.classList.add("hidden");
   setStatus(t("st.savingPdfa", { level }));
   try {
-    const label = await invoke<string>("save_as_pdfa", {
+    const res = await invoke<PdfaSaved>("save_as_pdfa", {
       document: state.currentDoc,
-      args: { path: dest, level },
+      args: { path: dest, level, lang: pdfaLang() },
     });
-    setStatus(t("st.savedPdfa", { label, path: dest }));
+    const notes = pdfaNotesText(res.notes);
+    setStatus(t("st.savedPdfa", { label: res.label, path: dest }) + (notes ? ` · ${notes}` : ""));
   } catch (e) {
-    setStatus(t("st.pdfaError", { e: String(e) }));
+    setStatus(t("st.pdfaError", { e: pdfaErrorText(e) }));
   }
 }
 
@@ -533,6 +546,17 @@ export function initChrome() {
   void loadDefaultPdfa();
   dom.pdfaLevelEl.addEventListener("change", () => {
     void invoke("set_default_pdfa", { level: dom.pdfaLevelEl.value }).catch(() => {});
+  });
+  dom.pdfaEngineEl.addEventListener("change", () => {
+    const e = dom.pdfaEngineEl.value === "ghostscript" ? "ghostscript" : "builtin";
+    state.pdfaEngine = e;
+    void invoke("set_pdfa_engine", { engine: e }).catch(() => {});
+    const before = dom.pdfaLevelEl.value;
+    syncLevelSelect(dom.pdfaLevelEl);
+    syncLevelSelect(dom.convertLevelEl);
+    if (dom.pdfaLevelEl.value !== before) {
+      void invoke("set_default_pdfa", { level: dom.pdfaLevelEl.value }).catch(() => {});
+    }
   });
   void refreshGhostscript();
   document.getElementById("settingsBtnTop")!.addEventListener("click", () => {

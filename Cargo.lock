@@ -964,6 +964,7 @@ dependencies = [
  "pdf_export",
  "pdf_fonts",
  "pdf_mutate",
+ "pdf_pdfa",
  "pdf_pdfium",
  "pdf_services",
  "pdf_sign",
