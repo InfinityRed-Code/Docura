@@ -10,9 +10,12 @@ use super::*;
 
 /// One mesh to export. Positions and the optional per-position normals are
 /// in model units; `transform` places the mesh in the world.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ExportMesh {
     pub name: String,
+    /// Name of an [`ExportGroup`] this mesh hangs under; `None` = world.
+    /// `transform` is relative to that group.
+    pub parent: Option<String>,
     pub positions: Vec<[f32; 3]>,
     /// Empty, or one normal per position.
     pub normals: Vec<[f32; 3]>,
@@ -22,8 +25,20 @@ pub struct ExportMesh {
     pub transform: Mat4,
 }
 
+/// A group node (assembly, storey, …) shown as a folder in the model tree.
+#[derive(Debug, Clone, Default)]
+pub struct ExportGroup {
+    /// Must be unique among groups.
+    pub name: String,
+    /// Parent group, declared before this one; `None` = world.
+    pub parent: Option<String>,
+    pub transform: Mat4,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ExportScene {
+    /// Group hierarchy, parents before children.
+    pub groups: Vec<ExportGroup>,
     pub meshes: Vec<ExportMesh>,
     /// Metres per unit (0.001 = millimetres); `None` = unitless.
     pub units_m: Option<f64>,
@@ -74,9 +89,9 @@ fn data(f: impl FnOnce(&mut W)) -> W {
     w
 }
 
-fn parent_world(w: &mut W, transform: &Mat4) {
+fn parent(w: &mut W, parent: &str, transform: &Mat4) {
     w.u32(1);
-    w.string("");
+    w.string(parent);
     for v in transform {
         w.f32(*v);
     }
@@ -96,9 +111,10 @@ fn chain(name: &str, chain_type: u32, modifiers: Vec<(u32, W)>) -> W {
     })
 }
 
-/// Unique, non-empty U3D names (names key the palettes).
-fn unique_names(meshes: &[ExportMesh]) -> Vec<String> {
-    let mut used = std::collections::HashSet::new();
+/// Unique, non-empty U3D names (names key the palettes; group names are
+/// taken first).
+fn unique_names(meshes: &[ExportMesh], groups: &[ExportGroup]) -> Vec<String> {
+    let mut used: std::collections::HashSet<String> = groups.iter().map(|g| g.name.clone()).collect();
     meshes
         .iter()
         .enumerate()
@@ -122,7 +138,11 @@ fn unique_names(meshes: &[ExportMesh]) -> Vec<String> {
 
 /// Encodes `scene` as a U3D file.
 pub fn write(scene: &ExportScene) -> Vec<u8> {
-    let names = unique_names(&scene.meshes);
+    let names = unique_names(&scene.meshes, &scene.groups);
+    let groups: std::collections::HashSet<&str> = scene.groups.iter().map(|g| g.name.as_str()).collect();
+    let parent_of = |p: &Option<String>| -> String {
+        p.as_deref().filter(|n| groups.contains(n)).unwrap_or("").to_string()
+    };
 
     // One shader + material per distinct color.
     let mut colors: Vec<[f32; 4]> = Vec::new();
@@ -178,6 +198,14 @@ pub fn write(scene: &ExportScene) -> Vec<u8> {
         );
     }
 
+    for g in &scene.groups {
+        let node = data(|w| {
+            w.string(&g.name);
+            parent(w, &parent_of(&g.parent), &g.transform);
+        });
+        decl.block(block::MODIFIER_CHAIN, chain(&g.name, 0, vec![(block::GROUP_NODE, node)]));
+    }
+
     let mut cont = W::default();
     for (i, m) in scene.meshes.iter().enumerate() {
         let name = &names[i];
@@ -187,7 +215,7 @@ pub fn write(scene: &ExportScene) -> Vec<u8> {
 
         let model_node = data(|w| {
             w.string(name);
-            parent_world(w, &m.transform);
+            parent(w, &parent_of(&m.parent), &m.transform);
             w.string(&mesh_name);
             w.u32(3); // front and back visible
         });
@@ -316,6 +344,7 @@ mod tests {
     fn tetra(name: &str, color: [f32; 4]) -> ExportMesh {
         ExportMesh {
             name: name.into(),
+            parent: None,
             positions: vec![
                 [0.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],
@@ -334,6 +363,7 @@ mod tests {
         let mut moved = tetra("b", [0.2, 0.4, 0.6, 1.0]);
         moved.transform[12] = 5.0;
         let scene = ExportScene {
+            groups: Vec::new(),
             meshes: vec![
                 tetra("a", [1.0, 0.0, 0.0, 1.0]),
                 moved,
@@ -356,5 +386,31 @@ mod tests {
         assert_eq!(s.nodes[2].shading, vec![vec!["Shader2".to_string()]]);
         assert_eq!(s.materials.len(), 3);
         assert_eq!(s.materials[2].opacity, 0.5);
+    }
+
+    #[test]
+    fn groups_form_the_model_tree() {
+        let mut lifted = IDENTITY;
+        lifted[14] = 3.0;
+        let mut column = tetra("Column", [0.5, 0.5, 0.5, 1.0]);
+        column.parent = Some("Level 1".into());
+        let mut beam = tetra("Beam", [0.5, 0.5, 0.5, 1.0]);
+        beam.parent = Some("Level 2".into());
+        let scene = ExportScene {
+            groups: vec![
+                ExportGroup { name: "Building".into(), parent: None, transform: IDENTITY },
+                ExportGroup { name: "Level 1".into(), parent: Some("Building".into()), transform: IDENTITY },
+                ExportGroup { name: "Level 2".into(), parent: Some("Building".into()), transform: lifted },
+            ],
+            meshes: vec![column, beam],
+            units_m: None,
+        };
+        let s = parse(&write(&scene)).expect("parse");
+        assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+        let r = crate::render::prepare(&s);
+        let beam = r.instances.iter().find(|i| i.node == "Beam").expect("beam");
+        assert_eq!(beam.path, ["Building", "Level 2", "Beam"]);
+        assert_eq!(beam.matrix[14], 3.0, "group transform applies");
+        assert_eq!(r.tree.iter().filter(|n| n.kind == "group").count(), 3);
     }
 }

@@ -174,6 +174,7 @@ export function buildHtml(): string {
       <div data-ribbon="edit" class="ribbonGroup">
         <div class="groupBody">
           <button class="cmd shapeTool" data-shape="stamp" data-doc title="${t("tip.stamp")}"><i data-lucide="image-plus"></i><span>${t("lbl.addImage")}</span></button>
+          <button class="cmd shapeTool" data-shape="model3d" data-doc title="${t("tip.model3d")}"><i data-lucide="rotate-3d"></i><span>${t("lbl.model3d")}</span></button>
         </div>
         <div class="groupLabel">${t("grp.image")}</div>
       </div>
@@ -1310,6 +1311,55 @@ export const CSS = `
                  background: transparent; border: 0; cursor:pointer;
                  text-decoration:none; }
   .linkLayer a:hover { background: rgba(43,108,223,0.18); outline: 1px solid rgba(43,108,223,0.55); }
+  /* 3D annotations: badge + preview while inactive, live WebGL view when active. */
+  .threeDLayer { position:absolute; inset:0; pointer-events:none; }
+  .threeDBox { position:absolute; pointer-events:auto; cursor:pointer; }
+  .threeDBox:hover { outline:1px dashed rgba(43,108,223,0.65); }
+  .threeDBox.active { cursor:default; outline:2px solid var(--accent); z-index:2; }
+  .threeDBox .threeDPreview { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  body.dark .threeDBox .threeDPreview { filter: invert(0.92) hue-rotate(180deg); }
+  .threeDBadge { position:absolute; left:6px; top:6px; display:flex; align-items:center; gap:0.3rem;
+    background:rgba(255,255,255,0.94); color:#1f2937; border:1px solid rgba(43,108,223,0.6); border-radius:6px;
+    padding:0.15rem 0.45rem; font:600 0.75rem "Segoe UI", system-ui, sans-serif; cursor:pointer;
+    box-shadow:0 1px 4px rgba(0,0,0,0.18); }
+  .threeDBadge svg { width:14px; height:14px; color:#2b6cdf; }
+  .threeDBadge:hover { background:#fff; border-color:#2b6cdf; }
+  .threeDView { position:absolute; inset:0; overflow:hidden; background:#fff; }
+  .threeDView [hidden] { display:none !important; }
+  .threeDView canvas { display:block; width:100%; height:100%; touch-action:none; }
+  .threeDBar { position:absolute; left:4px; right:4px; top:4px; display:flex; flex-wrap:wrap; gap:3px; align-items:center; }
+  .threeDBar select, .threeDBar button { font:0.75rem "Segoe UI", system-ui, sans-serif; background:rgba(255,255,255,0.94);
+    color:#1f2937; border:1px solid #c9ced6; border-radius:5px; height:24px; }
+  .threeDBar select { max-width:9.5rem; padding:0 0.2rem; }
+  .threeDBar button { width:26px; display:inline-flex; align-items:center; justify-content:center; padding:0; cursor:pointer; }
+  .threeDBar button:hover, .threeDSection button:hover { background:#e8f0fd; border-color:#2b6cdf; }
+  .threeDBar button svg, .threeDSection button svg { width:15px; height:15px; }
+  .threeDTree { position:absolute; left:4px; top:34px; bottom:4px; width:min(220px, 40%); overflow:auto;
+    background:rgba(255,255,255,0.95); border:1px solid #c9ced6; border-radius:6px; color:#1f2937;
+    font:0.75rem "Segoe UI", system-ui, sans-serif; padding:0.3rem 0.4rem; }
+  .threeDTree ul { list-style:none; margin:0; padding-left:0.9rem; }
+  .threeDTree > ul { padding-left:0; }
+  .threeDTree label { display:flex; gap:0.3rem; align-items:center; white-space:nowrap; cursor:pointer; }
+  .threeDTreeTitle { font-weight:600; margin-bottom:0.2rem; }
+  .threeDTree summary { cursor:pointer; list-style-position:outside; margin-left:0.8rem; }
+  .threeDTree summary label { display:inline-flex; }
+  .threeDTree li > label { margin-left:0.8rem; }
+  .threeDSection { position:absolute; left:50%; transform:translateX(-50%); bottom:6px; display:flex; gap:4px; align-items:center;
+    background:rgba(255,255,255,0.95); border:1px solid #c9ced6; border-radius:6px; padding:3px 6px; }
+  .threeDSection select, .threeDSection button { height:22px; border:1px solid #c9ced6; border-radius:4px; background:#fff; color:#1f2937; }
+  .threeDSection button { width:24px; padding:0; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+  .threeDSection input[type=range] { width:min(12rem, 40vw); }
+  .threeDHint { position:absolute; left:6px; top:36px; max-width:min(19rem, calc(100% - 12px)); cursor:default;
+    background:var(--bg); color:var(--text); border:1px solid var(--border-2); border-radius:8px; padding:0.5rem 0.6rem;
+    font-size:0.8rem; box-shadow:0 4px 16px rgba(0,0,0,0.2); }
+  .threeDHint p { margin:0 0 0.45rem; }
+  .threeDHint button { background:var(--bg); color:var(--text); border:1px solid var(--border-2); border-radius:5px; padding:0.25rem 0.7rem; cursor:pointer; }
+  .threeDFullscreen { position:fixed; inset:0; z-index:60; background:#fff; }
+  .threeDImport .propsModal { min-width:auto; }
+  .threeDImportView { width:520px; max-width:80vw; height:320px; border:1px solid var(--border-2); border-radius:6px; overflow:hidden; background:#fff; }
+  .threeDImportView canvas { display:block; max-width:100%; }
+  .threeDImportOpts { display:flex; gap:1.2rem; }
+  .threeDImportOpts label { flex-direction:row !important; align-items:center; gap:0.4rem !important; }
   .formLayer { position:absolute; inset:0; pointer-events:none; }
   .formLayer .formField { position:absolute; pointer-events:auto;
                   background: #d6e7ff; border: 1px solid rgba(74,140,255,0.55);

@@ -1,21 +1,116 @@
-//! Flattens a decoded scene into world-space triangle batches for a WebGL
-//! renderer: one batch per (model node instance, shading ID), non-indexed,
-//! with per-corner normals.
+//! Turns a decoded scene into what a WebGL renderer uploads: indexed
+//! geometries in model space (one per mesh and shading ID), instances that
+//! place them (one per path from a model node to the world, so nodes with
+//! several parents are instanced), materials, textures, the node tree for
+//! a model tree UI, and the cameras and lights of the file.
+//!
+//! [`pack`] serializes the result into one binary buffer for IPC.
 
-use crate::u3d::{Mat4, NodeKind, Scene, IDENTITY};
+use std::collections::HashMap;
+
+use crate::u3d::{Mat4, Mesh, NodeKind, Scene, IDENTITY};
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Batch {
-    /// Model node name (for the model tree / visibility toggles).
-    pub node: String,
-    /// RGBA.
-    pub color: [f32; 4],
-    /// xyz per corner, 9 floats per triangle.
+#[derive(Debug, Clone, Default)]
+pub struct Geometry {
+    /// xyz per vertex.
     pub positions: Vec<f32>,
+    /// xyz per vertex; empty when the file has no normals (the renderer
+    /// computes flat ones).
     pub normals: Vec<f32>,
-    /// Optional per-corner RGB (vertex colors).
+    /// rgb per vertex; empty without vertex colors.
     pub colors: Vec<f32>,
+    /// uv per vertex; empty without texture coordinates.
+    pub uvs: Vec<f32>,
+    /// Three per triangle.
+    pub indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Instance {
+    /// Model node name.
+    pub node: String,
+    /// Node names from the outermost ancestor down to `node`.
+    pub path: Vec<String>,
+    /// Model-to-world matrix (column-major).
+    pub matrix: Mat4,
+    pub geometry: u32,
+    pub material: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RenderMaterial {
+    /// RGBA (alpha = material opacity).
+    pub diffuse: [f32; 4],
+    pub ambient: [f32; 3],
+    pub specular: [f32; 3],
+    pub emissive: [f32; 3],
+    /// Index into `RenderScene::textures`.
+    pub texture: Option<u32>,
+    pub vertex_colors: bool,
+    pub lighting: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TreeNode {
+    pub name: String,
+    /// "group", "model", "light" or "view".
+    pub kind: &'static str,
+    /// Parent node names ("" = world).
+    pub parents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Camera {
+    pub name: String,
+    /// Camera-to-world matrix; the camera looks along -z with +y up.
+    pub matrix: Mat4,
+    pub orthographic: bool,
+    /// Field of view in degrees, or orthographic height.
+    pub projection: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Light {
+    /// 0 ambient, 1 directional, 2 point, 3 spot.
+    pub light_type: u8,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub spot_angle: f32,
+    /// Light-to-world matrix; directional and spot lights shine along -z.
+    pub matrix: Mat4,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TextureRef {
+    pub name: String,
+    pub mime: String,
+    #[serde(skip)]
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RenderScene {
+    pub geometries: Vec<Geometry>,
+    pub instances: Vec<Instance>,
+    pub materials: Vec<RenderMaterial>,
+    pub textures: Vec<TextureRef>,
+    pub tree: Vec<TreeNode>,
+    pub cameras: Vec<Camera>,
+    pub lights: Vec<Light>,
+    /// World-space bounds of all instances.
+    pub bounds: Option<([f32; 3], [f32; 3])>,
+    pub units_m: Option<f64>,
+    pub warnings: Vec<String>,
+}
+
+impl RenderScene {
+    pub fn triangle_count(&self) -> usize {
+        self.instances
+            .iter()
+            .map(|i| self.geometries[i.geometry as usize].indices.len() / 3)
+            .sum()
+    }
 }
 
 pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
@@ -36,132 +131,331 @@ fn apply(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if l > 0.0 {
-        [v[0] / l, v[1] / l, v[2] / l]
-    } else {
-        [0.0, 0.0, 1.0]
-    }
-}
-
-/// All world transforms of node `name` (one per path to the root; nodes
-/// with several parents are instanced).
-fn world_transforms(scene: &Scene, name: &str, depth: usize) -> Vec<Mat4> {
+/// World transforms of node `name` with the ancestor path of each (one
+/// per path to the root).
+fn world_transforms(scene: &Scene, name: &str, depth: usize) -> Vec<(Mat4, Vec<String>)> {
     if depth > 64 {
         return Vec::new(); // cycle or absurd nesting
     }
     let Some(node) = scene.nodes.iter().find(|n| n.name == name) else {
-        return vec![IDENTITY];
+        return vec![(IDENTITY, vec![name.to_string()])];
     };
     let mut out = Vec::new();
     for p in &node.parents {
         if p.name.is_empty() {
-            out.push(p.transform);
+            out.push((p.transform, vec![name.to_string()]));
         } else {
-            for w in world_transforms(scene, &p.name, depth + 1) {
-                out.push(mul(&w, &p.transform));
+            for (w, mut path) in world_transforms(scene, &p.name, depth + 1) {
+                path.push(name.to_string());
+                out.push((mul(&w, &p.transform), path));
             }
         }
     }
     if node.parents.is_empty() {
-        out.push(IDENTITY);
+        out.push((IDENTITY, vec![name.to_string()]));
     }
     out
 }
 
-const DEFAULT_COLOR: [f32; 4] = [0.75, 0.75, 0.75, 1.0];
+const DEFAULT_MATERIAL: RenderMaterial = RenderMaterial {
+    diffuse: [0.75, 0.75, 0.75, 1.0],
+    ambient: [0.0; 3],
+    specular: [0.2; 3],
+    emissive: [0.0; 3],
+    texture: None,
+    vertex_colors: false,
+    lighting: true,
+};
 
-pub fn flatten(scene: &Scene) -> Vec<Batch> {
-    let mut out = Vec::new();
-    for node in &scene.nodes {
-        let NodeKind::Model {
-            resource,
-            visibility,
-        } = &node.kind
-        else {
-            continue;
-        };
-        if *visibility == 0 {
-            continue;
-        }
-        let Some(mesh) = scene.meshes.iter().find(|m| &m.name == resource) else {
-            continue;
-        };
-        if mesh.faces.is_empty() {
-            continue;
-        }
-        let shading_ids = mesh.faces.iter().map(|f| f.shading).max().unwrap_or(0) + 1;
-        let color_of = |sid: u32| -> [f32; 4] {
-            let shader = node.shading.get(sid as usize).and_then(|l| l.first());
-            let material = shader
-                .and_then(|s| scene.shaders.iter().find(|x| &x.name == s))
-                .and_then(|s| scene.materials.iter().find(|m| m.name == s.material));
-            match material {
-                Some(m) => [
-                    m.diffuse[0],
-                    m.diffuse[1],
-                    m.diffuse[2],
-                    m.opacity.clamp(0.0, 1.0),
-                ],
-                None => DEFAULT_COLOR,
-            }
-        };
-        for world in world_transforms(scene, &node.name, 0) {
-            // Normals: inverse-transpose is overkill for the rigid
-            // transforms U3D files use; apply the linear part and renormalize.
-            let mut lin = world;
-            lin[12] = 0.0;
-            lin[13] = 0.0;
-            lin[14] = 0.0;
-            for sid in 0..shading_ids {
-                let mut b = Batch {
-                    node: node.name.clone(),
-                    color: color_of(sid),
-                    positions: Vec::new(),
-                    normals: Vec::new(),
-                    colors: Vec::new(),
-                };
-                for f in mesh.faces.iter().filter(|f| f.shading == sid) {
-                    let p: Vec<[f32; 3]> = f
-                        .position
-                        .iter()
-                        .map(|&i| apply(&world, mesh.positions[i as usize]))
-                        .collect();
-                    let flat = normalize(cross(sub(p[1], p[0]), sub(p[2], p[0])));
-                    for c in 0..3 {
-                        b.positions.extend_from_slice(&p[c]);
-                        let n = f
-                            .normal
-                            .and_then(|n| mesh.normals.get(n[c] as usize))
-                            .map(|n| normalize(apply(&lin, *n)))
-                            .unwrap_or(flat);
-                        b.normals.extend_from_slice(&n);
-                        if let Some(d) = f.diffuse.and_then(|d| mesh.diffuse.get(d[c] as usize)) {
-                            b.colors.extend_from_slice(&d[..3]);
-                        }
-                    }
+/// Indexed geometry for the faces of `mesh` with shading ID `sid`.
+fn build_geometry(mesh: &Mesh, sid: u32) -> Geometry {
+    let mut g = Geometry::default();
+    let mut map: HashMap<(u32, u32, u32, u32), u32> = HashMap::new();
+    let faces: Vec<_> = mesh.faces.iter().filter(|f| f.shading == sid).collect();
+    let has_normals = !mesh.normals.is_empty() && faces.iter().all(|f| f.normal.is_some());
+    let has_colors = !mesh.diffuse.is_empty() && faces.iter().all(|f| f.diffuse.is_some());
+    let has_uvs = !mesh.tex_coords.is_empty() && faces.iter().all(|f| f.tex.is_some());
+    for f in faces {
+        for c in 0..3 {
+            let key = (
+                f.position[c],
+                if has_normals { f.normal.map_or(0, |n| n[c]) } else { 0 },
+                if has_colors { f.diffuse.map_or(0, |d| d[c]) } else { 0 },
+                if has_uvs { f.tex.map_or(0, |t| t[c]) } else { 0 },
+            );
+            let next = map.len() as u32;
+            let v = *map.entry(key).or_insert_with(|| {
+                let p = mesh.positions[key.0 as usize];
+                g.positions.extend_from_slice(&p);
+                if has_normals {
+                    g.normals.extend_from_slice(&mesh.normals[key.1 as usize]);
                 }
-                if b.colors.len() != b.positions.len() {
-                    b.colors.clear();
+                if has_colors {
+                    g.colors.extend_from_slice(&mesh.diffuse[key.2 as usize][..3]);
                 }
-                if !b.positions.is_empty() {
-                    out.push(b);
+                if has_uvs {
+                    let t = mesh.tex_coords[key.3 as usize];
+                    g.uvs.extend_from_slice(&[t[0], t[1]]);
                 }
-            }
+                next
+            });
+            g.indices.push(v);
         }
     }
+    g
+}
+
+pub fn prepare(scene: &Scene) -> RenderScene {
+    let mut out = RenderScene {
+        units_m: scene.units_m,
+        warnings: scene.warnings.clone(),
+        textures: scene
+            .textures
+            .iter()
+            .map(|t| TextureRef { name: t.name.clone(), mime: t.mime.clone(), data: t.data.clone() })
+            .collect(),
+        ..Default::default()
+    };
+    // Geometry per (mesh, shading ID), built on first use.
+    let mut geometries: HashMap<(usize, u32), u32> = HashMap::new();
+    let mut bounds: Option<([f32; 3], [f32; 3])> = None;
+
+    for node in &scene.nodes {
+        let kind = match &node.kind {
+            NodeKind::Group => "group",
+            NodeKind::Model { .. } => "model",
+            NodeKind::Light { .. } => "light",
+            NodeKind::View(_) => "view",
+        };
+        out.tree.push(TreeNode { name: node.name.clone(), kind, parents: node.parents.iter().map(|p| p.name.clone()).collect() });
+
+        match &node.kind {
+            NodeKind::View(v) => {
+                if let Some((m, _)) = world_transforms(scene, &node.name, 0).into_iter().next() {
+                    out.cameras.push(Camera {
+                        name: node.name.clone(),
+                        matrix: m,
+                        orthographic: v.attributes & 6 == 2,
+                        projection: v.projection,
+                    });
+                }
+            }
+            NodeKind::Light { resource } => {
+                if let Some(l) = scene.lights.iter().find(|l| &l.name == resource) {
+                    for (m, _) in world_transforms(scene, &node.name, 0) {
+                        out.lights.push(Light {
+                            light_type: l.light_type,
+                            color: l.color,
+                            intensity: l.intensity,
+                            spot_angle: l.spot_angle,
+                            matrix: m,
+                        });
+                    }
+                }
+            }
+            NodeKind::Model { resource, visibility } => {
+                if *visibility == 0 {
+                    continue;
+                }
+                let Some(mi) = scene.meshes.iter().position(|m| &m.name == resource) else { continue };
+                let mesh = &scene.meshes[mi];
+                if mesh.faces.is_empty() {
+                    continue;
+                }
+                let mut sids: Vec<u32> = mesh.faces.iter().map(|f| f.shading).collect();
+                sids.sort_unstable();
+                sids.dedup();
+                for (world, path) in world_transforms(scene, &node.name, 0) {
+                    for &sid in &sids {
+                        let gi = *geometries.entry((mi, sid)).or_insert_with(|| {
+                            out.geometries.push(build_geometry(mesh, sid));
+                            out.geometries.len() as u32 - 1
+                        });
+                        let material = material_for(scene, &node.shading, sid, &out.geometries[gi as usize], &out.textures);
+                        let mi_out = match out.materials.iter().position(|m| *m == material) {
+                            Some(i) => i,
+                            None => {
+                                out.materials.push(material);
+                                out.materials.len() - 1
+                            }
+                        } as u32;
+                        grow_bounds(&mut bounds, &out.geometries[gi as usize], &world);
+                        out.instances.push(Instance {
+                            node: node.name.clone(),
+                            path: path.clone(),
+                            matrix: world,
+                            geometry: gi,
+                            material: mi_out,
+                        });
+                    }
+                }
+            }
+            NodeKind::Group => {}
+        }
+    }
+    out.bounds = bounds;
+    out
+}
+
+fn material_for(
+    scene: &Scene,
+    shading: &[Vec<String>],
+    sid: u32,
+    geometry: &Geometry,
+    textures: &[TextureRef],
+) -> RenderMaterial {
+    let shader = shading
+        .get(sid as usize)
+        .and_then(|l| l.first())
+        .and_then(|s| scene.shaders.iter().find(|x| &x.name == s))
+        // No shading modifier: U3D uses the first shader of the palette
+        // only when it is the default; fall back to our default instead.
+        ;
+    let mut m = DEFAULT_MATERIAL;
+    if let Some(sh) = shader {
+        m.lighting = sh.attributes & 1 != 0;
+        if let Some(mat) = scene.materials.iter().find(|x| x.name == sh.material) {
+            m.diffuse = [mat.diffuse[0], mat.diffuse[1], mat.diffuse[2], mat.opacity.clamp(0.0, 1.0)];
+            m.ambient = mat.ambient;
+            m.specular = mat.specular;
+            m.emissive = mat.emissive;
+        }
+        if !geometry.uvs.is_empty() {
+            m.texture = sh
+                .textures
+                .first()
+                .and_then(|t| textures.iter().position(|x| &x.name == t))
+                .map(|i| i as u32);
+        }
+        m.vertex_colors = sh.attributes & 4 != 0 && !geometry.colors.is_empty();
+    } else {
+        m.vertex_colors = !geometry.colors.is_empty();
+    }
+    m
+}
+
+fn grow_bounds(bounds: &mut Option<([f32; 3], [f32; 3])>, g: &Geometry, m: &Mat4) {
+    if g.positions.is_empty() {
+        return;
+    }
+    let mut lo = [f32::MAX; 3];
+    let mut hi = [f32::MIN; 3];
+    for p in g.positions.chunks_exact(3) {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    for corner in 0..8 {
+        let c = [
+            if corner & 1 == 0 { lo[0] } else { hi[0] },
+            if corner & 2 == 0 { lo[1] } else { hi[1] },
+            if corner & 4 == 0 { lo[2] } else { hi[2] },
+        ];
+        let w = apply(m, c);
+        if !w.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let b = bounds.get_or_insert((w, w));
+        for k in 0..3 {
+            b.0[k] = b.0[k].min(w[k]);
+            b.1[k] = b.1[k].max(w[k]);
+        }
+    }
+}
+
+/// Byte range inside the data section of a packed scene.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Range {
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Serialize)]
+struct PackedGeometry {
+    positions: Range,
+    normals: Option<Range>,
+    colors: Option<Range>,
+    uvs: Option<Range>,
+    indices: Range,
+}
+
+#[derive(Serialize)]
+struct PackedTexture<'a> {
+    name: &'a str,
+    mime: &'a str,
+    data: Range,
+}
+
+#[derive(Serialize)]
+struct Header<'a> {
+    geometries: Vec<PackedGeometry>,
+    instances: &'a [Instance],
+    materials: &'a [RenderMaterial],
+    textures: Vec<PackedTexture<'a>>,
+    tree: &'a [TreeNode],
+    cameras: &'a [Camera],
+    lights: &'a [Light],
+    bounds: Option<([f32; 3], [f32; 3])>,
+    units_m: Option<f64>,
+    warnings: &'a [String],
+    triangles: usize,
+}
+
+/// Binary layout: `"D3S1"`, u32 header length, UTF-8 JSON header, zero
+/// padding to 4 bytes, then the data section. Ranges in the header are byte
+/// offsets into the data section; float and index arrays are 4-byte
+/// aligned little-endian `f32` / `u32`.
+pub fn pack(s: &RenderScene) -> Vec<u8> {
+    let mut data: Vec<u8> = Vec::new();
+    let mut put = |bytes: &[u8]| -> Range {
+        while data.len() % 4 != 0 {
+            data.push(0);
+        }
+        let offset = data.len() as u32;
+        data.extend_from_slice(bytes);
+        Range { offset, length: bytes.len() as u32 }
+    };
+    fn f32s(v: &[f32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+    let geometries = s
+        .geometries
+        .iter()
+        .map(|g| PackedGeometry {
+            positions: put(&f32s(&g.positions)),
+            normals: (!g.normals.is_empty()).then(|| put(&f32s(&g.normals))),
+            colors: (!g.colors.is_empty()).then(|| put(&f32s(&g.colors))),
+            uvs: (!g.uvs.is_empty()).then(|| put(&f32s(&g.uvs))),
+            indices: put(&g.indices.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()),
+        })
+        .collect();
+    let textures = s
+        .textures
+        .iter()
+        .map(|t| PackedTexture { name: &t.name, mime: &t.mime, data: put(&t.data) })
+        .collect();
+    let header = Header {
+        geometries,
+        instances: &s.instances,
+        materials: &s.materials,
+        textures,
+        tree: &s.tree,
+        cameras: &s.cameras,
+        lights: &s.lights,
+        bounds: s.bounds,
+        units_m: s.units_m,
+        warnings: &s.warnings,
+        triangles: s.triangle_count(),
+    };
+    let json = serde_json::to_vec(&header).expect("serialize header");
+    let mut out = Vec::with_capacity(8 + json.len() + 3 + data.len());
+    out.extend_from_slice(b"D3S1");
+    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    out.extend_from_slice(&json);
+    while out.len() % 4 != 0 {
+        out.push(b' ');
+    }
+    out.extend_from_slice(&data);
     out
 }

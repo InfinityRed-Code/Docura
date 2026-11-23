@@ -57,11 +57,11 @@ fn annot_flags(print: bool) -> i64 {
     if print { 4 } else { 0 }
 }
 
-fn page_view(doc: &Document, page_id: ObjectId) -> ([f32; 4], i32) {
+pub(crate) fn page_view(doc: &Document, page_id: ObjectId) -> ([f32; 4], i32) {
     (crate::resolve_view_box(doc, page_id), crate::page_rotation(doc, page_id))
 }
 
-fn pdf_string_utf16be(s: &str) -> Object {
+pub(crate) fn pdf_string_utf16be(s: &str) -> Object {
     let mut bytes: Vec<u8> = Vec::with_capacity(2 + s.len() * 2);
     bytes.push(0xFE);
     bytes.push(0xFF);
@@ -71,7 +71,7 @@ fn pdf_string_utf16be(s: &str) -> Object {
     Object::String(bytes, lopdf::StringFormat::Hexadecimal)
 }
 
-fn now_pdf_date() -> String {
+pub(crate) fn now_pdf_date() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -116,7 +116,7 @@ fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
-fn random_nm() -> String {
+pub(crate) fn random_nm() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -155,7 +155,7 @@ fn transform(m: [f32; 6], (x, y): (f32, f32)) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
-fn rect_native(r: &RectPt, view: ([f32; 4], i32)) -> (f32, f32, f32, f32) {
+pub(crate) fn rect_native(r: &RectPt, view: ([f32; 4], i32)) -> (f32, f32, f32, f32) {
     // Top-origin view space -> PDF user space. Returns (llx, lly, urx, ury).
     // The view box (CropBox intersect MediaBox) may not start at (0,0).
     let (a, b) = (
@@ -372,7 +372,7 @@ fn build_markup_appearance(
     buf
 }
 
-fn append_annot_to_page(
+pub(crate) fn append_annot_to_page(
     doc: &mut Document,
     page_id: ObjectId,
     annot_id: ObjectId,
@@ -412,7 +412,7 @@ fn append_annot_to_page(
     Ok(())
 }
 
-fn page_id_for(doc: &Document, page_index: u32) -> MutateResult<ObjectId> {
+pub(crate) fn page_id_for(doc: &Document, page_index: u32) -> MutateResult<ObjectId> {
     let pages = doc.get_pages();
     let total = pages.len() as u32;
     pages
@@ -424,7 +424,7 @@ fn page_id_for(doc: &Document, page_index: u32) -> MutateResult<ObjectId> {
 /// The stable id read::list_annotations reports for an annotation: its `NM`
 /// name string, falling back to `obj-<num>-<gen>`. Must mirror that logic so
 /// the frontend can address an annotation for deletion.
-fn annot_id_string(doc: &Document, dict: &Dictionary, oid: Option<ObjectId>) -> String {
+pub(crate) fn annot_id_string(doc: &Document, dict: &Dictionary, oid: Option<ObjectId>) -> String {
     // Same resolution + text decoding as read::list_annotations (indirect
     // /NM, UTF-16BE / PDFDocEncoding), or non-ASCII ids never match.
     let nm = dict.get(b"NM").ok().and_then(|o| match o {

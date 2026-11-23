@@ -5,8 +5,9 @@
 //!   (node hierarchy, meshes, shaders, materials, lights, views).
 //! - [`u3d::write`] encodes triangle meshes as a U3D file that Acrobat and
 //!   other 3D PDF viewers display.
-//! - [`render::flatten`] turns a scene into world-space triangle batches a
-//!   WebGL renderer can upload directly.
+//! - [`render::prepare`] turns a scene into indexed geometries, instances,
+//!   materials, the node tree, cameras and lights for a WebGL renderer;
+//!   [`render::pack`] serializes that into one binary buffer.
 //!
 //! The crate has no PDF dependency: the PDF side (finding annotations,
 //! decoding the `/3DD` stream, writing the annotation) lives in

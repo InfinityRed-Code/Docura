@@ -20,3 +20,5 @@ ttf-parser = "0.25"
 [dev-dependencies]
 # Only for the brand_icons icon-generator example (SVG rasterizing).
 resvg = "0.47"
+# 3D annotation tests and the make_3d_samples example.
+pdf_3d = { workspace = true }

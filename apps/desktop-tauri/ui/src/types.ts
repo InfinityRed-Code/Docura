@@ -54,7 +54,7 @@ export type ShapeKindUi =
   | "rect" | "circle" | "line" | "arrow" | "arrow2"
   | "triangle" | "diamond" | "hexagon" | "star" | "cloud" | "callout" | "check"
   | "polygon" | "polyline"
-  | "freetext" | "ink" | "stamp" | "region" | "note" | "redact";
+  | "freetext" | "ink" | "stamp" | "region" | "note" | "redact" | "model3d";
 // Click-to-place Fill & Sign marks (signature/initials reuse the stamp tool).
 export type SignTool = "check" | "cross" | "dot" | "date" | "text";
 export type SignatureEntry = { kind: string; path: string };
@@ -85,6 +85,8 @@ export type Slot = {
   redactLayer: HTMLDivElement;
   drawLayer: SVGSVGElement;
   formLayer: HTMLDivElement;
+  /** 3D annotations: posters, activation badges, the live 3D view. */
+  threeDLayer: HTMLDivElement;
   placeholder: HTMLDivElement;
   loaded: boolean;
   renderingZoom: number | null;
@@ -235,3 +237,48 @@ export interface FormFieldInfo {
   password: boolean;
   max_len: number | null;
 }
+
+/** A PDF 3D view (ISO 32000 13.6.4), see pdf_types::ThreeDView. */
+export type ThreeDView = {
+  name: string;
+  internal_name: string | null;
+  c2w: number[] | null;
+  u3d_path: string[];
+  center_of_orbit: number | null;
+  orthographic: boolean;
+  fov: number | null;
+  fov_span: string | null;
+  ortho_scale: number | null;
+  ortho_binding: string | null;
+  background: [number, number, number] | null;
+  render_mode: string | null;
+  render_aux_color: [number, number, number] | null;
+  lighting: string | null;
+  cross_sections: {
+    center: [number, number, number];
+    orientation: [number | null, number | null, number | null];
+    plane_opacity: number;
+    plane_color: [number, number, number];
+    plane_visible: boolean;
+    intersection_visible: boolean;
+    intersection_color: [number, number, number];
+  }[];
+  nodes: { name: string; visible: boolean | null; opacity: number | null; matrix: number[] | null }[];
+};
+
+/** A 3D annotation, see pdf_types::ThreeDAnnot. */
+export type ThreeDAnnot = {
+  id: string;
+  page: number;
+  rect_pt: RectPt;
+  subtype: string;
+  format: string;
+  model_size: number;
+  has_poster: boolean;
+  activation: string;
+  toolbar: boolean;
+  model_tree: boolean;
+  views: ThreeDView[];
+  default_view: number | null;
+  contents: string | null;
+};

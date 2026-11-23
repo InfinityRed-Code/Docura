@@ -133,4 +133,9 @@ export const callbacks = {
   notifyAnnotationsChanged: async () => {},
   refreshFormFields: async () => {},
   refreshComments: async () => {},
+  render3dFor: (_idx: number) => {},
+  evict3dFor: (_idx: number) => {},
+  insert3dAt: async (_page: number, _rect: RectPt) => {},
+  /** Picks a model file (dialog unless `path` is given) for `insert3dAt`. */
+  pick3dModel: async (_path?: string): Promise<boolean> => false,
 };

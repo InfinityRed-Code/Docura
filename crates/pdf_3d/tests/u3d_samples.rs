@@ -59,9 +59,7 @@ fn box_base_mesh_decodes_fully() {
     corners.sort();
     corners.dedup();
     assert_eq!(corners.len(), 8, "{corners:?}");
-    let batches = render::flatten(&s);
-    let tris: usize = batches.iter().map(|b| b.positions.len() / 9).sum();
-    assert_eq!(tris, 12);
+    assert_eq!(render::prepare(&s).triangle_count(), 12);
 }
 
 #[test]
@@ -78,7 +76,7 @@ fn other_base_meshes_decode_fully() {
             assert_eq!(m.faces.len() as u32, m.max_faces, "{f} {}", m.name);
             assert_eq!(m.positions.len() as u32, m.max_positions, "{f} {}", m.name);
         }
-        assert!(!render::flatten(&s).is_empty(), "{f}");
+        assert!(render::prepare(&s).triangle_count() > 0, "{f}");
     }
 }
 
@@ -182,8 +180,9 @@ fn progressive_mesh_with_vertex_colors() {
     assert_eq!(teapot.faces.len() as u32, teapot.max_faces);
     assert!(!teapot.diffuse.is_empty());
     assert!(teapot.faces.iter().all(|f| f.diffuse.is_some()));
-    let batches = render::flatten(&s);
-    assert!(batches.iter().any(|b| !b.colors.is_empty()));
+    let r = render::prepare(&s);
+    assert!(r.geometries.iter().any(|g| !g.colors.is_empty()));
+    assert!(r.materials.iter().any(|m| m.vertex_colors));
 }
 
 #[test]

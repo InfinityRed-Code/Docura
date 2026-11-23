@@ -60,3 +60,7 @@ opt-level = 3
 # opening scanned plans in `tauri dev` painfully slow.
 [profile.dev.package.pdf_pdfium]
 opt-level = 3
+
+# Same for the U3D decoder: arithmetic decoding of large CAD models.
+[profile.dev.package.pdf_3d]
+opt-level = 3

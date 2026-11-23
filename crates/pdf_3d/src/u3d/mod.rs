@@ -6,7 +6,7 @@ mod read;
 mod write;
 
 pub use read::parse;
-pub use write::{write, ExportMesh, ExportScene};
+pub use write::{write, ExportGroup, ExportMesh, ExportScene};
 
 use serde::Serialize;
 

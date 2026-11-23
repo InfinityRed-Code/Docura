@@ -15,10 +15,7 @@ fn main() {
         let t = std::time::Instant::now();
         match u3d::parse(&bytes) {
             Ok(s) => {
-                let tris: usize = render::flatten(&s)
-                    .iter()
-                    .map(|b| b.positions.len() / 9)
-                    .sum();
+                let tris = render::prepare(&s).triangle_count();
                 let meshes: Vec<String> = s
                     .meshes
                     .iter()
