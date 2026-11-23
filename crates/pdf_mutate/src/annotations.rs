@@ -989,8 +989,9 @@ pub struct FreeTextAnnotation {
     pub font_family: String,
     pub bold: bool,
     pub italic: bool,
-    /// Viewer rotation at insert time (0/1/2/3 = 0/90/180/270 deg CW).
-    /// Used to rotate the appearance so text reads upright in the rotated view.
+    /// Viewer rotation at insert time (0/1/2/3 = 0/90/180/270 deg CW), on
+    /// top of the page's /Rotate. Both are compensated in the appearance so
+    /// the text reads upright in the rotated view.
     pub rotation_quadrant: u8,
     pub opacity: f32,
     pub author: Option<String>,
@@ -1235,6 +1236,11 @@ pub fn add_freetext_annotation(
     }
     d.set(FREETEXT_STYLE_KEY, Object::Dictionary(style));
 
+    // The page's own /Rotate turns the appearance on screen just like the
+    // viewer rotation does, so the text is counter-rotated by both. Without
+    // the page part, text on a rotated page (common for CAD plans: portrait
+    // MediaBox shown as landscape) came out turned by that angle (#11).
+    let page_quadrant = (view.1 / 90) as u8;
     let content = build_freetext_appearance(
         &annot.text,
         &font_key,
@@ -1244,7 +1250,7 @@ pub fn add_freetext_annotation(
         bg,
         w,
         h,
-        annot.rotation_quadrant & 3,
+        ((annot.rotation_quadrant & 3) + page_quadrant) & 3,
     );
     let mut font_dict = Dictionary::new();
     font_dict.set(font_key.as_str(), Object::Reference(font_id));
@@ -2035,6 +2041,66 @@ mod tests {
         let got = crate::read::list_annotations(&doc)[0].rect_pt;
         for (a, b) in [(got.x0, r.x0), (got.y0, r.y0), (got.x1, r.x1), (got.y1, r.y1)] {
             assert!((a - b).abs() < 0.01, "wrote {r:?}, listed {got:?}");
+        }
+    }
+
+    /// Turns a point of a box of `size` (PDF y-up space) by `turns` clockwise
+    /// quarter turns, the way page /Rotate and the viewer rotation turn an
+    /// appearance on screen. Returns the point and the turned box size.
+    fn turn_cw(p: (f32, f32), size: (f32, f32), turns: u32) -> ((f32, f32), (f32, f32)) {
+        (0..turns % 4).fold((p, size), |((x, y), (w, h)), _| ((y, w - x), (h, w)))
+    }
+
+    #[test]
+    fn freetext_reads_upright_on_rotated_page() {
+        // Issue #11: on a page with its own /Rotate (CAD plans are often a
+        // portrait MediaBox shown as landscape this way) a new text box came
+        // out turned by that angle: only the viewer rotation was compensated.
+        for page_rot in [0_i64, 90, 180, 270, -90, 450] {
+            for view_q in 0..4_u8 {
+                let mut doc = one_page_doc();
+                let page_id = doc.page_iter().next().unwrap();
+                doc.get_dictionary_mut(page_id)
+                    .unwrap()
+                    .set("Rotate", Object::Integer(page_rot));
+                let mut annot = freetext("Tor");
+                annot.rotation_quadrant = view_q;
+                let id = add_freetext_annotation(&mut doc, 0, &annot).unwrap();
+
+                let (form, content) = markup_ap_stream(&doc, id);
+                let content = String::from_utf8_lossy(&content);
+                let ctx = format!("/Rotate {page_rot}, view {view_q}:\n{content}");
+                let tm: Vec<f32> = content
+                    .lines()
+                    .find(|l| l.ends_with(" Tm"))
+                    .expect("text matrix")
+                    .split_whitespace()
+                    .take(6)
+                    .map(|t| t.parse().unwrap())
+                    .collect();
+                let bbox: Vec<f32> = form
+                    .get(b"BBox")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|o| o.as_float().unwrap())
+                    .collect();
+                let size = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
+                let turns = (page_rot.rem_euclid(360) / 90) as u32 + view_q as u32;
+
+                // On screen the baseline runs left to right and the glyphs
+                // stand upright (a zero-size box turns plain vectors).
+                let on_screen = |v: (f32, f32)| turn_cw(v, (0.0, 0.0), turns).0;
+                assert_eq!(on_screen((tm[0], tm[1])), (1.0, 0.0), "baseline, {ctx}");
+                assert_eq!(on_screen((tm[2], tm[3])), (0.0, 1.0), "glyph up, {ctx}");
+
+                // The first line starts at the box's top-left corner as shown.
+                let ((x, y), (_, h)) = turn_cw((tm[4], tm[5]), size, turns);
+                let top = h - y - annot.font_size;
+                assert!((x - 2.0).abs() < 0.02, "left margin {x}, {ctx}");
+                assert!((top - 2.0).abs() < 0.02, "top margin {top}, {ctx}");
+            }
         }
     }
 }
