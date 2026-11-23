@@ -182,6 +182,33 @@ printer via `nsis/printer-setup.ps1` (log:
 swallowed). An older per-user installation is removed first, app data is
 kept. Hooks: `apps/desktop-tauri/src-tauri/nsis/hooks.nsi`.
 
+### Updates
+
+There is one setup per release for new installations and updates alike.
+Run over an installed copy it updates it in place, no uninstall needed: the
+welcome page says which version is updated to which, the program files and
+the Tesseract folder are replaced, and the install directory, settings and
+saved signatures (`%APPDATA%\com.docura.pdf`), shortcuts, autostart and the
+virtual printer stay (the printer step only checks and repairs it). A running
+Docura PDF is closed after asking. The same version installs again in place
+(repair); an older version (downgrade) asks before it replaces a newer one.
+Ghostscript is only offered at the first installation.
+
+Unattended: `"Docura PDF_<version>_x64-setup.exe" /S` updates or installs
+without any dialog and closes a running app without asking; add `/R` to start
+the app afterwards. Exit code 0 means success.
+
+Coming from 1.3.0 or older (installed per user): the first per-machine setup
+looks like a new installation (directory page), removes the per-user copy
+and keeps its app data and autostart; later updates are in place.
+
+The in-place update lives in `nsis/installer.nsi`, a copy of the Tauri CLI's
+NSIS template (`bundle.windows.nsis.template`): the stock template shows an
+"Already Installed" page that preselects "Uninstall before installing" for
+every newer version. Its changes are marked `Docura:`; after bumping
+`@tauri-apps/cli`, re-apply them to the new upstream template (a test fails
+until the version line matches `ui/pnpm-lock.yaml`).
+
 ### Publishing a release
 
 Every GitHub release whose installer ships the Tesseract bundle must also
@@ -190,12 +217,28 @@ promises it there (GPL/LGPL source offer for JBIG-KIT and GNU libiconv,
 plus Tesseract, Leptonica, LibTIFF and the other libraries). It is not part
 of the installer.
 
-```
-just release          # = just build + just tesseract-sources
-gh release create v<version> -R InfinityRed-Code/rustpdf \
-  "target/release/bundle/nsis/Docura PDF_<version>_x64-setup.exe" \
-  dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip
-```
+1. Bump the version in `Cargo.toml` (workspace) and
+   `apps/desktop-tauri/src-tauri/tauri.conf.json` together (a test checks
+   it): the setup compares it with the installed version to tell an update
+   from a repair or a downgrade.
+2. Move the `[Unreleased]` notes in `CHANGELOG.md` under the new version.
+3. Build and publish the one setup (new installations and updates) with the
+   source archive:
+
+   ```
+   just release          # = just build + just tesseract-sources
+   gh release create v<version> -R InfinityRed-Code/rustpdf \
+     "target/release/bundle/nsis/Docura PDF_<version>_x64-setup.exe" \
+     dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip
+   ```
+
+   The release notes are that changelog section plus:
+
+   > ### Install
+   > Download `Docura.PDF_<version>_x64-setup.exe` below and run it
+   > (Windows 10/11, x64). It installs for all users and asks for
+   > administrator rights. An installed version is updated in place, there
+   > is no need to uninstall it first; settings and signatures are kept.
 
 For an existing release: `gh release upload v<version>
 dist/docura-pdf-tesseract-sources-5.4.0.20240606.zip`. The archive only

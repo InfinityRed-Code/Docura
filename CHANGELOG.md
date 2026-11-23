@@ -11,6 +11,31 @@ scope each tag landed.
 
 ## [Unreleased]
 
+Installer: a new version installs over the installed one, no uninstall first
+(#4).
+
+### Fixed
+- **Updating no longer means uninstalling first (#4).** The setup of a newer
+  version showed an "Already Installed" page (the stock Tauri installer page)
+  that recommended and preselected "Uninstall before installing", so every
+  update ran the full uninstaller: the virtual printer was removed and added
+  again, shortcuts and the autostart entry were dropped, and the uninstaller
+  offered to delete the app data. The setup now updates an installed copy in
+  place: the welcome page names both versions, there is no "Already
+  Installed" or directory page, program files and the Tesseract folder are
+  replaced, and the install directory, settings, saved signatures,
+  shortcuts, autostart and the printer stay (the printer setup only checks
+  it). A running Docura PDF is closed after asking (`/S`: without asking),
+  as is a Tesseract still running from the install folder. Running the same
+  version again repairs it in place; an older version asks before it
+  replaces a newer one. Ghostscript is only offered at the first
+  installation. One setup per release serves new installations and updates;
+  updates from 1.3.1 on are in place.
+- **Uninstalling after an update restores the previous `.pdf` handler.**
+  Every installation over an existing copy saved Docura's own file class as
+  the handler to restore, so after an update the uninstaller left `.pdf`
+  pointing at a class it had just deleted.
+
 ## [1.3.1] — 2026-11-23
 
 Edit cleanup (#8): more shapes, inline text format, one color picker, more fonts.

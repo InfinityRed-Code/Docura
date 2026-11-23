@@ -8,6 +8,10 @@
 ;
 ; Install:   remove an old per-user install, ship Tesseract OCR (#6),
 ;            register the "Docura PDF" virtual printer (#5), offer Ghostscript.
+; Update:    the same setup run over an installed copy (installer.nsi, our
+;            template, sets $UpdateMode, #4): files are overwritten in place,
+;            Tesseract is replaced, the printer setup only checks/repairs the
+;            printer (never removes it), Ghostscript is not offered again.
 ; Uninstall: remove the printer, the Tesseract files and the setup script.
 
 !define DOCURA_PRINTER_NAME "Docura PDF"
@@ -29,6 +33,12 @@
 ; script logs to %ProgramData%\DocuraPDF\printer-setup.log; its stdout lands
 ; in the installer's details list.
 !macro DocuraRunPrinterSetup ACTION RESULT
+  !insertmacro DocuraPowerShellPath ${RESULT}
+  nsExec::ExecToLog '"${RESULT}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\printer-setup.ps1" -Action ${ACTION}'
+  Pop ${RESULT}
+!macroend
+
+!macro DocuraPowerShellPath RESULT
   ${If} ${RunningX64}
     ; The installer is a 32-bit process. Sysnative reaches the 64-bit
     ; PowerShell, which sees the real System32 (pnputil, driver store).
@@ -36,8 +46,24 @@
   ${Else}
     StrCpy ${RESULT} "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   ${EndIf}
-  nsExec::ExecToLog '"${RESULT}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\printer-setup.ps1" -Action ${ACTION}'
-  Pop ${RESULT}
+!macroend
+
+; The template closes desktop-tauri.exe before it touches any file, but an OCR
+; run the app started can outlive it and keep tesseract.exe and its DLLs in
+; $INSTDIR\tesseract open: they could then be neither deleted nor overwritten,
+; and the update would mix two Tesseract builds. Stop those processes; a
+; Tesseract installed elsewhere on the machine is left alone.
+!macro DocuraStopBundledTesseract
+  Push $R0
+  nsis_tauri_utils::FindProcess "tesseract.exe"
+  Pop $R0
+  ${If} $R0 = 0
+    DetailPrint "Stopping Tesseract processes started from $INSTDIR\tesseract"
+    !insertmacro DocuraPowerShellPath $R0
+    nsExec::ExecToLog `"$R0" -NoProfile -NonInteractive -Command "Get-Process tesseract -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\tesseract\*' } | ForEach-Object { $$_.Kill(); [void]$$_.WaitForExit(5000) }"`
+    Pop $R0
+  ${EndIf}
+  Pop $R0
 !macroend
 
 ; Installers up to 1.3.0 installed per user (%LOCALAPPDATA%\Docura PDF,
@@ -88,6 +114,7 @@
 ; update never mixes DLLs of two Tesseract builds.
 !macro DocuraInstallTesseract
   DetailPrint "Installing Tesseract OCR"
+  !insertmacro DocuraStopBundledTesseract
   RMDir /r "$INSTDIR\tesseract"
   SetOutPath "$INSTDIR\tesseract"
   File /r "${DOCURA_TESSERACT_SRC}\*.*"
@@ -129,18 +156,32 @@
 ; -------------------------------------------------------------- Tauri hooks
 
 !macro NSIS_HOOK_PREINSTALL
-  !insertmacro DocuraRemovePerUserInstall
+  ${If} $UpdateMode = 1
+    DetailPrint "Updating ${PRODUCTNAME} $InstalledVersion in $INSTDIR to ${VERSION} in place"
+  ${EndIf}
+  ; Only a per-machine install replaces a per-user one; built per user (e.g.
+  ; to test without elevation) this would uninstall the copy being updated.
+  !if "${INSTALLMODE}" == "perMachine"
+    !insertmacro DocuraRemovePerUserInstall
+  !endif
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro DocuraInstallTesseract
+  ; Install or, on an update, check and repair (printer-setup.ps1 is
+  ; idempotent and never removes a working printer).
   !insertmacro DocuraInstallPrinter
-  !insertmacro DocuraOfferGhostscript
+  ; Asked once, at the first installation.
+  ${If} $UpdateMode <> 1
+    !insertmacro DocuraOfferGhostscript
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
   Push $R0
-  ; An uninstall run by an update (/UPDATE) keeps the printer.
+  ; Keeps the printer when run with /UPDATE. The installer itself never runs
+  ; the uninstaller for an update (it updates in place, see installer.nsi), so
+  ; this only guards a manual "uninstall.exe /UPDATE".
   ${If} $UpdateMode <> 1
   ${AndIf} ${FileExists} "$INSTDIR\printer-setup.ps1"
     DetailPrint "Removing the virtual printer '${DOCURA_PRINTER_NAME}'"
@@ -156,6 +197,7 @@
 !macro NSIS_HOOK_POSTUNINSTALL
   ; Not tracked by the Tauri bundler, so its RMDir "$INSTDIR" left the
   ; directory in place.
+  !insertmacro DocuraStopBundledTesseract
   RMDir /r "$INSTDIR\tesseract"
   Delete "$INSTDIR\printer-setup.ps1"
   RMDir "$INSTDIR"
