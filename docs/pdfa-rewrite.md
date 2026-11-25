@@ -186,14 +186,14 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
   (`doc/`, `examples/`; Handbuch mit 8000 Objekten, Illustrator-Grafiken,
   DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
   ihnen der Anhang) die Prüfung: 170 von 170.
-- **Abdeckung** (`just pdfa-coverage`, Unit-Tests plus Matrix): 98,5 % der
-  Funktionen (1041 von 1057, Closures und Testcode mitgezählt), 92,6 % der
-  Zeilen. Jede benannte Funktion des Crates wird ausgeführt. Nicht ausgeführt
-  werden acht Closures für Fälle, die sich im Test nicht herstellen lassen
-  oder eine besondere Schrift bräuchten: Schreibfehler in einen Speicherpuffer
-  (2), fehlendes `WINDIR` und fehlende gebündelte Schrift (3), Anhang ohne
-  Namen nach der Normalisierung (1), Glyphensuche über PostScript-Namen, die
-  weder in der Adobe Glyph List noch in MacRoman stehen (2).
+- **Abdeckung** (`just pdfa-coverage`, Unit-Tests plus Matrix): 100 % der
+  Funktionen (1092 von 1092, Closures und Testcode mitgezählt), 93,1 % der
+  Zeilen. Nichts ist von der Messung ausgenommen außer den Beispielprogrammen
+  und dem Test-Korpus. Für die zuletzt fehlenden Fehlerpfade gibt es eigene
+  Tests: ein Schreibziel, das jeden Schreibversuch ablehnt; die
+  Schriftverzeichnisse mit vorgegebener Umgebung (ohne `WINDIR`); eine
+  Testschrift, deren Glyphen Namen außerhalb der Adobe Glyph List und von
+  MacRoman tragen; ein CID-kodiertes CFF-Programm.
 - **Benchmark** (`just pdfa-bench`, Median aus 5 Läufen, Ghostscript 10.07.1
   mit dem Aufruf der App):
 

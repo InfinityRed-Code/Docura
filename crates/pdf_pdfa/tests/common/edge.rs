@@ -4,7 +4,7 @@
 
 use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
 
-use super::{font_res, helv, minimal_cff, B, TEXT};
+use super::{cff_index, cs_num, font_res, helv, minimal_cff, B, TEXT};
 
 fn name(s: &str) -> Object {
     Object::Name(s.as_bytes().to_vec())
@@ -117,6 +117,138 @@ fn table_checksum(data: &[u8]) -> u32 {
     })
 }
 
+/// A minimal CID-keyed CFF font (Adobe-Identity-0): glyph n is CID n, each
+/// a box with the given advance width.
+pub fn minimal_cid_cff(name: &str, widths: &[i32]) -> Vec<u8> {
+    let int = |v: i32| -> Vec<u8> {
+        let mut o = vec![29u8];
+        o.extend_from_slice(&v.to_be_bytes());
+        o
+    };
+    let header = vec![1u8, 0, 4, 1];
+    let name_idx = cff_index(&[name.as_bytes().to_vec()]);
+    let strings = cff_index(&[b"Adobe".to_vec(), b"Identity".to_vec()]);
+    let mut css: Vec<Vec<u8>> = Vec::new();
+    let mut notdef = cs_num(500);
+    notdef.push(14);
+    css.push(notdef);
+    for w in widths {
+        let mut c = Vec::new();
+        for v in [*w, 100, 0] {
+            c.extend(cs_num(v));
+        }
+        c.push(21);
+        for (x, y) in [(300, 0), (0, 600), (-300, 0)] {
+            c.extend(cs_num(x));
+            c.extend(cs_num(y));
+            c.push(5);
+        }
+        c.push(14);
+        css.push(c);
+    }
+    let charstrings = cff_index(&css);
+    let mut charset = vec![0u8];
+    for cid in 1..=widths.len() as u16 {
+        charset.extend_from_slice(&cid.to_be_bytes());
+    }
+    let mut fdselect = vec![0u8];
+    fdselect.extend(std::iter::repeat_n(0u8, widths.len() + 1));
+    let mut private = int(0);
+    private.push(20);
+    private.extend(int(0));
+    private.push(21);
+    // Fixed-size dictionaries (5-byte operands), so every offset is known.
+    let top_len = 17 + 21 + 7 + 6 + 6 + 7 + 7;
+    let top_idx_len = 2 + 1 + 4 + top_len;
+    let fd_idx_len = 2 + 1 + 4 + 11;
+    let charset_off = header.len() + name_idx.len() + top_idx_len + strings.len() + 2;
+    let fdselect_off = charset_off + charset.len();
+    let cs_off = fdselect_off + fdselect.len();
+    let fdarray_off = cs_off + charstrings.len();
+    let priv_off = fdarray_off + fd_idx_len;
+    let mut top = Vec::new();
+    // ROS: registry and ordering are the first two custom strings (SID 391, 392).
+    for v in [391, 392, 0] {
+        top.extend(int(v));
+    }
+    top.extend_from_slice(&[12, 30]);
+    for v in [0, 0, 1000, 700] {
+        top.extend(int(v));
+    }
+    top.push(5);
+    top.extend(int(widths.len() as i32 + 1));
+    top.extend_from_slice(&[12, 34]); // CIDCount
+    top.extend(int(charset_off as i32));
+    top.push(15);
+    top.extend(int(cs_off as i32));
+    top.push(17);
+    top.extend(int(fdarray_off as i32));
+    top.extend_from_slice(&[12, 36]);
+    top.extend(int(fdselect_off as i32));
+    top.extend_from_slice(&[12, 37]);
+    assert_eq!(top.len(), top_len);
+    let mut font_dict = int(private.len() as i32);
+    font_dict.extend(int(priv_off as i32));
+    font_dict.push(18);
+    let mut out = header;
+    out.extend(name_idx);
+    out.extend(cff_index(&[top]));
+    out.extend(strings);
+    out.extend_from_slice(&[0, 0]);
+    out.extend(charset);
+    out.extend(fdselect);
+    out.extend(charstrings);
+    out.extend(cff_index(&[font_dict]));
+    out.extend(private);
+    out
+}
+
+/// `font` (TrueType) with a version 2 `post` table that gives its glyphs
+/// the names in `names` (the first one must be ".notdef").
+pub fn with_glyph_names(font: &[u8], names: &[&str]) -> Vec<u8> {
+    let be32 = |o: usize| u32::from_be_bytes([font[o], font[o + 1], font[o + 2], font[o + 3]]) as usize;
+    let count = u16::from_be_bytes([font[4], font[5]]) as usize;
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = (0..count)
+        .map(|i| {
+            let r = 12 + 16 * i;
+            let (off, len) = (be32(r + 8), be32(r + 12));
+            ([font[r], font[r + 1], font[r + 2], font[r + 3]], font[off..off + len].to_vec())
+        })
+        .filter(|t| &t.0 != b"post")
+        .collect();
+    let mut post = 0x0002_0000u32.to_be_bytes().to_vec();
+    post.extend_from_slice(&[0; 28]);
+    post.extend_from_slice(&(names.len() as u16).to_be_bytes());
+    for i in 0..names.len() as u16 {
+        // Index 0 is the standard ".notdef"; 258 and up are the strings below.
+        let index = if i == 0 { 0 } else { 257 + i };
+        post.extend_from_slice(&index.to_be_bytes());
+    }
+    for n in &names[1..] {
+        post.push(n.len() as u8);
+        post.extend_from_slice(n.as_bytes());
+    }
+    tables.push((*b"post", post));
+    tables.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = 0x0001_0000u32.to_be_bytes().to_vec();
+    out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+    out.extend_from_slice(&[0; 6]);
+    let header = 12 + 16 * tables.len();
+    let mut body = Vec::new();
+    for (tag, data) in &tables {
+        out.extend_from_slice(tag);
+        out.extend_from_slice(&table_checksum(data).to_be_bytes());
+        out.extend_from_slice(&((header + body.len()) as u32).to_be_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        body.extend_from_slice(data);
+        while body.len() % 4 != 0 {
+            body.push(0);
+        }
+    }
+    out.extend_from_slice(&body);
+    out
+}
+
 /// An OpenType font file around a bare CFF program.
 pub fn opentype_with_cff(cff: &[u8], advances: &[u16]) -> Vec<u8> {
     let n = advances.len() as u16;
@@ -211,10 +343,12 @@ pub fn edge_fonts() -> Vec<u8> {
     for (i, y) in [760, 720, 680, 640].iter().enumerate() {
         c.extend_from_slice(&String::from_utf8(hex_text(&glyphs, *y)).unwrap().replace("/F1", &format!("/F{}", i + 1)).into_bytes());
     }
+    // (A code that maps to no glyph and no character, in the rebuilt font.)
+    c.extend_from_slice(b"BT /F1 18 Tf 72 600 Td <0000> Tj ET\n");
     b.page(&c, res, Dictionary::new());
 
-    // 3: a CFF program used as a CID font, with a subset name.
-    let cff = minimal_cff("MNOPQR+DocuraCid", &[('A', 600), ('B', 700)]);
+    // 3: a CID-keyed CFF program, with a subset name.
+    let cff = minimal_cid_cff("MNOPQR+DocuraCid", &[600, 700]);
     let ff = b.doc.add_object(Stream::new(dictionary! { "Subtype" => "CIDFontType0C" }, cff));
     let fd = descriptor(&mut b, "MNOPQR+DocuraCid", "FontFile3", ff, 4);
     let cf = b.doc.add_object(dictionary! {
@@ -280,6 +414,8 @@ pub fn edge_annotations() -> Vec<u8> {
     let kid = b.doc.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Widget", "Parent" => parent, "Rect" => rect(72, 700, 87, 715), "P" => page_id, "F" => 4, "AP" => dictionary! { "N" => on } });
     b.doc.objects.insert(parent, Object::Dictionary(dictionary! { "FT" => "Btn", "T" => Object::string_literal("haken"), "V" => "On", "Kids" => vec![kid.into()] }));
     annots.push(kid.into());
+    let stated = b.doc.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Widget", "FT" => "Btn", "T" => Object::string_literal("zustand"), "V" => "Ein", "AS" => "Ein", "Rect" => rect(125, 700, 140, 715), "P" => page_id, "F" => 4, "AP" => dictionary! { "N" => on } });
+    annots.push(stated.into());
     // Check box without any appearance, state named by /AS.
     let cb = b.doc.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Widget", "FT" => "Btn", "T" => Object::string_literal("ohne"), "V" => "Ja", "AS" => "Ja", "Rect" => rect(100, 700, 115, 715), "P" => page_id, "F" => 4 });
     annots.push(cb.into());
@@ -350,7 +486,7 @@ pub fn edge_annotations() -> Vec<u8> {
     let semi = b.doc.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Square", "Rect" => rect(72, 600, 172, 650), "F" => 4, "CA" => 0.5, "AP" => dictionary! { "N" => ap2 } });
     b.page(TEXT, font_res(f), dictionary! { "Annots" => vec![semi.into()], "Rotate" => 90 });
 
-    let acro = dictionary! { "Fields" => vec![parent.into(), cb.into(), tparent.into(), list.into()], "DA" => Object::string_literal("/Helv 0 Tf 0 g"), "DR" => dictionary! { "Font" => dictionary! { "Helv" => f } } };
+    let acro = dictionary! { "Fields" => vec![parent.into(), stated.into(), cb.into(), tparent.into(), list.into()], "DA" => Object::string_literal("/Helv 0 Tf 0 g"), "DR" => dictionary! { "Font" => dictionary! { "Helv" => f } } };
     let ocp = dictionary! { "OCGs" => vec![shown.into(), hidden.into()], "D" => dictionary! { "Name" => Object::string_literal("Standard"), "Order" => vec![shown.into(), hidden.into()], "OFF" => vec![hidden.into()] } };
     b.finish_with(dictionary! { "AcroForm" => acro, "OCProperties" => ocp })
 }

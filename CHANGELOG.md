@@ -46,12 +46,15 @@ PDF/A without Ghostscript, at every level (#3).
   (`scripts/fetch-verapdf.ps1`) and validates 29 synthetic test files at all
   eleven levels: 282 conversions pass, 37 are the expected refusals
   (password-protected input, 4f without an attachment), none fails.
-  `just pdfa-coverage` reports the test coverage (98 % of the functions,
+  `just pdfa-coverage` reports the test coverage (every function runs,
   93 % of the lines), `just pdfa-bench` compares speed, size and conformance
   with Ghostscript: on the test files and on 17 documents shipped with
   Ghostscript the built-in converter is 10 to 18 times faster, and every
   output validates. Its files are larger, because Ghostscript recompresses
   images and the built-in converter keeps them as they are.
+
+- **CI.** A GitHub Actions workflow runs `just pdfa-check` on every pull
+  request and on pushes to main; a conversion that veraPDF rejects fails it.
 
 ### Changed
 - "Save as PDF/A", the batch conversion and the virtual printer use the

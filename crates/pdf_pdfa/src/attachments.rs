@@ -393,6 +393,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn name_tree_gets_every_specification() {
+        use lopdf::dictionary;
+        let mut doc = Document::with_version("2.0");
+        let named = doc.add_object(dictionary! { "Type" => "Filespec", "UF" => Object::string_literal("a.txt"), "EF" => Dictionary::new() });
+        let same = doc.add_object(dictionary! { "Type" => "Filespec", "UF" => Object::string_literal("a.txt"), "EF" => Dictionary::new() });
+        // No /UF (not yet normalised) and not a dictionary at all.
+        let nameless = doc.add_object(dictionary! { "Type" => "Filespec", "EF" => Dictionary::new() });
+        let odd = doc.add_object(Object::Integer(1));
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog" });
+        doc.trailer.set("Root", cat);
+        ensure_in_tree(&mut doc, &[named, same, nameless, odd]);
+        let leaves = util::name_tree_leaves(&doc, &embedded_tree(&doc).unwrap());
+        let key_of = |id: ObjectId| leaves.iter().find(|(_, v)| v == &Object::Reference(id)).map(|(k, _)| String::from_utf8_lossy(k).to_string());
+        assert_eq!(key_of(named).as_deref(), Some("a.txt"));
+        assert_eq!(key_of(same).as_deref(), Some("a.txt (2)"));
+        assert_eq!(key_of(nameless), Some(format!("attachment{}", nameless.0)));
+        assert_eq!(key_of(odd), Some(format!("attachment{}", odd.0)));
+        // A second run adds nothing.
+        ensure_in_tree(&mut doc, &[named, same, nameless, odd]);
+        assert_eq!(util::name_tree_leaves(&doc, &embedded_tree(&doc).unwrap()).len(), 4);
+    }
+
+    #[test]
     fn mime_guess() {
         assert_eq!(mime_for("a.PDF"), "application/pdf");
         assert_eq!(mime_for("invoice.xml"), "text/xml");

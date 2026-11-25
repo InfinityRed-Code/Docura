@@ -4,8 +4,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use lopdf::xref::XrefType;
-use lopdf::{Object, SaveOptions, StringFormat};
+use lopdf::{Document, Object, SaveOptions, StringFormat};
 
+use crate::level::Level;
 use crate::util;
 use crate::{Ctx, PdfaError, Result};
 
@@ -63,24 +64,34 @@ pub fn save(ctx: &mut Ctx) -> Result<Vec<u8>> {
         }
     }
 
+    let mut out = Vec::new();
+    write_document(doc, level, &mut out)?;
+    if level.allows_object_streams() {
+        // lopdf bumps the header for object streams; restore the level's.
+        fix_header(&mut out, level.pdf_version());
+    }
+    out.push(b'\n');
+    Ok(out)
+}
+
+/// Serialise `doc` in the file structure of `level` (classic
+/// cross-reference table for part 1, object and cross-reference streams
+/// from part 2 on).
+fn write_document<W: std::io::Write>(doc: &mut Document, level: Level, out: &mut W) -> Result<()> {
     doc.version = level.pdf_version().to_string();
     doc.binary_mark = vec![0xE2, 0xE3, 0xCF, 0xD3];
-    let mut out = Vec::new();
     if level.allows_object_streams() {
         // One object stream for everything: lopdf 0.38 only lists the first
         // object stream in the cross-reference stream, so a second one
         // (more than 100 objects by default) would leave its objects
         // unreachable for strict readers.
         let opts = SaveOptions::builder().use_object_streams(true).use_xref_streams(true).max_objects_per_stream(usize::MAX).compression_level(6).build();
-        doc.save_with_options(&mut out, opts).map_err(|e| PdfaError::Write(e.to_string()))?;
-        // lopdf bumps the header for object streams; restore the level's.
-        fix_header(&mut out, level.pdf_version());
+        doc.save_with_options(out, opts).map_err(|e| PdfaError::Write(e.to_string()))?;
     } else {
         doc.reference_table.cross_reference_type = XrefType::CrossReferenceTable;
-        doc.save_to(&mut out).map_err(|e| PdfaError::Write(e.to_string()))?;
+        doc.save_to(out).map_err(|e| PdfaError::Write(e.to_string()))?;
     }
-    out.push(b'\n');
-    Ok(out)
+    Ok(())
 }
 
 fn fix_header(out: &mut [u8], version: &str) {
@@ -93,6 +104,36 @@ fn fix_header(out: &mut [u8], version: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A target that cannot take any data (full disk, closed pipe).
+    struct Full;
+
+    impl std::io::Write for Full {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_errors_are_reported() {
+        use std::io::Write;
+        assert!(Full.write(b"x").is_err() && Full.flush().is_ok());
+        let bytes = crate::common::simple_pdf("Hallo");
+        for level in ["1b", "2b", "4"] {
+            let level: Level = level.parse().unwrap();
+            let mut doc = Document::load_mem(&bytes).unwrap();
+            let e = write_document(&mut doc, level, &mut Full).unwrap_err();
+            assert!(matches!(&e, PdfaError::Write(m) if !m.is_empty()), "{level}: {e:?}");
+            // The same document goes into a buffer without error.
+            let mut doc = Document::load_mem(&bytes).unwrap();
+            let mut out = Vec::new();
+            write_document(&mut doc, level, &mut out).unwrap();
+            assert!(out.starts_with(b"%PDF-"));
+        }
+    }
 
     #[test]
     fn ids_differ() {

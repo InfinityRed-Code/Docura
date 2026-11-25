@@ -223,7 +223,8 @@ pub fn cid_unembedded() -> Vec<u8> {
         "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "MSGothic", "Encoding" => "Identity-H",
         "DescendantFonts" => vec![cf.into()], "ToUnicode" => tus,
     });
-    b.page(b"BT /F1 20 Tf 72 700 Td <000100020003> Tj ET", font_res(f), Dictionary::new());
+    // (The fourth code has no ToUnicode entry.)
+    b.page(b"BT /F1 20 Tf 72 700 Td <0001000200030004> Tj ET", font_res(f), Dictionary::new());
     b.finish()
 }
 

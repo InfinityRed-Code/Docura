@@ -26,23 +26,29 @@ pub struct FontData {
 }
 
 pub fn default_dirs() -> Vec<PathBuf> {
+    default_dirs_for(cfg!(windows), cfg!(target_os = "macos"), &|k| std::env::var_os(k))
+}
+
+/// The font directories of a platform, with the environment as a lookup
+/// (`WINDIR`, `LOCALAPPDATA`, `HOME`).
+fn default_dirs_for(windows: bool, macos: bool, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if cfg!(windows) {
-        let win = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    if windows {
+        let win = env("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
         v.push(win.join("Fonts"));
-        if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+        if let Some(l) = env("LOCALAPPDATA") {
             v.push(PathBuf::from(l).join("Microsoft").join("Windows").join("Fonts"));
         }
-    } else if cfg!(target_os = "macos") {
+    } else if macos {
         v.push(PathBuf::from("/System/Library/Fonts"));
         v.push(PathBuf::from("/Library/Fonts"));
-        if let Some(h) = std::env::var_os("HOME") {
+        if let Some(h) = env("HOME") {
             v.push(PathBuf::from(h).join("Library/Fonts"));
         }
     } else {
         v.push(PathBuf::from("/usr/share/fonts"));
         v.push(PathBuf::from("/usr/local/share/fonts"));
-        if let Some(h) = std::env::var_os("HOME") {
+        if let Some(h) = env("HOME") {
             v.push(PathBuf::from(&h).join(".fonts"));
             v.push(PathBuf::from(h).join(".local/share/fonts"));
         }
@@ -297,8 +303,14 @@ pub fn find(dirs: &[PathBuf], w: &Want, std: Option<&str>, exact_only: bool) -> 
 
 /// Bundled fallback (always available).
 pub fn bundled(w: &Want) -> FontData {
+    bundled_from(w, &pdf_fonts::family)
+}
+
+/// [`bundled`] with the family lookup as a parameter: a family that is
+/// not there falls back to Roboto.
+fn bundled_from(w: &Want, family: &dyn Fn(&str) -> Option<&'static pdf_fonts::Family>) -> FontData {
     let fam = if w.fixed { "RobotoMono" } else if w.serif { "SourceSerif4" } else { "Roboto" };
-    let f = pdf_fonts::family(fam).or_else(|| pdf_fonts::family("Roboto")).expect("bundled fonts");
+    let f = family(fam).or_else(|| family("Roboto")).expect("bundled fonts");
     let data = f.face(w.bold, w.italic);
     static CACHE: OnceLock<Mutex<HashMap<(usize, usize), Arc<Vec<u8>>>>> = OnceLock::new();
     let key = (data.as_ptr() as usize, data.len());
@@ -314,7 +326,14 @@ pub fn bundled(w: &Want) -> FontData {
             }
             a
         });
-    let ps = ttf_parser::Face::parse(&arc, 0)
+    let ps = postscript_name(&arc, fam);
+    FontData { data: arc, index: 0, ps_name: ps }
+}
+
+/// PostScript name from the font's naming table; `fallback` for a font
+/// without one.
+fn postscript_name(data: &[u8], fallback: &str) -> String {
+    ttf_parser::Face::parse(data, 0)
         .ok()
         .and_then(|face| {
             face.names()
@@ -322,8 +341,7 @@ pub fn bundled(w: &Want) -> FontData {
                 .find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
                 .and_then(|n| n.to_string())
         })
-        .unwrap_or_else(|| fam.to_string());
-    FontData { data: arc, index: 0, ps_name: ps }
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 #[cfg(test)]
@@ -337,6 +355,56 @@ mod tests {
         let m = bundled(&Want { fixed: true, bold: true, ..Default::default() });
         assert!(m.ps_name.contains("Mono"));
         assert!(!bundled(&Want::default()).data.is_empty());
+    }
+
+    #[test]
+    fn font_directories_per_platform() {
+        use std::ffi::OsString;
+        let none = |_: &str| -> Option<OsString> { None };
+        // Windows without WINDIR: the usual location.
+        assert_eq!(default_dirs_for(true, false, &none), vec![PathBuf::from(r"C:\Windows").join("Fonts")]);
+        let win = |k: &str| -> Option<OsString> {
+            match k {
+                "WINDIR" => Some(OsString::from(r"D:\WinNT")),
+                "LOCALAPPDATA" => Some(OsString::from(r"D:\Users\x\AppData\Local")),
+                _ => None,
+            }
+        };
+        let dirs = default_dirs_for(true, false, &win);
+        assert_eq!(dirs[0], PathBuf::from(r"D:\WinNT").join("Fonts"));
+        assert_eq!(dirs[1], PathBuf::from(r"D:\Users\x\AppData\Local").join("Microsoft").join("Windows").join("Fonts"));
+        let home = |k: &str| -> Option<OsString> { (k == "HOME").then(|| OsString::from("/home/x")) };
+        assert_eq!(default_dirs_for(false, true, &none).len(), 2);
+        assert_eq!(default_dirs_for(false, true, &home).len(), 3);
+        assert_eq!(default_dirs_for(false, false, &none).len(), 2);
+        assert_eq!(default_dirs_for(false, false, &home).len(), 4);
+        // The real environment gives at least one directory.
+        assert!(!default_dirs().is_empty());
+    }
+
+    #[test]
+    fn closest_style_is_picked() {
+        let face = |name: &str, bold: bool, italic: bool| SysFont { path: PathBuf::from(name), index: 0, ps_name: name.into(), family: "F".into(), full: name.into(), bold, italic };
+        let all = [face("regular", false, false), face("bold", true, false), face("italic", false, true)];
+        let name = |f: Option<&SysFont>| f.map(|f| f.ps_name.clone());
+        assert_eq!(name(pick(all.iter(), true, false)).as_deref(), Some("bold"));
+        // No bold italic: the bold face. No such weight at all: the regular face.
+        assert_eq!(name(pick(all.iter(), true, true)).as_deref(), Some("bold"));
+        assert_eq!(name(pick(all[..1].iter().chain(&all[2..]), true, true)).as_deref(), Some("regular"));
+        // Only an italic face: better than nothing.
+        assert_eq!(name(pick(all[2..].iter(), true, false)).as_deref(), Some("italic"));
+        assert_eq!(name(pick(all[..0].iter(), false, false)), None);
+    }
+
+    #[test]
+    fn bundled_fallbacks() {
+        // A family that is not bundled: Roboto takes its place.
+        let no_serif = |id: &str| if id == "SourceSerif4" { None } else { pdf_fonts::family(id) };
+        let f = bundled_from(&Want { serif: true, ..Default::default() }, &no_serif);
+        assert!(f.ps_name.starts_with("Roboto"), "{}", f.ps_name);
+        // A font without a readable naming table is called by its family.
+        assert_eq!(postscript_name(b"not a font", "Roboto"), "Roboto");
+        assert_eq!(postscript_name(&f.data, "x"), f.ps_name);
     }
 
     #[test]

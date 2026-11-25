@@ -398,6 +398,25 @@ mod tests {
     }
 
     #[test]
+    fn translucent_annotations_need_rendering() {
+        let page_with = |annot: lopdf::Dictionary| -> (Document, ObjectId) {
+            let mut doc = Document::with_version("1.4");
+            let page = doc.add_object(dictionary! { "Type" => "Page", "Annots" => vec![Object::Dictionary(annot)] });
+            (doc, page)
+        };
+        for (annot, expect) in [
+            (dictionary! { "Subtype" => "Square", "CA" => 0.5 }, Some(Reason::Transparency)),
+            (dictionary! { "Subtype" => "Square", "ca" => 0.25 }, Some(Reason::Transparency)),
+            (dictionary! { "Subtype" => "Square", "CA" => 1, "ca" => 1 }, None),
+            (dictionary! { "Subtype" => "Square", "BM" => "Multiply" }, Some(Reason::Transparency)),
+            (dictionary! { "Subtype" => "Square", "BM" => "Normal" }, None),
+        ] {
+            let (doc, page) = page_with(annot.clone());
+            assert_eq!(page_reason(&doc, page), expect, "{annot:?}");
+        }
+    }
+
+    #[test]
     fn page_image_encoding() {
         let ok = crate::RasterPage { width: 2, height: 2, rgb: vec![200; 12], words: Vec::new() };
         let s = encode_image(&ok).unwrap();

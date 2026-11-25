@@ -130,7 +130,10 @@ fn fonts_come_from_the_bundle_when_the_system_has_none() {
         for level in ["1b", "2u", "4"] {
             let mut o = opts(level);
             o.font_dirs = vec![dir.clone()];
-            let out = convert(&input, &o).unwrap_or_else(|e| panic!("{name} {level}: {e}"));
+            let out = match convert(&input, &o) {
+                Ok(out) => out,
+                Err(e) => panic!("{name} {level}: {e}"),
+            };
             assert!(out.report.has("fonts_embedded"), "{name} {level}");
             // The substitute is one of the bundled families.
             let doc = reload(&out.bytes);

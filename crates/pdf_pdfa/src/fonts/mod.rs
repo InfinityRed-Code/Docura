@@ -1437,6 +1437,66 @@ mod tests {
         assert_eq!(doc.objects.get(&file4).unwrap().as_stream().unwrap().content, b"junk");
     }
 
+    /// A three-glyph font (.notdef, "A", "B" of Roboto) whose glyphs carry
+    /// names that are neither in the Adobe Glyph List nor in MacRoman.
+    fn font_with_private_glyph_names() -> Vec<u8> {
+        let roboto = pdf_fonts::family("Roboto").unwrap().face(false, false);
+        let face = ttf_parser::Face::parse(roboto, 0).unwrap();
+        let src = sfnt::Sfnt::parse(roboto, 0).unwrap();
+        let glyph = |c: char| sfnt::OutGlyph { src: Some(face.glyph_index(c).unwrap().0), advance: None };
+        let mut map = BTreeMap::new();
+        map.insert('A' as u32, 1u16);
+        map.insert('B' as u32, 2u16);
+        let sub = sfnt::subset(&src, &[sfnt::OutGlyph { src: Some(0), advance: None }, glyph('A'), glyph('B')], Some(&sfnt::CmapSpec { platform: 3, encoding: 1, map })).unwrap();
+        crate::common::edge::with_glyph_names(&sub.data, &[".notdef", "docura.first", "docura.second"])
+    }
+
+    #[test]
+    fn glyphs_are_found_by_postscript_name() {
+        let data = font_with_private_glyph_names();
+        let face = ttf_parser::Face::parse(&data, 0).unwrap();
+        assert_eq!(face.glyph_index_by_name("docura.second").map(|g| g.0), Some(2));
+        assert!(encoding::glyph_unicode("docura.first").is_none() && encoding::mac_roman_code("docura.first").is_none());
+        // Embedded TrueType: the encoding names a glyph only the font knows.
+        assert_eq!(truetype_gid(&face, 0x80, Some("docura.first"), false), 1);
+        assert_eq!(truetype_gid(&face, 0x80, Some("docura.second"), false), 2);
+        assert_eq!(truetype_gid(&face, 0x80, Some("docura.third"), false), 0);
+        assert_eq!(truetype_gid(&face, 0x80, Some(".notdef"), false), 0);
+
+        // Not embedded: the same font is installed and the document's
+        // encoding uses its private names. The converter must embed the
+        // named glyphs, not empty ones.
+        let dir = std::env::temp_dir().join(format!("docura-pdfa-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("names.ttf"), &data).unwrap();
+        let mut b = crate::common::B::new();
+        let name = |s: &str| Object::Name(s.as_bytes().to_vec());
+        let font = b.doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "TrueType", "BaseFont" => "Roboto-Regular", "FirstChar" => 128, "LastChar" => 130,
+            "Widths" => vec![600.into(), 600.into(), 600.into()],
+            "Encoding" => dictionary! { "Type" => "Encoding", "BaseEncoding" => "WinAnsiEncoding", "Differences" => vec![128.into(), name("docura.first"), name("docura.second"), name("docura.missing")] },
+        });
+        b.page(b"BT /F1 18 Tf 72 700 Td (\x80\x81\x82) Tj ET", dictionary! { "Font" => dictionary! { "F1" => font } }, Dictionary::new());
+        let mut opts = crate::Options::new("2b".parse().unwrap());
+        opts.font_dirs = vec![dir.clone()];
+        let out = crate::convert(&b.finish(), &opts).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(out.report.has("fonts_embedded"));
+        let doc = Document::load_mem(&out.bytes).unwrap();
+        let program = doc
+            .objects
+            .values()
+            .filter_map(|o| o.as_dict().ok())
+            .find_map(|d| d.get(b"FontFile2").ok().and_then(|r| r.as_reference().ok()))
+            .and_then(|id| doc.get_object(id).ok().and_then(|o| o.as_stream().ok()).and_then(util::stream_data))
+            .expect("embedded font program");
+        let embedded = ttf_parser::Face::parse(&program, 0).unwrap();
+        // .notdef, the two named glyphs with outlines, an empty one for the unknown name.
+        assert_eq!(embedded.number_of_glyphs(), 4);
+        let outline = |g: u16| embedded.glyph_bounding_box(ttf_parser::GlyphId(g)).is_some();
+        assert!(outline(1) && outline(2) && !outline(3));
+    }
+
     #[test]
     fn invalid_tounicode_values_are_replaced() {
         let mut doc = Document::with_version("2.0");

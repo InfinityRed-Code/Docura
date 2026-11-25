@@ -7,13 +7,18 @@
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pdfa-check.ps1
 #
-# Needs vendor/pdfium/pdfium.dll (see scripts/fetch-pdfium.md); the matrix
+# Needs PDFium (vendor/pdfium, see scripts/fetch-pdfium.md); the matrix
 # renders the pages that have no lossless fix with PDFium, as the app does.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# The engine looks for the library in vendor/pdfium; the repository keeps it
+# in vendor/pdfium/bin (a fresh checkout or CI has only that copy).
+if (-not (Test-Path "vendor/pdfium/pdfium.dll") -and (Test-Path "vendor/pdfium/bin/pdfium.dll")) {
+    Copy-Item "vendor/pdfium/bin/pdfium.dll" "vendor/pdfium/pdfium.dll"
+}
 if (-not (Test-Path "vendor/pdfium/pdfium.dll")) {
     Write-Host "MISSING: vendor/pdfium/pdfium.dll (see scripts/fetch-pdfium.md)"
     exit 1
