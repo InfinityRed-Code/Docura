@@ -436,6 +436,35 @@ mod tests {
     }
 
     #[test]
+    fn cmyk_detection_in_content() {
+        let doc_with = |content: &[u8], pattern: bool| -> Document {
+            let mut doc = Document::with_version("1.7");
+            let pages = doc.new_object_id();
+            let mut dict = lopdf::Dictionary::new();
+            if pattern {
+                dict.set("PatternType", 1);
+            }
+            let c = doc.add_object(lopdf::Stream::new(dict, content.to_vec()));
+            let page = if pattern {
+                doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "Resources" => dictionary! { "Pattern" => dictionary! { "P" => c } } })
+            } else {
+                doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "Contents" => c })
+            };
+            doc.objects.insert(pages, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+            let cat = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+            doc.trailer.set("Root", cat);
+            doc
+        };
+        assert!(uses_device_cmyk(&doc_with(b"0 0 0 1 k 0 0 1 1 re f", false)));
+        assert!(uses_device_cmyk(&doc_with(b"/DeviceCMYK cs 0 0 0 1 sc", false)));
+        assert!(uses_device_cmyk(&doc_with(b"BI /W 1 /H 1 /BPC 8 /CS /CMYK ID \x00\x00\x00\x00 EI", false)));
+        assert!(uses_device_cmyk(&doc_with(b"BI /W 1 /H 1 /BPC 8 /ColorSpace /DeviceCMYK ID \x00\x00\x00\x00 EI", false)));
+        assert!(uses_device_cmyk(&doc_with(b"0 1 0 0 K 0 0 m 1 1 l S", true)));
+        assert!(!uses_device_cmyk(&doc_with(b"/DeviceRGB cs 0 0 1 sc BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI 1 0 0 rg", false)));
+        assert!(!uses_device_cmyk(&doc_with(b"1 0 0 rg", true)));
+    }
+
+    #[test]
     fn icc_ref_replacement() {
         let mut o = Object::Array(vec![
             Object::Name(b"Indexed".to_vec()),

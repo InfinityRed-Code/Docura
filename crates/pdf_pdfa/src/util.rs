@@ -245,11 +245,86 @@ pub fn flate_stream(mut dict: Dictionary, data: &[u8]) -> Stream {
 
 /// Decoded stream data, or `None` when a filter is unsupported (DCT, JPX,
 /// CCITT, JBIG2 stay encoded and are not needed decoded).
+///
+/// Handles filter chains with per-filter parameters, the ASCIIHex and
+/// RunLength filters (lopdf decodes neither) and the identity Crypt filter.
 pub fn stream_data(s: &Stream) -> Option<Vec<u8>> {
-    if s.dict.get(b"Filter").is_err() {
-        return Some(s.content.clone());
+    let filters: Vec<Vec<u8>> = match s.dict.get(b"Filter") {
+        Err(_) => return Some(s.content.clone()),
+        Ok(Object::Name(n)) => vec![n.clone()],
+        Ok(Object::Array(a)) => a.iter().map(|o| o.as_name().ok().map(|n| n.to_vec())).collect::<Option<_>>()?,
+        Ok(_) => return None,
+    };
+    let parms: Vec<Option<Dictionary>> = match s.dict.get(b"DecodeParms") {
+        Ok(Object::Dictionary(d)) => vec![Some(d.clone())],
+        Ok(Object::Array(a)) => a.iter().map(|o| o.as_dict().ok().cloned()).collect(),
+        _ => Vec::new(),
+    };
+    let mut data = s.content.clone();
+    for (i, f) in filters.iter().enumerate() {
+        data = match f.as_slice() {
+            b"ASCIIHexDecode" => ascii_hex_decode(&data),
+            b"RunLengthDecode" => run_length_decode(&data),
+            b"Crypt" => data,
+            b"FlateDecode" | b"LZWDecode" | b"ASCII85Decode" => {
+                let mut d = Dictionary::new();
+                d.set("Filter", Object::Name(f.clone()));
+                if let Some(Some(p)) = parms.get(i) {
+                    d.set("DecodeParms", Object::Dictionary(p.clone()));
+                }
+                Stream::new(d, data).decompressed_content().ok()?
+            }
+            _ => return None,
+        };
     }
-    s.decompressed_content().ok()
+    Some(data)
+}
+
+/// ASCIIHexDecode: pairs of hex digits, white space ignored, `>` ends the
+/// data, a missing last digit counts as 0.
+pub fn ascii_hex_decode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() / 2);
+    let mut high: Option<u8> = None;
+    for &c in data {
+        let v = match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            b'>' => break,
+            _ => continue,
+        };
+        match high.take() {
+            Some(h) => out.push(h << 4 | v),
+            None => high = Some(v),
+        }
+    }
+    if let Some(h) = high {
+        out.push(h << 4);
+    }
+    out
+}
+
+/// RunLengthDecode: a length byte below 128 copies the next n+1 bytes,
+/// above 128 repeats the next byte 257-n times, 128 ends the data.
+pub fn run_length_decode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let n = data[i] as usize;
+        i += 1;
+        if n == 128 {
+            break;
+        }
+        if n < 128 {
+            let end = (i + n + 1).min(data.len());
+            out.extend_from_slice(&data[i..end]);
+            i = end;
+        } else if let Some(&b) = data.get(i) {
+            out.extend(std::iter::repeat_n(b, 257 - n));
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Decoded content of a page (all content streams joined by newlines).

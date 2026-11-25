@@ -177,6 +177,43 @@ gebaut, CFF wird vollständig eingebettet).
   <dir>` vergleicht neuen Pfad und Ghostscript (Zeit, Größe, veraPDF-Ergebnis)
   auf dem Korpus und lokal auf `bsp-plaene` (nur lokal, nichts committen).
 
+Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
+
+- **veraPDF-Matrix** (`just pdfa-check`): 29 synthetische Dateien × 11 Stufen,
+  282 × PASS, 0 × FAIL, 37 erwartete Ablehnungen (Datei mit Benutzerkennwort,
+  4f ohne Anhang).
+- **Echte Dokumente:** die 17 PDFs, die Ghostscript 10.07.1 mitbringt
+  (`doc/`, `examples/`; Handbuch mit 8000 Objekten, Illustrator-Grafiken,
+  DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
+  ihnen der Anhang) die Prüfung: 170 von 170.
+- **Abdeckung** (`just pdfa-coverage`, Unit-Tests plus Matrix): 98,4 % der
+  Funktionen (1042 von 1059, Closures und Testcode mitgezählt), 92,6 % der
+  Zeilen. Jede benannte Funktion des Crates wird ausgeführt. Nicht ausgeführt
+  werden acht Closures für Fälle, die sich im Test nicht herstellen lassen
+  oder eine besondere Schrift bräuchten: Schreibfehler in einen Speicherpuffer
+  (2), fehlendes `WINDIR` und fehlende gebündelte Schrift (3), Anhang ohne
+  Namen nach der Normalisierung (1), Glyphensuche über PostScript-Namen, die
+  weder in der Adobe Glyph List noch in MacRoman stehen (2).
+- **Benchmark** (`just pdfa-bench`, Median aus 5 Läufen, Ghostscript 10.07.1
+  mit dem Aufruf der App):
+
+  | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
+  |---|---|---|---|---|---|---|---|---|
+  | Korpus (28) | 1b | 1,44 s | 13,95 s | 9,7× | 3714 KiB | 1320 KiB | 28/28 | 0/28 |
+  | Korpus (28) | 2b | 0,37 s | 5,07 s | 13,8× | 1570 KiB | 241 KiB | 28/28 | 0/28 |
+  | Korpus (28) | 3b | 0,37 s | 5,07 s | 13,9× | 1558 KiB | 241 KiB | 28/28 | 0/28 |
+  | Ghostscript-Dokumente (17) | 1b | 0,84 s | 13,38 s | 15,9× | 19,2 MiB | 6,2 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 2b | 0,43 s | 7,83 s | 18,1× | 17,8 MiB | 4,7 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 3b | 0,43 s | 7,82 s | 18,2× | 17,8 MiB | 4,7 MiB | 17/17 | 0/17 |
+
+  Die Ausgaben des internen Konverters sind größer: Er lässt Bilder und
+  Inhalte, wie sie sind (17,8 MiB bei 17,9 MiB Eingabe), Ghostscript
+  komprimiert Bilder neu und verwirft private Daten. Bei den kleinen
+  Korpusdateien zählen die eingebetteten Schriften (TrueType-Subsets mit
+  Hinting) und die als Bild gespeicherten Seiten. Die 29. Korpusdatei
+  (Benutzerkennwort) lehnt der interne Konverter ab; Ghostscript liefert für
+  sie ohne Fehlermeldung ein leeres Dokument.
+
 ## 6. App-Integration
 
 - Einstellung `pdfa_engine`: `builtin` (neu, Standard sobald Parität erreicht)

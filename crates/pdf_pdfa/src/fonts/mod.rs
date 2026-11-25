@@ -39,6 +39,9 @@ enum Outcome {
 }
 
 pub fn run(ctx: &mut Ctx) -> Result<()> {
+    if ctx.level.part() == 1 {
+        unwrap_opentype(&mut ctx.doc);
+    }
     field_appearances(ctx)?;
     let uses = usage::collect(&ctx.doc);
     let mut reembedded = Vec::new();
@@ -52,6 +55,13 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
         }
     }
     cleanup_descriptors(ctx, &uses);
+    if ctx.level.part() == 4 {
+        // PDF/A-4 does not ask for Unicode, but a ToUnicode map that is
+        // there must not hold invalid values (6.2.10.7).
+        for fid in uses.keys() {
+            repair_tounicode(&mut ctx.doc, *fid);
+        }
+    }
     if !reembedded.is_empty() {
         reembedded.sort();
         reembedded.dedup();
@@ -61,6 +71,48 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
         render_pages_using(ctx, &unfixable)?;
     }
     Ok(())
+}
+
+/// PDF 1.4 (PDF/A-1) has no `FontFile3` of subtype OpenType. The program
+/// inside is one PDF 1.4 knows: a bare CFF font (`Type1C` /
+/// `CIDFontType0C`) or TrueType outlines (`FontFile2`).
+fn unwrap_opentype(doc: &mut Document) {
+    // Descriptors of CID fonts: their CFF program is a CIDFontType0C, also
+    // when the program itself is not CID-keyed.
+    let cid_descriptors: BTreeSet<ObjectId> = doc
+        .objects
+        .values()
+        .filter_map(|o| o.as_dict().ok())
+        .filter(|d| d.get(b"Subtype").ok().and_then(|s| s.as_name().ok()) == Some(b"CIDFontType0".as_slice()))
+        .filter_map(|d| d.get(b"FontDescriptor").ok().and_then(|r| r.as_reference().ok()))
+        .collect();
+    let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    for id in ids {
+        let Some(Object::Dictionary(desc)) = doc.objects.get(&id) else { continue };
+        let Some(Object::Reference(file)) = desc.get(b"FontFile3").ok().cloned() else { continue };
+        let Some(Object::Stream(s)) = doc.objects.get(&file) else { continue };
+        if util::get_name(doc, &s.dict, b"Subtype") != Some(b"OpenType".as_slice()) {
+            continue;
+        }
+        let Some(data) = util::stream_data(s) else { continue };
+        let Ok(face) = ttf_parser::Face::parse(&data, 0) else { continue };
+        if let Some(cff) = face.raw_face().table(ttf_parser::Tag::from_bytes(b"CFF ")) {
+            let subtype: &[u8] = if cid_descriptors.contains(&id) { b"CIDFontType0C" } else { b"Type1C" };
+            let mut dict = Dictionary::new();
+            dict.set("Subtype", Object::Name(subtype.to_vec()));
+            let stream = util::flate_stream(dict, cff);
+            doc.objects.insert(file, Object::Stream(stream));
+        } else if face.tables().glyf.is_some() {
+            let mut dict = Dictionary::new();
+            dict.set("Length1", data.len() as i64);
+            let stream = util::flate_stream(dict, &data);
+            doc.objects.insert(file, Object::Stream(stream));
+            if let Some(d) = dict_mut(doc, id) {
+                d.remove(b"FontFile3");
+                d.set("FontFile2", Object::Reference(file));
+            }
+        }
+    }
 }
 
 fn font_name(doc: &Document, fid: ObjectId) -> String {
@@ -220,6 +272,8 @@ fn truetype_rules_ok(doc: &Document, d: &Dictionary, face: &ttf_parser::Face, sy
             let b = util::get_name(doc, e, b"BaseEncoding").map(base_ok).unwrap_or(false);
             let diffs_ok = match util::get_array(doc, e, b"Differences") {
                 None => true,
+                // PDF/A-1 allows no Differences at all for TrueType (6.3.7).
+                Some(_) if part == 1 => false,
                 Some(a) => has31 && a.iter().all(|x| match deref(doc, x) {
                     Object::Name(n) => encoding::glyph_unicode(&String::from_utf8_lossy(n)).is_some(),
                     _ => true,
@@ -934,6 +988,27 @@ fn ensure_tounicode_codes(doc: &mut Document, fid: ObjectId, codes: &BTreeSet<Co
     }
 }
 
+/// Replace invalid values (U+0000, U+FEFF, U+FFFE, empty) of an existing
+/// ToUnicode map by U+FFFD. Maps without such values stay untouched.
+fn repair_tounicode(doc: &mut Document, fid: ObjectId) {
+    let Some(d) = doc.objects.get(&fid).and_then(|o| o.as_dict().ok()).cloned() else { return };
+    let mut map = existing_tounicode(doc, &d);
+    if map.values().all(|s| valid_unicode(s)) {
+        return;
+    }
+    for s in map.values_mut() {
+        if !valid_unicode(s) {
+            *s = UNKNOWN.to_string();
+        }
+    }
+    let codespace = usage::font_cmap(doc, &d).codespace;
+    let data = cmap::write_to_unicode(&map, &codespace);
+    let id = doc.add_object(Object::Stream(util::flate_stream(Dictionary::new(), &data)));
+    if let Some(dd) = dict_mut(doc, fid) {
+        dd.set("ToUnicode", Object::Reference(id));
+    }
+}
+
 // ---------------------------------------------------------------- descriptors
 
 /// CharSet / CIDSet: required (and must be complete) for PDF/A-1 subsets,
@@ -971,9 +1046,8 @@ fn cleanup_descriptors(ctx: &mut Ctx, uses: &BTreeMap<ObjectId, FontUse>) {
             continue;
         }
         if is_cid {
-            if desc.has(b"CIDSet") {
-                continue;
-            }
+            // An existing CIDSet is replaced too: producers often write
+            // one that misses CIDs of the embedded program (6.3.5).
             if let Some(bits) = cidset_for(doc, fid, &desc) {
                 let s = doc.add_object(Object::Stream(util::flate_stream(Dictionary::new(), &bits)));
                 if let Some(dd) = dict_mut(doc, did) {
@@ -1303,6 +1377,91 @@ mod tests {
     }
 
     #[test]
+    fn cjk_fallbacks_and_missing_fonts() {
+        // An empty font directory: no system font for any ordering.
+        let dir = std::env::temp_dir().join(format!("docura-pdfa-cjk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for ordering in ["Japan1", "GB1", "CNS1", "Korea1", "Identity"] {
+            assert!(cjk_fallback(std::slice::from_ref(&dir), ordering).is_none(), "{ordering}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        // The bundled fonts as "system" fonts: the generic list finds none
+        // of its families there either.
+        let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("pdf_fonts").join("fonts");
+        assert!(cjk_fallback(&[bundled], "Japan1").is_none());
+        assert!(has_pua("\u{E000}") && !has_pua("A"));
+    }
+
+    #[test]
+    fn opentype_wrappers_are_unwrapped_for_pdf_1_4() {
+        let mut doc = Document::with_version("1.4");
+        // TrueType outlines in a FontFile3 /OpenType stream → FontFile2.
+        let ttf = pdf_fonts::family("Roboto").unwrap().face(false, false).to_vec();
+        let file = doc.add_object(Stream::new(dictionary! { "Subtype" => "OpenType" }, ttf.clone()));
+        let desc = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontFile3" => file });
+        // CFF in OpenType → bare CFF.
+        let cff = crate::common::minimal_cff("X", &[('A', 600)]);
+        let otf = crate::common::edge::opentype_with_cff(&cff, &[500, 600]);
+        let file2 = doc.add_object(Stream::new(dictionary! { "Subtype" => "OpenType" }, otf));
+        let desc2 = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontFile3" => file2 });
+        // The same wrapper used by a CID font.
+        let file5 = doc.add_object(Stream::new(dictionary! { "Subtype" => "OpenType" }, crate::common::edge::opentype_with_cff(&cff, &[500, 600])));
+        let desc5 = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontFile3" => file5 });
+        doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "CIDFontType0", "FontDescriptor" => desc5 });
+        // Left alone: other subtypes, unreadable data, dangling references.
+        let file3 = doc.add_object(Stream::new(dictionary! { "Subtype" => "Type1C" }, cff.clone()));
+        let desc3 = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontFile3" => file3 });
+        let file4 = doc.add_object(Stream::new(dictionary! { "Subtype" => "OpenType" }, b"junk".to_vec()));
+        let desc4 = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontFile3" => file4 });
+        doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontFile3" => Object::Reference((9999, 0)) });
+        unwrap_opentype(&mut doc);
+
+        let d = doc.objects.get(&desc).unwrap().as_dict().unwrap();
+        assert!(!d.has(b"FontFile3"));
+        assert_eq!(d.get(b"FontFile2").unwrap(), &Object::Reference(file));
+        let s = doc.objects.get(&file).unwrap().as_stream().unwrap();
+        assert_eq!(s.dict.get(b"Length1").unwrap().as_i64().unwrap(), ttf.len() as i64);
+        assert!(!s.dict.has(b"Subtype"));
+        assert_eq!(util::stream_data(s).unwrap(), ttf);
+
+        let d2 = doc.objects.get(&desc2).unwrap().as_dict().unwrap();
+        assert_eq!(d2.get(b"FontFile3").unwrap(), &Object::Reference(file2));
+        let s2 = doc.objects.get(&file2).unwrap().as_stream().unwrap();
+        assert_eq!(s2.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Type1C");
+        assert_eq!(util::stream_data(s2).unwrap(), cff);
+
+        assert_eq!(doc.objects.get(&file5).unwrap().as_stream().unwrap().dict.get(b"Subtype").unwrap().as_name().unwrap(), b"CIDFontType0C");
+        assert!(doc.objects.get(&desc3).unwrap().as_dict().unwrap().has(b"FontFile3"));
+        assert_eq!(doc.objects.get(&file3).unwrap().as_stream().unwrap().dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Type1C");
+        assert!(doc.objects.get(&desc4).unwrap().as_dict().unwrap().has(b"FontFile3"));
+        assert_eq!(doc.objects.get(&file4).unwrap().as_stream().unwrap().content, b"junk");
+    }
+
+    #[test]
+    fn invalid_tounicode_values_are_replaced() {
+        let mut doc = Document::with_version("2.0");
+        let tu = |doc: &mut Document, body: &str| {
+            let s = format!("1 begincodespacerange <00> <FF> endcodespacerange\n2 beginbfchar {body} endbfchar");
+            doc.add_object(Stream::new(Dictionary::new(), s.into_bytes()))
+        };
+        let bad = tu(&mut doc, "<41> <0041> <42> <0000>");
+        let good = tu(&mut doc, "<41> <0041> <42> <0042>");
+        let f_bad = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "ToUnicode" => bad });
+        let f_good = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "ToUnicode" => good });
+        let f_none = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1" });
+        for f in [f_bad, f_good, f_none, (4242, 0)] {
+            repair_tounicode(&mut doc, f);
+        }
+        let d = doc.objects.get(&f_bad).unwrap().as_dict().unwrap().clone();
+        assert_ne!(d.get(b"ToUnicode").unwrap(), &Object::Reference(bad));
+        let map = existing_tounicode(&doc, &d);
+        assert_eq!(map.get(&(0x41, 1)).map(|s| s.as_str()), Some("A"));
+        assert_eq!(map.get(&(0x42, 1)).map(|s| s.as_str()), Some(UNKNOWN));
+        assert_eq!(doc.objects.get(&f_good).unwrap().as_dict().unwrap().get(b"ToUnicode").unwrap(), &Object::Reference(good));
+        assert!(!doc.objects.get(&f_none).unwrap().as_dict().unwrap().has(b"ToUnicode"));
+    }
+
+    #[test]
     fn unicode_validity() {
         assert!(valid_unicode("a"));
         assert!(!valid_unicode(""));
@@ -1317,6 +1476,7 @@ mod tests {
         let g = truetype_gid(&face, b'A', Some("A"), false);
         assert_eq!(Some(g), face.glyph_index('A').map(|x| x.0));
         assert_eq!(truetype_gid(&face, b'A', Some("nosuchglyph"), false), 0);
+        assert_eq!(truetype_gid(&face, b'A', Some(".notdef"), false), 0);
         let rev = reverse_cmap(&face);
         assert_eq!(rev.get(&g), Some(&'A'));
     }

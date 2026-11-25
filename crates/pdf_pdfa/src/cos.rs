@@ -30,6 +30,17 @@ pub fn run(ctx: &mut Ctx) {
         if filters.is_empty() {
             continue;
         }
+        // LZW is forbidden and Crypt has no meaning without encryption:
+        // decode and store such streams with Flate.
+        let needs_recode = filters.iter().any(|f| f == b"LZWDecode" || f == b"Crypt" || !STD_FILTERS.contains(&f.as_slice()));
+        if needs_recode {
+            if let Some(data) = util::stream_data(s) {
+                let dict = s.dict.clone();
+                *s = util::flate_stream(dict, &data);
+                continue;
+            }
+        }
+        // Not decodable here (an image codec follows): drop the Crypt entry.
         let has_crypt = filters.iter().any(|f| f == b"Crypt");
         if has_crypt {
             let kept: Vec<Object> = filters.iter().filter(|f| f.as_slice() != b"Crypt").map(|f| Object::Name(f.clone())).collect();
@@ -41,13 +52,6 @@ pub fn run(ctx: &mut Ctx) {
                 _ => s.dict.set("Filter", Object::Array(kept)),
             }
             s.dict.remove(b"DecodeParms");
-        }
-        let needs_recode = filters.iter().any(|f| f == b"LZWDecode" || !STD_FILTERS.contains(&f.as_slice()) && f != b"Crypt");
-        if needs_recode {
-            if let Ok(data) = s.decompressed_content() {
-                let dict = s.dict.clone();
-                *s = util::flate_stream(dict, &data);
-            }
         }
     }
     let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
@@ -159,6 +163,33 @@ fn strip_undefined_operators(ctx: &mut Ctx) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crypt_filter_is_removed() {
+        use lopdf::{dictionary, Dictionary, Document, Stream};
+        let name = |s: &str| Object::Name(s.as_bytes().to_vec());
+        let mut doc = Document::with_version("1.7");
+        let mk = |filters: Vec<Object>| {
+            let mut s = Stream::new(dictionary! { "Filter" => filters, "DecodeParms" => vec![Object::Null], "F" => 1, "FFilter" => "x", "FDecodeParms" => 2 }, b"data".to_vec());
+            s.allows_compression = false;
+            s
+        };
+        let jpeg = doc.add_object(mk(vec![name("Crypt"), name("DCTDecode")]));
+        let two = doc.add_object(mk(vec![name("Crypt"), name("DCTDecode"), name("JPXDecode")]));
+        let plain = doc.add_object(mk(vec![name("Crypt")]));
+        let none = doc.add_object(Stream::new(Dictionary::new(), b"x".to_vec()));
+        let o = crate::Options::new("2b".parse().unwrap());
+        let mut ctx = Ctx { doc, level: o.level, opts: &o, report: crate::Report::default(), source: &[] };
+        run(&mut ctx);
+        let dict = |id| ctx.doc.objects.get(&id).unwrap().as_stream().unwrap().dict.clone();
+        assert_eq!(dict(jpeg).get(b"Filter").unwrap(), &name("DCTDecode"));
+        assert!(!dict(jpeg).has(b"DecodeParms") && !dict(jpeg).has(b"F") && !dict(jpeg).has(b"FFilter") && !dict(jpeg).has(b"FDecodeParms"));
+        assert_eq!(dict(two).get(b"Filter").unwrap(), &Object::Array(vec![name("DCTDecode"), name("JPXDecode")]));
+        // Decodable: stored with Flate instead.
+        assert_eq!(dict(plain).get(b"Filter").unwrap(), &name("FlateDecode"));
+        assert_eq!(util::stream_data(ctx.doc.objects.get(&plain).unwrap().as_stream().unwrap()).unwrap(), b"data");
+        assert!(!dict(none).has(b"Filter"));
+    }
 
     #[test]
     fn clamps() {

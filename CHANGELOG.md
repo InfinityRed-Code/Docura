@@ -20,7 +20,8 @@ PDF/A without Ghostscript, at every level (#3).
   - sRGB output intent; `DeviceCMYK` content gets a calibrated default space.
   - Fonts that are not embedded, or embedded with wrong widths or missing
     glyphs, are embedded again from the system fonts or from their own
-    program, with exact widths and a Unicode mapping.
+    program, with exact widths and a Unicode mapping. Fonts wrapped in an
+    OpenType file are unwrapped for PDF/A-1, which does not know that form.
   - Comments keep their look: flags and appearances are corrected, missing
     appearances are drawn, types a level does not allow are removed.
   - **Forms stay fillable.** The Ghostscript path flattened them.
@@ -42,11 +43,15 @@ PDF/A without Ghostscript, at every level (#3).
   "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
   in the settings and in the convert pane.
 - **Conformance tests against veraPDF.** `just pdfa-check` stages veraPDF
-  (`scripts/fetch-verapdf.ps1`) and validates 24 synthetic test files at all
-  eleven levels: 231 conversions pass, 33 are the expected refusals
+  (`scripts/fetch-verapdf.ps1`) and validates 29 synthetic test files at all
+  eleven levels: 282 conversions pass, 37 are the expected refusals
   (password-protected input, 4f without an attachment), none fails.
-  `just pdfa-coverage` reports the test coverage, `just pdfa-bench` compares
-  speed, size and conformance with Ghostscript.
+  `just pdfa-coverage` reports the test coverage (98 % of the functions,
+  93 % of the lines), `just pdfa-bench` compares speed, size and conformance
+  with Ghostscript: on the test files and on 17 documents shipped with
+  Ghostscript the built-in converter is 10 to 18 times faster, and every
+  output validates. Its files are larger, because Ghostscript recompresses
+  images and the built-in converter keeps them as they are.
 
 ### Changed
 - "Save as PDF/A", the batch conversion and the virtual printer use the
@@ -61,8 +66,9 @@ PDF/A without Ghostscript, at every level (#3).
 - **PDF/A-4 could be selected but never worked (#3).** Ghostscript has no
   PDF/A-4 mode and aborted with a range check error.
 - Ghostscript output did not pass validation: the app called it without an
-  output intent, so veraPDF rejects its 1b/2b/3b files for device colours.
-  The built-in converter is validated at every level.
+  output intent, so veraPDF rejects its 1b/2b/3b files for device colours
+  (none of 45 test documents passed at any of the three levels). The
+  built-in converter is validated at every level.
 
 ## [1.3.2] — 2026-11-23
 

@@ -36,6 +36,14 @@ mod write;
 mod xmp;
 mod xobjects;
 
+#[cfg(test)]
+extern crate self as pdf_pdfa;
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod common;
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 
 use lopdf::Document;

@@ -67,7 +67,11 @@ pub fn save(ctx: &mut Ctx) -> Result<Vec<u8>> {
     doc.binary_mark = vec![0xE2, 0xE3, 0xCF, 0xD3];
     let mut out = Vec::new();
     if level.allows_object_streams() {
-        let opts = SaveOptions { use_object_streams: true, use_xref_streams: true, ..Default::default() };
+        // One object stream for everything: lopdf 0.38 only lists the first
+        // object stream in the cross-reference stream, so a second one
+        // (more than 100 objects by default) would leave its objects
+        // unreachable for strict readers.
+        let opts = SaveOptions::builder().use_object_streams(true).use_xref_streams(true).max_objects_per_stream(usize::MAX).compression_level(6).build();
         doc.save_with_options(&mut out, opts).map_err(|e| PdfaError::Write(e.to_string()))?;
         // lopdf bumps the header for object streams; restore the level's.
         fix_header(&mut out, level.pdf_version());

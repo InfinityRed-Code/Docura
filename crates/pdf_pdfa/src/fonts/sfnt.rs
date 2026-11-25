@@ -304,6 +304,43 @@ fn build_cmap(spec: &CmapSpec) -> Vec<u8> {
     t
 }
 
+/// The naming table reduced to the identifying English names (family,
+/// style, unique id, full name, version, PostScript name). System fonts
+/// carry these in dozens of languages plus licence texts, often more bytes
+/// than the glyphs of a small subset. A table that cannot be read is
+/// copied unchanged.
+pub fn slim_name(t: &[u8]) -> Vec<u8> {
+    let be16 = |o: usize| -> Option<usize> { Some(u16::from_be_bytes([*t.get(o)?, *t.get(o + 1)?]) as usize) };
+    let (Some(count), Some(storage)) = (be16(2), be16(4)) else { return t.to_vec() };
+    let mut records = Vec::new();
+    let mut strings = Vec::new();
+    for i in 0..count {
+        let r = 6 + 12 * i;
+        let (Some(pid), Some(lang), Some(id), Some(len), Some(off)) = (be16(r), be16(r + 4), be16(r + 6), be16(r + 8), be16(r + 10)) else {
+            return t.to_vec();
+        };
+        let english = (pid == 3 && lang == 0x409) || (pid == 1 && lang == 0);
+        if !english || !(1..=6).contains(&id) {
+            continue;
+        }
+        let Some(s) = t.get(storage + off..storage + off + len) else { return t.to_vec() };
+        records.push((t[r..r + 6].to_vec(), id as u16, strings.len() as u16, len as u16));
+        strings.extend_from_slice(s);
+    }
+    let mut out = Vec::with_capacity(6 + 12 * records.len() + strings.len());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&(records.len() as u16).to_be_bytes());
+    out.extend_from_slice(&((6 + 12 * records.len()) as u16).to_be_bytes());
+    for (head, id, off, len) in records {
+        out.extend_from_slice(&head);
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&off.to_be_bytes());
+    }
+    out.extend_from_slice(&strings);
+    out
+}
+
 /// Build the subset. `glyphs[0]` should be the .notdef glyph.
 pub fn subset(src: &Sfnt, glyphs: &[OutGlyph], cmap: Option<&CmapSpec>) -> SResult<Subset> {
     if !src.has(b"glyf") || !src.has(b"loca") {
@@ -395,10 +432,13 @@ pub fn subset(src: &Sfnt, glyphs: &[OutGlyph], cmap: Option<&CmapSpec>) -> SResu
     if let Some(c) = cmap {
         tables.push((*b"cmap", build_cmap(c)));
     }
-    for tag in [b"cvt ", b"fpgm", b"prep", b"name", b"OS/2"] {
+    for tag in [b"cvt ", b"fpgm", b"prep", b"OS/2"] {
         if let Some(t) = src.table(tag) {
             tables.push((*tag, t.to_vec()));
         }
+    }
+    if let Some(t) = src.table(b"name") {
+        tables.push((*b"name", slim_name(t)));
     }
     tables.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -444,6 +484,36 @@ pub(crate) mod tests {
 
     pub fn roboto() -> &'static [u8] {
         pdf_fonts::family("Roboto").expect("bundled Roboto").face(false, false)
+    }
+
+    #[test]
+    fn name_table_is_reduced_to_english_names() {
+        let src = Sfnt::parse(roboto(), 0).unwrap();
+        let full = src.table(b"name").unwrap();
+        let slim = slim_name(full);
+        assert!(slim.len() <= full.len());
+        // Still a valid font with its PostScript name.
+        let sub = subset(&src, &[OutGlyph { src: Some(0), advance: None }], None).unwrap();
+        let face = ttf_parser::Face::parse(&sub.data, 0).unwrap();
+        let ps = face.names().into_iter().find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME).and_then(|n| n.to_string());
+        assert_eq!(ps.as_deref(), Some("Roboto-Regular"));
+        assert!(face.names().into_iter().all(|n| (1..=6).contains(&n.name_id)));
+        // Hand-made table: one English record kept, a German one and a licence text dropped.
+        let mut t = vec![0, 0, 0, 3, 0, 42];
+        for (lang, id, len, off) in [(0x409u16, 4u16, 2u16, 0u16), (0x407, 4, 2, 2), (0x409, 13, 2, 4)] {
+            t.extend_from_slice(&[0, 3, 0, 1]);
+            for v in [lang, id, len, off] {
+                t.extend_from_slice(&v.to_be_bytes());
+            }
+        }
+        t.extend_from_slice(b"ENDELI");
+        let s = slim_name(&t);
+        assert_eq!(&s[..6], &[0, 0, 0, 1, 0, 18]);
+        assert_eq!(&s[18..], b"EN");
+        // Unreadable tables are passed through.
+        assert_eq!(slim_name(&[0, 0, 0]), vec![0, 0, 0]);
+        assert_eq!(slim_name(&[0, 0, 0, 1, 0, 6]), vec![0, 0, 0, 1, 0, 6]);
+        assert_eq!(slim_name(&t[..40]), t[..40].to_vec());
     }
 
     #[test]

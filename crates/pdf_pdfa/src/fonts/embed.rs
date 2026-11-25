@@ -260,4 +260,49 @@ mod tests {
         assert_eq!(cmap[&'i'], 2);
         assert_eq!(widths.len(), 4);
     }
+
+    #[test]
+    fn unusable_font_programs_are_errors() {
+        let mut doc = Document::with_version("1.7");
+        let level: Level = "2b".parse().unwrap();
+        let garbage = FontData { data: std::sync::Arc::new(b"not a font".to_vec()), index: 0, ps_name: "Broken".into() };
+        let e = build_type0(&mut doc, &garbage, &[], Enc::IdentityH, &BTreeMap::new(), level).unwrap_err();
+        assert!(matches!(e, PdfaError::Unsupported(m) if m.contains("font Broken")));
+        assert!(matches!(text_font(&mut doc, &garbage, &['a'], level), Err(PdfaError::Unsupported(_))));
+
+        // A font without glyph outlines (the glyf table renamed away).
+        let good = sysfonts::bundled(&sysfonts::Want::default());
+        let mut data = good.data.to_vec();
+        let n = u16::from_be_bytes([data[4], data[5]]) as usize;
+        for i in 0..n {
+            let r = 12 + 16 * i;
+            if &data[r..r + 4] == b"glyf" {
+                data[r..r + 4].copy_from_slice(b"glyX");
+            }
+        }
+        let no_glyf = FontData { data: std::sync::Arc::new(data), index: 0, ps_name: "NoOutlines".into() };
+        let e = build_type0(&mut doc, &no_glyf, &[], Enc::IdentityH, &BTreeMap::new(), level).unwrap_err();
+        assert!(matches!(e, PdfaError::Unsupported(m) if m.contains("font NoOutlines")));
+
+        // A font with neither '?' nor a space: unknown characters get glyph 0.
+        let src_face = Sfnt::parse(&good.data, 0).unwrap();
+        let gid_a = ttf_parser::Face::parse(&good.data, 0).unwrap().glyph_index('A').unwrap().0;
+        let mut map = BTreeMap::new();
+        map.insert('A' as u32, 1u16);
+        let only_a = sfnt::subset(&src_face, &[OutGlyph { src: Some(0), advance: None }, OutGlyph { src: Some(gid_a), advance: None }], Some(&sfnt::CmapSpec { platform: 3, encoding: 1, map })).unwrap();
+        let tiny = FontData { data: std::sync::Arc::new(only_a.data), index: 0, ps_name: "OnlyA".into() };
+        let (_, cids, widths) = text_font(&mut doc, &tiny, &['A', 'z'], level).unwrap();
+        assert_eq!(cids.len(), 2);
+        assert!(widths.len() >= 2);
+
+        // Glyphs that keep the font's own advance.
+        let face = ttf_parser::Face::parse(&good.data, 0).unwrap();
+        let ga = face.glyph_index('A').unwrap();
+        let own = (face.glyph_hor_advance(ga).unwrap() as f64 * 1000.0 / face.units_per_em() as f64).round() as i64;
+        let f = build_type0(&mut doc, &good, &[Glyph { src: Some(ga.0), width: None }], Enc::IdentityH, &BTreeMap::new(), level).unwrap();
+        let cid = f.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        // One glyph: its advance is the default width.
+        let cd = doc.get_object(cid).unwrap().as_dict().unwrap();
+        assert_eq!(cd.get(b"DW").unwrap().as_i64().unwrap(), own);
+    }
 }

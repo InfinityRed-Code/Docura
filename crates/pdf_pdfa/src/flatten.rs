@@ -378,4 +378,35 @@ mod tests {
         assert_eq!(placement(b, 270), [0.0, -200.0, 100.0, 0.0, 0.0, 200.0]);
         assert!(is_standard_blend(b"Multiply") && !is_standard_blend(b"Foo"));
     }
+
+    #[test]
+    fn transparency_and_jpx_in_array_form() {
+        let doc = Document::with_version("1.4");
+        let scan = Scan { doc: &doc, seen: BTreeSet::new(), reason: None };
+        let name = |s: &str| Object::Name(s.as_bytes().to_vec());
+        assert!(scan.gs_transparent(&dictionary! { "BM" => vec![name("Multiply"), name("Normal")] }));
+        assert!(!scan.gs_transparent(&dictionary! { "BM" => vec![name("Normal"), name("Compatible")] }));
+        assert!(!scan.gs_transparent(&dictionary! { "BM" => "Compatible", "CA" => 1, "SMask" => "None" }));
+        assert!(scan.gs_transparent(&dictionary! { "ca" => 0.5 }));
+        assert!(scan.gs_transparent(&dictionary! { "SMask" => dictionary! { "S" => "Alpha" } }));
+        assert!(!scan.gs_transparent(&dictionary! { "BM" => 3 }));
+        assert_eq!(scan.image_bad(&dictionary! { "Filter" => vec![name("ASCIIHexDecode"), name("JPXDecode")] }), Some(Reason::Jpx));
+        assert_eq!(scan.image_bad(&dictionary! { "Filter" => vec![name("FlateDecode")] }), None);
+        assert_eq!(scan.image_bad(&dictionary! { "Filter" => "JPXDecode" }), Some(Reason::Jpx));
+        assert_eq!(scan.image_bad(&dictionary! { "SMaskInData" => 1 }), Some(Reason::Transparency));
+        assert_eq!(scan.image_bad(&dictionary! { "Filter" => 1 }), None);
+    }
+
+    #[test]
+    fn page_image_encoding() {
+        let ok = crate::RasterPage { width: 2, height: 2, rgb: vec![200; 12], words: Vec::new() };
+        let s = encode_image(&ok).unwrap();
+        assert_eq!(s.dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+        assert!(s.content.starts_with(&[0xFF, 0xD8]));
+        // Too little pixel data, and a size JPEG cannot hold.
+        let short = crate::RasterPage { width: 2, height: 2, rgb: vec![0; 5], words: Vec::new() };
+        assert!(matches!(encode_image(&short), Err(PdfaError::Unsupported(m)) if m.contains("empty")));
+        let wide = crate::RasterPage { width: 70_000, height: 1, rgb: vec![0; 210_000], words: Vec::new() };
+        assert!(matches!(encode_image(&wide), Err(PdfaError::Unsupported(m)) if m.contains("JPEG")));
+    }
 }

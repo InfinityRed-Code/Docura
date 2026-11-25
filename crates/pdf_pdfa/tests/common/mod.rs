@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod edge;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,13 +18,15 @@ pub struct B {
     pub doc: Document,
     pages: ObjectId,
     kids: Vec<Object>,
+    /// Extra entries of the page tree root (inherited by the pages).
+    pub pages_extra: Dictionary,
 }
 
 impl B {
     pub fn new() -> B {
         let mut doc = Document::with_version("1.7");
         let pages = doc.new_object_id();
-        B { doc, pages, kids: Vec::new() }
+        B { doc, pages, kids: Vec::new(), pages_extra: Dictionary::new() }
     }
 
     pub fn page(&mut self, content: &[u8], resources: Dictionary, extra: Dictionary) -> ObjectId {
@@ -45,10 +49,11 @@ impl B {
 
     pub fn finish_with(mut self, catalog_extra: Dictionary) -> Vec<u8> {
         let n = self.kids.len() as i64;
-        self.doc.objects.insert(
-            self.pages,
-            Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => self.kids.clone(), "Count" => n }),
-        );
+        let mut root = dictionary! { "Type" => "Pages", "Kids" => self.kids.clone(), "Count" => n };
+        for (k, v) in self.pages_extra.iter() {
+            root.set(k.clone(), v.clone());
+        }
+        self.doc.objects.insert(self.pages, Object::Dictionary(root));
         let mut cat = dictionary! { "Type" => "Catalog", "Pages" => self.pages };
         cat.extend(&catalog_extra);
         let cid = self.doc.add_object(cat);
@@ -122,9 +127,14 @@ pub fn corpus() -> Vec<Case> {
         Case { name: "vertical_cjk", bytes: vertical_cjk(), expect: Expect::Ok },
         Case { name: "spot_colors", bytes: spot_colors(), expect: Expect::Ok },
         Case { name: "page_boxes", bytes: page_boxes(), expect: Expect::Ok },
+        Case { name: "edge_fonts", bytes: edge::edge_fonts(), expect: Expect::Ok },
+        Case { name: "edge_annotations", bytes: edge::edge_annotations(), expect: Expect::Ok },
+        Case { name: "edge_color", bytes: edge::edge_color(), expect: Expect::Ok },
+        Case { name: "edge_attachments", bytes: edge::edge_attachments(), expect: Expect::Ok },
+        Case { name: "many_pages", bytes: edge::many_pages(), expect: Expect::Ok },
     ];
     for c in &mut v {
-        if c.expect == Expect::Ok && c.name != "attachments" {
+        if c.expect == Expect::Ok && !matches!(c.name, "attachments" | "edge_attachments") {
             c.expect = Expect::AttachmentRequiredFor4f;
         }
     }
@@ -853,7 +863,14 @@ pub fn cff_type1_missing_glyphs() -> Vec<u8> {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "DocuraType1Ok", "FirstChar" => 65, "LastChar" => 66,
         "Widths" => vec![500.into(), 500.into()], "FontDescriptor" => fd,
     });
-    b.page(b"BT /F1 24 Tf 72 700 Td (ABBA) Tj ET", font_res(f4), Dictionary::new());
+    // (With an annotation: pages are picked for rendering by the fonts
+    // their content and their annotation appearances use.)
+    let ap = b.doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 100.into(), 30.into()], "Resources" => dictionary! { "Font" => dictionary! { "F1" => f4 } } },
+        b"BT /F1 12 Tf 2 8 Td (AB) Tj ET".to_vec(),
+    ));
+    let stamp = b.doc.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Stamp", "Rect" => vec![72.into(), 600.into(), 172.into(), 630.into()], "F" => 4, "AP" => dictionary! { "N" => ap } });
+    b.page(b"BT /F1 24 Tf 72 700 Td (ABBA) Tj ET", font_res(f4), dictionary! { "Annots" => vec![stamp.into()] });
     b.finish()
 }
 

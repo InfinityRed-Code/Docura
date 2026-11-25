@@ -280,6 +280,26 @@ mod tests {
     }
 
     #[test]
+    fn hex_encoded_private_part() {
+        // The same font with the encrypted part as hex digits (PFA form).
+        let bin = sample();
+        let split = find(&bin, b"eexec").unwrap() + 6;
+        let mut pfa = bin[..split].to_vec();
+        for (i, b) in bin[split..].iter().enumerate() {
+            pfa.extend_from_slice(format!("{b:02X}").as_bytes());
+            if i % 32 == 31 {
+                pfa.push(b'\n');
+            }
+        }
+        let f = parse(&pfa, None).unwrap();
+        assert_eq!(f.widths.get("A"), Some(&667.0));
+        assert_eq!(f.widths.get("B"), Some(&300.0));
+        // /Length1 pointing past the clear text is ignored.
+        assert!(parse(&bin, Some(bin.len() + 10)).is_some());
+        assert!(parse(&bin, Some(3)).is_some());
+    }
+
+    #[test]
     fn charstring_numbers() {
         assert_eq!(charstring_width(&[139, 247, 0, 13]), Some(108.0));
         assert_eq!(charstring_width(&[139, 139, 251, 0, 139, 12, 7]), Some(-108.0));
