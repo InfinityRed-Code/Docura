@@ -509,15 +509,15 @@ pub fn add_3d_annotation(doc: &mut Document, page_index: u32, a: &ThreeDAnnotati
 
     // 3D stream.
     let views: Vec<Object> = a.views.iter().map(|v| Object::Dictionary(write_view(v))).collect();
-    let mut stream = Stream::new(
-        dictionary! {
-            "Type" => "3D",
-            "Subtype" => "U3D",
-            "VA" => views,
-            "DV" => a.default_view.min(a.views.len().saturating_sub(1)) as i64,
-        },
-        a.u3d.clone(),
-    );
+    // Without preset views the model's own default view applies; an index
+    // into an empty /VA would be invalid.
+    let default_view = (!a.views.is_empty()).then(|| a.default_view.min(a.views.len() - 1) as i64);
+    let mut stream_dict = dictionary! { "Type" => "3D", "Subtype" => "U3D" };
+    if let Some(dv) = default_view {
+        stream_dict.set("VA", views);
+        stream_dict.set("DV", dv);
+    }
+    let mut stream = Stream::new(stream_dict, a.u3d.clone());
     let _ = stream.compress();
     let stream_id = doc.add_object(stream);
 
@@ -526,7 +526,7 @@ pub fn add_3d_annotation(doc: &mut Document, page_index: u32, a: &ThreeDAnnotati
         "PO" | "PV" => a.activation.clone(),
         _ => "XA".to_string(),
     };
-    let annot = dictionary! {
+    let mut annot = dictionary! {
         "Type" => "Annot",
         "Subtype" => "3D",
         "Rect" => vec![real(llx), real(lly), real(urx), real(ury)],
@@ -536,7 +536,6 @@ pub fn add_3d_annotation(doc: &mut Document, page_index: u32, a: &ThreeDAnnotati
         "M" => Object::string_literal(now_pdf_date()),
         "F" => 4,
         "3DD" => stream_id,
-        "3DV" => a.default_view.min(a.views.len().saturating_sub(1)) as i64,
         "3DA" => dictionary! {
             "A" => Object::Name(activation.into_bytes()),
             "D" => "PI",
@@ -546,6 +545,9 @@ pub fn add_3d_annotation(doc: &mut Document, page_index: u32, a: &ThreeDAnnotati
         "3DI" => true,
         "AP" => dictionary! { "N" => form_id },
     };
+    if let Some(dv) = default_view {
+        annot.set("3DV", dv);
+    }
     let annot_id = doc.add_object(annot);
     append_annot_to_page(doc, page_id, annot_id)?;
     Ok(annot_id)

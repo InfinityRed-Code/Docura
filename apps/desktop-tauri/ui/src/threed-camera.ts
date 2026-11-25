@@ -189,9 +189,10 @@ export function standardViews(bounds: Bounds, names: Record<string, string>, w: 
   });
 }
 
-/** Lighting schemes of ISO 32000-1 Table 310: directional lights in camera
- * space (x right, y up, looking +z) plus an ambient term. A zero direction
- * means a light along the line of sight. */
+/** Lighting schemes of ISO 32000-1 Table 310: infinite lights plus an
+ * ambient term. `dir` points from the model *to* the light and is fixed in
+ * model space (Z up): Acrobat lights the top of a model the same from every
+ * side. A zero direction is the headlamp, which follows the camera. */
 export const LIGHTING: Record<string, { lights: { color: Vec3; dir: Vec3 }[]; ambient: Vec3 }> = {
   White: {
     ambient: [0, 0, 0],
@@ -270,6 +271,54 @@ export const LIGHTING: Record<string, { lights: { color: Vec3; dir: Vec3 }[]; am
     lights: [{ color: [0.8, 0.8, 0.9], dir: [0, 0, 0] }],
   },
 };
+
+// Shading calibration. Acrobat (and Foxit) light in display space, the way
+// fixed-function pipelines did: shaded = diffuse * light + specular, on the
+// sRGB values, without a linear working space. The viewer does the same.
+// The factors are fitted to Adobe Acrobat Reader 26.003 showing the
+// materials Docura writes (specular 0.25) under the "CAD" scheme: front and
+// top view of faces towards the camera, and the oblique faces of the
+// isometric view.
+/** Intensity of a scheme light of color 1 (times pi in three.js units). */
+export const LIGHT_SCALE = 0.93;
+/** Factor on a material's U3D specular color (the result is capped at 1).
+ * Acrobat's highlight is broad: it still lifts a face turned 40 degrees
+ * away, hence the low exponent. */
+export const SPECULAR_SCALE = 2.1;
+export const SHININESS = 3;
+/** A material's specular color as the viewer's shading uses it. */
+export const specularFor = (c: Vec3): Vec3 => [Math.min(1, c[0] * SPECULAR_SCALE), Math.min(1, c[1] * SPECULAR_SCALE), Math.min(1, c[2] * SPECULAR_SCALE)];
+/** Share of a scheme's ambient term that reaches a surface. */
+export const AMBIENT_SCALE = 0.6;
+
+/** The color (display values 0..1) the viewer's shading gives a surface
+ * with unit `normal`, seen from `toCamera` (unit vector from the surface to
+ * the camera, both in model space), for a material's diffuse and specular
+ * color under a lighting scheme: Lambert plus normalized Blinn-Phong as
+ * three.js' MeshPhongMaterial computes them. Documents the calibration and
+ * lets a test hold it against values measured in Acrobat. */
+export function shade(scheme: string, diffuse: Vec3, specular: Vec3, normal: Vec3, toCamera: Vec3): Vec3 {
+  const def = LIGHTING[scheme];
+  if (!def) return diffuse;
+  const out: Vec3 = [0, 0, 0];
+  for (let k = 0; k < 3; k++) out[k] = diffuse[k] * def.ambient[k] * AMBIENT_SCALE;
+  for (const l of def.lights) {
+    const toLight = len(l.dir) === 0 ? toCamera : norm(l.dir);
+    const nDotL = dot(normal, toLight);
+    if (nDotL <= 0) continue;
+    const h = norm(add(toLight, toCamera));
+    const nDotH = Math.max(0, dot(normal, h));
+    const vDotH = Math.max(0, dot(toCamera, h));
+    const lobe = 0.25 * (SHININESS * 0.5 + 1) * Math.pow(nDotH, SHININESS);
+    for (let k = 0; k < 3; k++) {
+      const irradiance = l.color[k] * LIGHT_SCALE * nDotL;
+      const f0 = specularFor(specular)[k];
+      const fresnel = f0 + (1 - f0) * Math.pow(1 - vDotH, 5);
+      out[k] += diffuse[k] * irradiance + fresnel * lobe * irradiance;
+    }
+  }
+  return [Math.min(1, out[0]), Math.min(1, out[1]), Math.min(1, out[2])];
+}
 
 export const LIGHTING_NAMES = ["Artwork", "None", "White", "Day", "Night", "Hard", "Primary", "Blue", "Red", "Cube", "CAD", "Headlamp"];
 

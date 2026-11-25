@@ -94,3 +94,42 @@ test("verticalFov converts the PDF field of view by its span", () => {
   const w = verticalFov(30, "W", 400, 300); // 30 degrees across the width
   assert.ok(Math.abs(Math.tan((w * Math.PI) / 360) - Math.tan(Math.PI / 12) * 0.75) < 1e-9);
 });
+
+test("CAD shading matches Adobe Acrobat Reader", async () => {
+  const { shade } = await import("../src/threed-camera.ts");
+  // orientation.pdf (make_3d_samples) in Adobe Acrobat Reader 26.003; Foxit
+  // PDF Reader 2026.1 agrees within 0.03 on the front view. Each row: the
+  // material's diffuse color (specular 0.25, as the U3D writer stores it),
+  // the face normal, and the pixel Acrobat shows.
+  const X = [1, 0, 0], Y = [0, -1, 0], Z = [0, 0, 1];
+  const red = [0.9, 0.1, 0.1], green = [0.1, 0.7, 0.15], blue = [0.1, 0.25, 0.9], yellow = [0.95, 0.8, 0.1];
+  const iso = norm3([1, -1, 0.8]);
+  const cases = [
+    // view "Vorne": camera at -Y, faces towards the camera
+    ["front red", red, Y, Y, [240, 75, 84], 0.04],
+    ["front blue", blue, Y, Y, [77, 108, 255], 0.04],
+    ["front yellow", yellow, Y, Y, [251, 220, 84], 0.04],
+    // view "Isometrisch": oblique faces; the top is lit from above
+    ["iso red top", red, Z, iso, [177, 35, 39], 0.1],
+    ["iso red front", red, Y, iso, [119, 21, 24], 0.1],
+    ["iso blue front", blue, Y, iso, [16, 32, 117], 0.13],
+    ["iso yellow +X", yellow, X, iso, [140, 120, 28], 0.1],
+    // view "Oben": the light from above mirrors into the camera; Acrobat's
+    // highlight is weaker than Blinn-Phong's here
+    ["top red", red, Z, Z, [255, 86, 97], 0.12],
+    ["top green", green, Z, Z, [87, 237, 111], 0.12],
+  ];
+  for (const [name, diffuse, normal, toCamera, px, tol] of cases) {
+    const got = shade("CAD", diffuse, [0.25, 0.25, 0.25], normal, toCamera);
+    got.forEach((v, k) => assert.ok(Math.abs(v - px[k] / 255) < tol, `${name}: channel ${k} is ${v.toFixed(3)}, Acrobat ${(px[k] / 255).toFixed(3)}`));
+  }
+  // The top of a model is brighter than its front from the same distance:
+  // the scheme's lights are fixed to the model, only the headlamp moves.
+  assert.ok(shade("CAD", green, [0, 0, 0], Z, Z)[1] > shade("CAD", green, [0, 0, 0], Y, Y)[1] + 0.05);
+  near(shade("nope", [0.2, 0.3, 0.4], [0, 0, 0], Z, Z), [0.2, 0.3, 0.4]);
+});
+
+function norm3(v) {
+  const l = Math.hypot(...v);
+  return v.map((x) => x / l);
+}

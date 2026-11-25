@@ -81,6 +81,7 @@ function requestPreview(a: ThreeDAnnot) {
     try {
       const model = await loadModel(a);
       const mod = await loadViewModule();
+      await model.ready; // textures, or the preview shows bare materials
       const { w, h } = boxSizePt(a);
       const s = Math.min(2, 1600 / Math.max(w, h));
       const view = a.default_view !== null ? a.views[a.default_view] ?? null : null;

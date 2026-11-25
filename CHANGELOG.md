@@ -42,8 +42,19 @@ scope each tag landed.
   the source file are not written.
 - U3D line and point sets, animations and bones are not shown; section
   planes are not capped.
-- Checked against Foxit PDF Reader (views, orientation, colours). A check
-  in Adobe Acrobat Reader is still open.
+- A U3D model without views in the PDF opens with the model's own camera
+  on a white background; Acrobat uses its own default camera and a grey
+  background there. Only the first texture layer of a material is shown.
+- Shading follows Acrobat's "CAD" lighting scheme closely for the materials
+  Docura writes (within about 0.1 of the display value on the faces
+  measured); the other lighting schemes and highlights seen straight from
+  above are approximations.
+
+### Verified
+- Files written by Docura (the inserter and the sample generator) were
+  checked in Adobe Acrobat Reader 26.003 and Foxit PDF Reader 2026.1:
+  camera convention, the preset views, colours, model tree and poster
+  match what Docura shows.
 
 ### Third-party
 - three.js 0.187.0 (MIT, with fflate, MIT) for the 3D view and the model

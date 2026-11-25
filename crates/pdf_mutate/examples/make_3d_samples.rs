@@ -1,6 +1,6 @@
 //! Dev utility: generate 3D PDFs for testing the 3D viewer.
 //!
-//!     cargo run -p pdf_mutate --example make_3d_samples -- out_dir
+//!     cargo run -p pdf_mutate --example make_3d_samples -- out_dir [model.u3d ...]
 //!
 //! - `building.pdf`: a building frame like a structural CAD export
 //!   (storeys as groups, ~1000 columns/beams/slabs as parts), no poster.
@@ -8,6 +8,7 @@
 //! - `orientation.pdf`: coloured axis bars, activated on page open, to
 //!   cross-check camera convention and colours in other viewers.
 //! - `blank.pdf`: an empty page to insert models into.
+//! - `<name>.pdf` for every U3D file given: the model as it is.
 //! - `prc_placeholder.pdf`: a 3D annotation declaring PRC data (not a real
 //!   PRC model) with a poster, for the "format not supported" path.
 
@@ -288,6 +289,31 @@ fn main() {
         false,
         "PO",
     );
+
+    // Further arguments: U3D files (e.g. crates/pdf_3d/tests/fixtures/intel/*.u3d)
+    // wrapped as they are, without preset views, activated on page open.
+    for u3d_path in std::env::args().skip(2) {
+        let u3d = std::fs::read(&u3d_path).unwrap();
+        let stem = std::path::Path::new(&u3d_path).file_stem().unwrap().to_string_lossy().into_owned();
+        let (w, h) = (842.0, 595.0);
+        let mut doc = pdf_mutate::MutableDoc::from_bytes(&page_pdf(&format!("Docura 3D-Test: {stem}.u3d"), w, h)).unwrap();
+        doc.add_3d_annotation(
+            0,
+            &pdf_mutate::ThreeDAnnotation {
+                rect: RectPt { x0: 40.0, y0: 80.0, x1: w - 40.0, y1: h - 40.0 },
+                u3d,
+                views: Vec::new(),
+                default_view: 0,
+                poster: gray_png(),
+                name: stem.clone(),
+                activation: "PO".into(),
+            },
+        )
+        .unwrap();
+        let p = out.join(format!("{stem}.pdf"));
+        std::fs::write(&p, doc.to_bytes().unwrap()).unwrap();
+        println!("{}", p.display());
+    }
 
     // PRC placeholder: a 3D annotation whose stream says PRC.
     let mut doc = lopdf::Document::load_mem(&page_pdf("Docura 3D-Test: PRC (nicht unterstuetzt)", 842.0, 595.0)).unwrap();

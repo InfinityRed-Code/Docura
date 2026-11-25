@@ -10,12 +10,21 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { t } from "./i18n";
 import type { ThreeDAnnot, ThreeDView } from "./types";
 import {
-  cameraForView, fitCamera, LIGHTING, LIGHTING_NAMES, RENDER_MODES,
+  AMBIENT_SCALE, cameraForView, fitCamera, LIGHT_SCALE, LIGHTING, LIGHTING_NAMES, RENDER_MODES, SHININESS, specularFor,
   type Bounds, type CameraSpec, type Vec3,
 } from "./threed-camera";
 
-/** PDF/U3D colors are sRGB values; three.js works in linear sRGB. */
-export const srgb = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+/** A PDF/U3D color. The values are display (sRGB) values and are used as
+ * they are: like Acrobat, the viewer shades in display space (see
+ * LIGHT_SCALE in threed-camera.ts), so every renderer here outputs its
+ * working values unchanged (`displaySpace`). */
+export const srgb = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
+
+/** Makes `renderer` write the working values to the screen unconverted. */
+export function displaySpace(renderer: THREE.WebGLRenderer): THREE.WebGLRenderer {
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  return renderer;
+}
 
 type Range = { offset: number; length: number };
 type PackedHeader = {
@@ -46,6 +55,9 @@ export type Model3D = {
   meshes: THREE.Mesh[];
   header: PackedHeader;
   bounds: Bounds | null;
+  /** Settles once every texture image is decoded (or failed): textures
+   * load asynchronously, a frame drawn earlier shows the bare material. */
+  ready: Promise<void>;
   dispose: () => void;
 };
 
@@ -60,12 +72,15 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
   const u32 = (r: Range) => new Uint32Array(buf, base + r.offset, r.length / 4);
 
   const urls: string[] = [];
+  const loading: Promise<void>[] = [];
   const textures = header.textures.map((tx) => {
     const blob = new Blob([bytes.subarray(base + tx.data.offset, base + tx.data.offset + tx.data.length)], { type: tx.mime });
     const url = URL.createObjectURL(blob);
     urls.push(url);
-    const tex = new THREE.TextureLoader().load(url);
-    tex.colorSpace = THREE.SRGBColorSpace;
+    let done!: () => void;
+    loading.push(new Promise<void>((resolve) => (done = resolve)));
+    const tex = new THREE.TextureLoader().load(url, done, undefined, done);
+    tex.colorSpace = THREE.NoColorSpace; // display values, like the colors
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     return tex;
   });
@@ -97,9 +112,9 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
     const mat = m.lighting
       ? new THREE.MeshPhongMaterial({
           ...opts,
-          specular: srgb(m.specular[0] * 0.3, m.specular[1] * 0.3, m.specular[2] * 0.3),
+          specular: srgb(...specularFor(m.specular)),
           emissive: srgb(...m.emissive),
-          shininess: 20,
+          shininess: SHININESS,
         })
       : new THREE.MeshBasicMaterial(opts);
     if (mat.map) mat.color.setRGB(1, 1, 1); // textures replace the diffuse color
@@ -122,6 +137,7 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
     meshes,
     header,
     bounds,
+    ready: Promise.all(loading).then(() => undefined),
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
@@ -189,8 +205,8 @@ function applyCamera(
   return cam;
 }
 
-/** Lights for a lighting scheme, attached to the camera (scheme lights are
- * defined in camera space). "Artwork" uses the model's own lights. */
+/** Lights for a lighting scheme (see LIGHTING: fixed in model space, the
+ * headlamp on the camera). "Artwork" uses the model's own lights. */
 function buildLights(scheme: string, model: Model3D, camera: THREE.Camera, scene: THREE.Scene): THREE.Object3D[] {
   const made: THREE.Object3D[] = [];
   const useArtwork = (scheme === "Artwork" || !LIGHTING[scheme]) && scheme !== "None";
@@ -234,18 +250,25 @@ function buildLights(scheme: string, model: Model3D, camera: THREE.Camera, scene
     scene.add(amb);
     return [amb];
   }
-  const amb = new THREE.AmbientLight(srgb(...def.ambient), Math.PI * 0.6);
+  const amb = new THREE.AmbientLight(srgb(...def.ambient), Math.PI * AMBIENT_SCALE);
   scene.add(amb);
   made.push(amb);
   for (const l of def.lights) {
-    const light = new THREE.DirectionalLight(srgb(...l.color), Math.PI * 0.9);
-    const d = new THREE.Vector3(l.dir[0], l.dir[1], -l.dir[2]);
-    if (d.lengthSq() === 0) d.set(0, 0, -1); // along the line of sight
-    // Light travels along d (camera space): place it opposite.
-    light.position.copy(d.clone().normalize().multiplyScalar(-1));
-    light.target.position.set(0, 0, 0);
-    camera.add(light);
-    camera.add(light.target);
+    const light = new THREE.DirectionalLight(srgb(...l.color), Math.PI * LIGHT_SCALE);
+    const toLight = new THREE.Vector3(...l.dir);
+    if (toLight.lengthSq() === 0) {
+      // Headlamp: shines along the line of sight, follows the camera.
+      light.position.set(0, 0, 1);
+      light.target.position.set(0, 0, 0);
+      camera.add(light);
+      camera.add(light.target);
+    } else {
+      // Fixed in model space; `dir` points to the light.
+      light.position.copy(toLight.normalize());
+      light.target.position.set(0, 0, 0);
+      scene.add(light);
+      scene.add(light.target);
+    }
     made.push(light, light.target);
   }
   return made;
@@ -265,7 +288,7 @@ export function renderPoster(
   hPt: number,
 ): string {
   if (!posterRenderer) {
-    posterRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+    posterRenderer = displaySpace(new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false }));
   }
   const r = posterRenderer;
   r.setPixelRatio(1);
@@ -347,7 +370,7 @@ export class Viewer3D {
     const { annot, model } = opts;
     this.el = document.createElement("div");
     this.el.className = "threeDView";
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
+    this.renderer = displaySpace(new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false }));
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.renderer.localClippingEnabled = true;
     this.el.appendChild(this.renderer.domElement);
@@ -374,6 +397,7 @@ export class Viewer3D {
     this.sectionBar = this.buildSectionBar();
     this.sectionBar.hidden = true;
     this.el.appendChild(this.sectionBar);
+    void model.ready.then(() => this.requestRender());
     if (model.header.warnings.length) this.el.title = model.header.warnings.join("\n");
 
     // Keep page tools and page scrolling out of the 3D view.

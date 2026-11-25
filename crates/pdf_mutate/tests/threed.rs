@@ -300,3 +300,39 @@ fn poster_is_upright_on_a_rotated_page() {
     let content = String::from_utf8(form.content.clone()).unwrap();
     assert_eq!(content, "q\n0.0000 100.0000 -300.0000 0.0000 300.0000 0.0000 cm\n/Im0 Do\nQ\n");
 }
+
+/// A model without preset views: no /VA, /DV or /3DV is written (an index
+/// into an empty view array is invalid), and it reads back without a view.
+#[test]
+fn model_without_views_writes_no_view_entries() {
+    let mut doc = MutableDoc::from_bytes(&blank_pdf(1)).unwrap();
+    doc.add_3d_annotation(
+        0,
+        &ThreeDAnnotation {
+            rect: RectPt { x0: 100.0, y0: 50.0, x1: 400.0, y1: 250.0 },
+            u3d: tetra_u3d(),
+            views: Vec::new(),
+            default_view: 0,
+            poster: png(),
+            name: "teil.u3d".into(),
+            activation: "PO".into(),
+        },
+    )
+    .unwrap();
+    let bytes = doc.to_bytes().unwrap();
+    let a = &MutableDoc::from_bytes(&bytes).unwrap().list_3d()[0];
+    assert!(a.views.is_empty());
+    assert_eq!(a.default_view, None);
+    assert_eq!(a.activation, "PO");
+    let d = Document::load_mem(&bytes).unwrap();
+    for o in d.objects.values() {
+        let dict = match o {
+            Object::Dictionary(d) => d,
+            Object::Stream(s) => &s.dict,
+            _ => continue,
+        };
+        for key in [b"VA".as_slice(), b"DV", b"3DV"] {
+            assert!(dict.get(key).is_err(), "{} written", String::from_utf8_lossy(key));
+        }
+    }
+}

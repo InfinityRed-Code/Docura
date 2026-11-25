@@ -22,8 +22,8 @@ import { t } from "./i18n";
 import { refreshIcons } from "./icons";
 import { applyDocSnapshot } from "./doc";
 import { forget3dCaches } from "./threed";
-import { renderPoster, srgb, type Model3D } from "./threed-view";
-import { standardViews, type Bounds, type Vec3 } from "./threed-camera";
+import { displaySpace, renderPoster, srgb, type Model3D } from "./threed-view";
+import { SHININESS, specularFor, standardViews, type Bounds, type Vec3 } from "./threed-camera";
 import type { DocSnapshot, RectPt } from "./types";
 
 export const MODEL_EXTENSIONS = ["glb", "gltf", "obj", "stl", "ply", "3mf"];
@@ -193,8 +193,9 @@ function previewModel(l: Loaded, zUp: boolean): Model3D {
       opacity: p.color[3],
       transparent: p.color[3] < 1,
       side: THREE.DoubleSide,
-      specular: srgb(0.075, 0.075, 0.075),
-      shininess: 20,
+      // What the writer stores (specular 0.25), as the viewer will show it.
+      specular: srgb(...specularFor([0.25, 0.25, 0.25])),
+      shininess: SHININESS,
     });
     mats.push(mat);
     const mesh = new THREE.Mesh(p.geometry, mat);
@@ -216,6 +217,7 @@ function previewModel(l: Loaded, zUp: boolean): Model3D {
       geometries: [], instances: [], materials: [], textures: [], tree: [], cameras: [], lights: [],
       bounds: bounds ? [bounds.min, bounds.max] : null, units_m: null, warnings: [], triangles: l.triangles,
     },
+    ready: Promise.resolve(),
     dispose: () => mats.forEach((m) => m.dispose()),
   };
 }
@@ -259,7 +261,7 @@ function previewDialog(l: Loaded): Promise<Pending | null> {
     info.textContent = t("3d.insertInfo", { file: l.fileName, parts: l.parts.length, n: l.triangles.toLocaleString() });
 
     const w = 520, h = 320;
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = displaySpace(new THREE.WebGLRenderer({ antialias: true }));
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     renderer.setSize(w, h);
     host.appendChild(renderer.domElement);
@@ -267,7 +269,7 @@ function previewDialog(l: Loaded): Promise<Pending | null> {
     scene.background = new THREE.Color(0xffffff);
     const cam = new THREE.PerspectiveCamera(30, w / h);
     scene.add(cam);
-    const headlamp = new THREE.DirectionalLight(0xffffff, 2.2);
+    const headlamp = new THREE.DirectionalLight(0xffffff, 2.6);
     headlamp.position.set(0.3, 0.5, 1);
     cam.add(headlamp);
     scene.add(new THREE.AmbientLight(0xffffff, 0.9));
