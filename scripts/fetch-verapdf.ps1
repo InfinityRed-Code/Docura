@@ -16,6 +16,13 @@ $dest = Join-Path $root "vendor/verapdf"
 $jreUrl = "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse"
 $veraUrl = "https://software.verapdf.org/rel/verapdf-installer.zip"
 
+# Not Expand-Archive: started from PowerShell 7 (GitHub Actions, `just`),
+# Windows PowerShell 5.1 picks up the newer Archive module and fails in it.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+function Expand-Zip([string]$zip, [string]$target) {
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $target)
+}
+
 New-Item -ItemType Directory -Force $dest | Out-Null
 $dl = Join-Path $dest "_download"
 New-Item -ItemType Directory -Force $dl | Out-Null
@@ -28,7 +35,7 @@ if (-not (Test-Path (Join-Path $jreDir "bin/java.exe"))) {
     Invoke-WebRequest -Uri $jreUrl -OutFile $zip
     $tmp = Join-Path $dl "jre-x"
     if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-    Expand-Archive -Path $zip -DestinationPath $tmp
+    Expand-Zip $zip $tmp
     $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
     if (Test-Path $jreDir) { Remove-Item -Recurse -Force $jreDir }
     Move-Item $inner.FullName $jreDir
@@ -44,7 +51,7 @@ if (-not (Test-Path (Join-Path $veraDir "verapdf.bat"))) {
     Invoke-WebRequest -Uri $veraUrl -OutFile $zip
     $tmp = Join-Path $dl "vera-x"
     if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
-    Expand-Archive -Path $zip -DestinationPath $tmp
+    Expand-Zip $zip $tmp
     $jar = Get-ChildItem $tmp -Recurse -Filter "verapdf-izpack-installer-*.jar" | Select-Object -First 1
     if (-not $jar) { throw "installer jar not found in $veraUrl" }
     $auto = Join-Path $dl "auto-install.xml"
