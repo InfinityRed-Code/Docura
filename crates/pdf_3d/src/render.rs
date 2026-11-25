@@ -334,25 +334,13 @@ fn material_for(
     m
 }
 
+/// Grows `bounds` by every vertex of `g` placed with `m`: the exact
+/// axis-aligned box in world space. (The corners of the geometry's own box
+/// would give a larger one for a rotated instance; viewers fit the default
+/// camera to these bounds.)
 fn grow_bounds(bounds: &mut Option<([f32; 3], [f32; 3])>, g: &Geometry, m: &Mat4) {
-    if g.positions.is_empty() {
-        return;
-    }
-    let mut lo = [f32::MAX; 3];
-    let mut hi = [f32::MIN; 3];
     for p in g.positions.chunks_exact(3) {
-        for k in 0..3 {
-            lo[k] = lo[k].min(p[k]);
-            hi[k] = hi[k].max(p[k]);
-        }
-    }
-    for corner in 0..8 {
-        let c = [
-            if corner & 1 == 0 { lo[0] } else { hi[0] },
-            if corner & 2 == 0 { lo[1] } else { hi[1] },
-            if corner & 4 == 0 { lo[2] } else { hi[2] },
-        ];
-        let w = apply(m, c);
+        let w = apply(m, [p[0], p[1], p[2]]);
         if !w.iter().all(|v| v.is_finite()) {
             continue;
         }
@@ -458,4 +446,26 @@ pub fn pack(s: &RenderScene) -> Vec<u8> {
     }
     out.extend_from_slice(&data);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_of_a_rotated_instance_are_tight() {
+        // A thin diagonal strip: its own box is 10 x 10, turned by 45
+        // degrees the strip lies along the x axis.
+        let g = Geometry { positions: vec![0.0, 0.0, 0.0, 10.0, 10.0, 0.0, 5.0, 5.0, 1.0], ..Default::default() };
+        let (s, c) = (-std::f32::consts::FRAC_PI_4).sin_cos();
+        let m: Mat4 = [c, s, 0.0, 0.0, -s, c, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 100.0, 0.0, 0.0, 1.0];
+        let mut bounds = None;
+        grow_bounds(&mut bounds, &g, &m);
+        let (lo, hi) = bounds.unwrap();
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(close(lo[0], 100.0) && close(hi[0], 100.0 + 200f32.sqrt()), "{lo:?} {hi:?}");
+        // The corners of the 10 x 10 box would reach y = +-7.07.
+        assert!(close(lo[1], 0.0) && close(hi[1], 0.0), "{lo:?} {hi:?}");
+        assert!(close(lo[2], 0.0) && close(hi[2], 1.0), "{lo:?} {hi:?}");
+    }
 }

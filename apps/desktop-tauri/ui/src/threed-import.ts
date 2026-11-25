@@ -23,7 +23,7 @@ import { refreshIcons } from "./icons";
 import { applyDocSnapshot } from "./doc";
 import { forget3dCaches } from "./threed";
 import { displaySpace, renderPoster, srgb, type Model3D } from "./threed-view";
-import { SHININESS, specularFor, standardViews, type Bounds, type Vec3 } from "./threed-camera";
+import { SHININESS, standardViews, type Bounds, type Vec3 } from "./threed-camera";
 import type { DocSnapshot, RectPt } from "./types";
 
 export const MODEL_EXTENSIONS = ["glb", "gltf", "obj", "stl", "ply", "3mf"];
@@ -194,7 +194,7 @@ function previewModel(l: Loaded, zUp: boolean): Model3D {
       transparent: p.color[3] < 1,
       side: THREE.DoubleSide,
       // What the writer stores (specular 0.25), as the viewer will show it.
-      specular: srgb(...specularFor([0.25, 0.25, 0.25])),
+      specular: srgb(0.25, 0.25, 0.25),
       shininess: SHININESS,
     });
     mats.push(mat);

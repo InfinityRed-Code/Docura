@@ -190,9 +190,10 @@ export function standardViews(bounds: Bounds, names: Record<string, string>, w: 
 }
 
 /** Lighting schemes of ISO 32000-1 Table 310: infinite lights plus an
- * ambient term. `dir` points from the model *to* the light and is fixed in
- * model space (Z up): Acrobat lights the top of a model the same from every
- * side. A zero direction is the headlamp, which follows the camera. */
+ * ambient term. `dir` is the direction the light travels, fixed in model
+ * space (Z up): Acrobat lights a model the same whatever side it is seen
+ * from. A zero direction is the headlamp, which shines along the line of
+ * sight. Measured against Acrobat Reader: see `shade`. */
 export const LIGHTING: Record<string, { lights: { color: Vec3; dir: Vec3 }[]; ambient: Vec3 }> = {
   White: {
     ambient: [0, 0, 0],
@@ -272,52 +273,69 @@ export const LIGHTING: Record<string, { lights: { color: Vec3; dir: Vec3 }[]; am
   },
 };
 
-// Shading calibration. Acrobat (and Foxit) light in display space, the way
-// fixed-function pipelines did: shaded = diffuse * light + specular, on the
-// sRGB values, without a linear working space. The viewer does the same.
-// The factors are fitted to Adobe Acrobat Reader 26.003 showing the
-// materials Docura writes (specular 0.25) under the "CAD" scheme: front and
-// top view of faces towards the camera, and the oblique faces of the
-// isometric view.
-/** Intensity of a scheme light of color 1 (times pi in three.js units). */
-export const LIGHT_SCALE = 0.93;
-/** Factor on a material's U3D specular color (the result is capped at 1).
- * Acrobat's highlight is broad: it still lifts a face turned 40 degrees
- * away, hence the low exponent. */
-export const SPECULAR_SCALE = 2.1;
-export const SHININESS = 3;
-/** A material's specular color as the viewer's shading uses it. */
-export const specularFor = (c: Vec3): Vec3 => [Math.min(1, c[0] * SPECULAR_SCALE), Math.min(1, c[1] * SPECULAR_SCALE), Math.min(1, c[2] * SPECULAR_SCALE)];
-/** Share of a scheme's ambient term that reaches a surface. */
-export const AMBIENT_SCALE = 0.6;
+// Shading. Acrobat lights like the fixed-function pipelines did, on the
+// display (sRGB) values without a linear working space:
+//
+//   color = sum over lights of  light * (diffuse * N.L + specular * (N.H)^4)
+//
+// with the scheme's lights fixed to the model and the headlamp on the
+// camera. Measured on a sphere (make_3d_samples: shading_black.pdf and
+// shading_gray.pdf) in Adobe Acrobat Reader 26.003, seven views, scheme
+// "CAD": mean deviation of this formula 0.01, largest 0.04 of the display
+// range; "Day" and "Red": mean 0.02. The viewer's shader computes the same
+// (threed-view.ts), tests hold both against the measured values.
+/** Exponent of the highlight. Constant in the files measured (materials
+ * with U3D reflectivity 0.1). */
+export const SHININESS = 4;
+/** The highlight fades in over N.L = 0 .. 1/HIGHLIGHT_RAMP instead of
+ * starting abruptly where a light comes over the horizon. */
+export const HIGHLIGHT_RAMP = 4;
 
-/** The color (display values 0..1) the viewer's shading gives a surface
- * with unit `normal`, seen from `toCamera` (unit vector from the surface to
- * the camera, both in model space), for a material's diffuse and specular
- * color under a lighting scheme: Lambert plus normalized Blinn-Phong as
- * three.js' MeshPhongMaterial computes them. Documents the calibration and
- * lets a test hold it against values measured in Acrobat. */
+/** The color (display values 0..1) of a surface with unit `normal` seen
+ * from `toCamera` (unit vector from that point of the surface to the
+ * camera, both in model space), for a material's diffuse and specular
+ * color under a lighting scheme. The headlamp sits at the camera, so
+ * `toCamera` is also the direction to it and differs from point to point
+ * on a large face. */
 export function shade(scheme: string, diffuse: Vec3, specular: Vec3, normal: Vec3, toCamera: Vec3): Vec3 {
   const def = LIGHTING[scheme];
   if (!def) return diffuse;
-  const out: Vec3 = [0, 0, 0];
-  for (let k = 0; k < 3; k++) out[k] = diffuse[k] * def.ambient[k] * AMBIENT_SCALE;
+  const out: Vec3 = [diffuse[0] * def.ambient[0], diffuse[1] * def.ambient[1], diffuse[2] * def.ambient[2]];
   for (const l of def.lights) {
-    const toLight = len(l.dir) === 0 ? toCamera : norm(l.dir);
+    const toLight = len(l.dir) === 0 ? toCamera : norm(scale(l.dir, -1));
     const nDotL = dot(normal, toLight);
     if (nDotL <= 0) continue;
-    const h = norm(add(toLight, toCamera));
-    const nDotH = Math.max(0, dot(normal, h));
-    const vDotH = Math.max(0, dot(toCamera, h));
-    const lobe = 0.25 * (SHININESS * 0.5 + 1) * Math.pow(nDotH, SHININESS);
-    for (let k = 0; k < 3; k++) {
-      const irradiance = l.color[k] * LIGHT_SCALE * nDotL;
-      const f0 = specularFor(specular)[k];
-      const fresnel = f0 + (1 - f0) * Math.pow(1 - vDotH, 5);
-      out[k] += diffuse[k] * irradiance + fresnel * lobe * irradiance;
-    }
+    const nDotH = Math.max(0, dot(normal, norm(add(toLight, toCamera))));
+    const highlight = Math.pow(nDotH, SHININESS) * Math.min(1, HIGHLIGHT_RAMP * nDotL);
+    for (let k = 0; k < 3; k++) out[k] += l.color[k] * (diffuse[k] * nDotL + specular[k] * highlight);
   }
   return [Math.min(1, out[0]), Math.min(1, out[1]), Math.min(1, out[2])];
+}
+
+// A 3D annotation without any view in the PDF. Acrobat ignores the view
+// nodes inside the U3D data then (they only count through /U3DPath) and
+// shows the model from a fixed direction on a dark grey background, fitted
+// to the bounding box. Measured in Acrobat Reader 26.003 on a model with
+// and one without a view node.
+/** Background without a view (display values). */
+export const DEFAULT_BACKGROUND: Vec3 = [0.2, 0.2, 0.2];
+/** Azimuth (from +X towards +Y) and elevation of the default camera's
+ * position as seen from the model, in degrees. */
+export const DEFAULT_VIEW_AZIMUTH = 202.5;
+export const DEFAULT_VIEW_ELEVATION = 11.25;
+/** The model's bounding sphere, measured in the image plane, over half of
+ * the smaller view dimension. */
+export const DEFAULT_VIEW_FILL = 0.985;
+
+/** The camera for a model without a view: see DEFAULT_VIEW_AZIMUTH. */
+export function defaultCamera(bounds: Bounds, aspect: number): CameraSpec {
+  const az = (DEFAULT_VIEW_AZIMUTH * Math.PI) / 180;
+  const el = (DEFAULT_VIEW_ELEVATION * Math.PI) / 180;
+  const dir: Vec3 = [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
+  const c = center(bounds);
+  const r = radius(bounds);
+  const dist = r / (DEFAULT_VIEW_FILL * Math.tan((30 * Math.PI) / 360));
+  return { position: add(c, scale(dir, dist)), target: c, up: [0, 0, 1], orthographic: false, fovV: verticalFov(30, "Min", aspect, 1), orthoHalfHeight: r };
 }
 
 export const LIGHTING_NAMES = ["Artwork", "None", "White", "Day", "Night", "Hard", "Primary", "Blue", "Red", "Cube", "CAD", "Headlamp"];

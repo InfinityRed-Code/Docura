@@ -10,15 +10,29 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { t } from "./i18n";
 import type { ThreeDAnnot, ThreeDView } from "./types";
 import {
-  AMBIENT_SCALE, cameraForView, fitCamera, LIGHT_SCALE, LIGHTING, LIGHTING_NAMES, RENDER_MODES, SHININESS, specularFor,
+  cameraForView, DEFAULT_BACKGROUND, defaultCamera, HIGHLIGHT_RAMP, LIGHTING, LIGHTING_NAMES, RENDER_MODES, SHININESS,
   type Bounds, type CameraSpec, type Vec3,
 } from "./threed-camera";
 
 /** A PDF/U3D color. The values are display (sRGB) values and are used as
- * they are: like Acrobat, the viewer shades in display space (see
- * LIGHT_SCALE in threed-camera.ts), so every renderer here outputs its
- * working values unchanged (`displaySpace`). */
+ * they are: like Acrobat, the viewer shades in display space (see `shade`
+ * in threed-camera.ts), so every renderer here outputs its working values
+ * unchanged (`displaySpace`). */
 export const srgb = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
+
+// The highlight of the fixed-function model (`shade` in threed-camera.ts):
+// light * specular * (N.H)^shininess instead of the normalized Blinn-Phong
+// term of three.js. Lights carry an intensity of pi, which the Lambert
+// term divides out again.
+{
+  const chunk = THREE.ShaderChunk.lights_phong_pars_fragment;
+  const theirs = "reflectedLight.directSpecular += irradiance * BRDF_BlinnPhong( directLight.direction, geometryViewDir, geometryNormal, material.specularColor, material.specularShininess ) * material.specularStrength;";
+  const ours = `vec3 halfDir = normalize( directLight.direction + geometryViewDir );
+	float highlight = pow( saturate( dot( geometryNormal, halfDir ) ), material.specularShininess ) * min( 1.0, ${HIGHLIGHT_RAMP.toFixed(1)} * dotNL );
+	reflectedLight.directSpecular += directLight.color * RECIPROCAL_PI * material.specularColor * highlight * material.specularStrength;`;
+  if (chunk.includes(theirs)) THREE.ShaderChunk.lights_phong_pars_fragment = chunk.replace(theirs, ours);
+  else if (!chunk.includes("float highlight = pow(")) throw new Error("three.js phong shader changed: update the highlight patch");
+}
 
 /** Makes `renderer` write the working values to the screen unconverted. */
 export function displaySpace(renderer: THREE.WebGLRenderer): THREE.WebGLRenderer {
@@ -112,7 +126,7 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
     const mat = m.lighting
       ? new THREE.MeshPhongMaterial({
           ...opts,
-          specular: srgb(...specularFor(m.specular)),
+          specular: srgb(...m.specular),
           emissive: srgb(...m.emissive),
           shininess: SHININESS,
         })
@@ -149,28 +163,21 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
 
 const EMPTY_BOUNDS: Bounds = { min: [-1, -1, -1], max: [1, 1, 1] };
 
-const BLANK_VIEW: ThreeDView = {
-  name: "", internal_name: null, c2w: null, u3d_path: [], center_of_orbit: null,
-  orthographic: false, fov: null, fov_span: null, ortho_scale: null, ortho_binding: null,
-  background: null, render_mode: null, render_aux_color: null, lighting: null,
-  cross_sections: [], nodes: [],
-};
 
-/** Camera for `view`; without one, the model's own camera (first U3D view
- * node), else an isometric fit (Z up). */
+/** Camera for `view`. Without a view, or with one that names no camera,
+ * the default camera (as in Acrobat: the model's own view nodes only count
+ * through /U3DPath). */
 function resolveCamera(model: Model3D, view: ThreeDView | null, wPt: number, hPt: number): CameraSpec {
-  const cams = model.header.cameras;
   if (view) {
-    const c = cameraForView(view, model.bounds, wPt, hPt, cams);
+    const c = cameraForView(view, model.bounds, wPt, hPt, model.header.cameras);
     if (c) return c;
   }
-  const own = cams[0];
-  if (own && !own.orthographic) {
-    const fov = own.projection > 1 && own.projection < 179 ? own.projection : 34;
-    const c = cameraForView({ ...BLANK_VIEW, u3d_path: [own.name], fov, fov_span: "H" }, model.bounds, wPt, hPt, cams);
-    if (c) return c;
-  }
-  return fitCamera(model.bounds ?? EMPTY_BOUNDS, [1, -1, 0.8], [0, 0, 1], 30, wPt / hPt);
+  return defaultCamera(model.bounds ?? EMPTY_BOUNDS, wPt / hPt);
+}
+
+/** Background of a view; without any view Acrobat's dark grey. */
+function backgroundFor(view: ThreeDView | null): Vec3 {
+  return view ? view.background ?? [1, 1, 1] : DEFAULT_BACKGROUND;
 }
 
 function applyCamera(
@@ -250,26 +257,27 @@ function buildLights(scheme: string, model: Model3D, camera: THREE.Camera, scene
     scene.add(amb);
     return [amb];
   }
-  const amb = new THREE.AmbientLight(srgb(...def.ambient), Math.PI * AMBIENT_SCALE);
+  const amb = new THREE.AmbientLight(srgb(...def.ambient), Math.PI);
   scene.add(amb);
   made.push(amb);
   for (const l of def.lights) {
-    const light = new THREE.DirectionalLight(srgb(...l.color), Math.PI * LIGHT_SCALE);
-    const toLight = new THREE.Vector3(...l.dir);
-    if (toLight.lengthSq() === 0) {
-      // Headlamp: shines along the line of sight, follows the camera.
-      light.position.set(0, 0, 1);
-      light.target.position.set(0, 0, 0);
+    const travel = new THREE.Vector3(...l.dir);
+    if (travel.lengthSq() === 0) {
+      // Headlamp: a light at the camera, without falloff. Every point is
+      // lit from where it is seen, which on a large flat face close to the
+      // camera differs visibly from one direction for the whole model.
+      const light = new THREE.PointLight(srgb(...l.color), Math.PI, 0, 0);
       camera.add(light);
-      camera.add(light.target);
+      made.push(light);
     } else {
-      // Fixed in model space; `dir` points to the light.
-      light.position.copy(toLight.normalize());
+      // Fixed in model space; the light sits opposite to where it travels.
+      const light = new THREE.DirectionalLight(srgb(...l.color), Math.PI);
+      light.position.copy(travel.normalize().multiplyScalar(-1));
       light.target.position.set(0, 0, 0);
       scene.add(light);
       scene.add(light.target);
+      made.push(light, light.target);
     }
-    made.push(light, light.target);
   }
   return made;
 }
@@ -294,7 +302,7 @@ export function renderPoster(
   r.setPixelRatio(1);
   r.setSize(wPx, hPx, false);
   const scene = new THREE.Scene();
-  const bg = view?.background ?? [1, 1, 1];
+  const bg = backgroundFor(view);
   scene.background = srgb(bg[0], bg[1], bg[2]);
   const persp = new THREE.PerspectiveCamera();
   const ortho = new THREE.OrthographicCamera();
@@ -463,7 +471,7 @@ export class Viewer3D {
     this.controls.object = this.camera;
     this.controls.target.set(...spec.target);
     this.controls.update();
-    const bg = v?.background ?? [1, 1, 1];
+    const bg = backgroundFor(v);
     this.scene.background = srgb(bg[0], bg[1], bg[2]);
     this.applyLighting();
     this.applyMode();
@@ -490,7 +498,7 @@ export class Viewer3D {
     const p = modeParts(this.mode);
     const v = this.currentView();
     const ac = v?.render_aux_color ?? [0, 0, 0];
-    const bg = v?.background ?? [1, 1, 1];
+    const bg = backgroundFor(v);
     this.overlays.clear();
     const lineMat = new THREE.LineBasicMaterial({ color: srgb(ac[0], ac[1], ac[2]), clippingPlanes: this.clip });
     for (const mesh of this.opts.model.meshes) {

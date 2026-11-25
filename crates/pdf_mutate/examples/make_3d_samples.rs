@@ -2,11 +2,16 @@
 //!
 //!     cargo run -p pdf_mutate --example make_3d_samples -- out_dir [model.u3d ...]
 //!
+//! Every generated model is also written as `<name>.u3d`.
+//!
 //! - `building.pdf`: a building frame like a structural CAD export
 //!   (storeys as groups, ~1000 columns/beams/slabs as parts), no poster.
 //! - `terrain.pdf`: one large mesh (~500k triangles), no poster.
 //! - `orientation.pdf`: coloured axis bars, activated on page open, to
 //!   cross-check camera convention and colours in other viewers.
+//! - `orientation_noviews.pdf`: the axes without views (default camera).
+//! - `shading_black.pdf`, `shading_gray.pdf`: a sphere each, to compare
+//!   the shading (highlight and diffuse term) with other viewers.
 //! - `blank.pdf`: an empty page to insert models into.
 //! - `<name>.pdf` for every U3D file given: the model as it is.
 //! - `prc_placeholder.pdf`: a 3D annotation declaring PRC data (not a real
@@ -195,6 +200,42 @@ fn views(lo: [f32; 3], hi: [f32; 3]) -> Vec<ThreeDView> {
     .collect()
 }
 
+/// A sphere with smooth normals: every surface direction in one picture,
+/// for comparing a viewer's shading with another's.
+fn sphere(name: &str, color: [f32; 4]) -> ExportScene {
+    let (rings, segments, radius) = (48usize, 96usize, 100.0f32);
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut triangles = Vec::new();
+    for j in 0..=rings {
+        let theta = std::f32::consts::PI * j as f32 / rings as f32;
+        for i in 0..=segments {
+            let phi = 2.0 * std::f32::consts::PI * i as f32 / segments as f32;
+            let n = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
+            positions.push([n[0] * radius, n[1] * radius, n[2] * radius]);
+            normals.push(n);
+        }
+    }
+    let row = segments as u32 + 1;
+    for j in 0..rings as u32 {
+        for i in 0..segments as u32 {
+            let a = j * row + i;
+            let (b, c, d) = (a + 1, a + row, a + row + 1);
+            if j > 0 {
+                triangles.push([a, c, b]);
+            }
+            if j + 1 < rings as u32 {
+                triangles.push([b, c, d]);
+            }
+        }
+    }
+    ExportScene {
+        groups: Vec::new(),
+        meshes: vec![ExportMesh { name: name.into(), parent: None, positions, normals, triangles, color, transform: IDENTITY }],
+        units_m: Some(0.001),
+    }
+}
+
 /// Coloured axis bars of different lengths plus an L-shaped marker: makes
 /// a wrong camera convention (mirrored, upside down) or wrong colours
 /// obvious when the file is checked in another viewer.
@@ -238,7 +279,15 @@ fn write_pdf(path: &std::path::Path, title: &str, scene: &ExportScene, poster: b
 }
 
 fn write_pdf_with(path: &std::path::Path, title: &str, scene: &ExportScene, poster: bool, activation: &str) {
+    write_pdf_views(path, title, scene, poster, activation, true)
+}
+
+/// `preset_views` false writes no view at all: the viewer's default camera
+/// and background apply.
+fn write_pdf_views(path: &std::path::Path, title: &str, scene: &ExportScene, poster: bool, activation: &str, preset_views: bool) {
     let u3d = pdf_3d::u3d::write(scene);
+    // The model alone, next to the PDF (for u3d_pack and other tools).
+    std::fs::write(path.with_extension("u3d"), &u3d).unwrap();
     let (lo, hi) = bounds(scene);
     let (w, h) = (842.0, 595.0);
     let mut doc = pdf_mutate::MutableDoc::from_bytes(&page_pdf(title, w, h)).unwrap();
@@ -247,7 +296,7 @@ fn write_pdf_with(path: &std::path::Path, title: &str, scene: &ExportScene, post
         &pdf_mutate::ThreeDAnnotation {
             rect: RectPt { x0: 40.0, y0: 80.0, x1: w - 40.0, y1: h - 40.0 },
             u3d: u3d.clone(),
-            views: views(lo, hi),
+            views: if preset_views { views(lo, hi) } else { Vec::new() },
             default_view: 0,
             poster: gray_png(),
             name: title.into(),
@@ -314,6 +363,14 @@ fn main() {
         std::fs::write(&p, doc.to_bytes().unwrap()).unwrap();
         println!("{}", p.display());
     }
+
+    // The same axes without any view: shows a viewer's default camera.
+    write_pdf_views(&out.join("orientation_noviews.pdf"), "Docura 3D-Test: Achsen ohne Ansichten (Standardkamera)", &orientation(), false, "PO", false);
+
+    // Shading references: a sphere shows every surface direction at once.
+    // Black leaves only the highlight, grey adds the diffuse term.
+    write_pdf_with(&out.join("shading_black.pdf"), "Docura 3D-Test: Kugel schwarz (nur Glanzlicht)", &sphere("Kugel schwarz", [0.0, 0.0, 0.0, 1.0]), false, "PO");
+    write_pdf_with(&out.join("shading_gray.pdf"), "Docura 3D-Test: Kugel grau 0.5", &sphere("Kugel grau", [0.5, 0.5, 0.5, 1.0]), false, "PO");
 
     // PRC placeholder: a 3D annotation whose stream says PRC.
     let mut doc = lopdf::Document::load_mem(&page_pdf("Docura 3D-Test: PRC (nicht unterstuetzt)", 842.0, 595.0)).unwrap();
