@@ -20,8 +20,9 @@ pub struct Geometry {
     pub normals: Vec<f32>,
     /// rgb per vertex; empty without vertex colors.
     pub colors: Vec<f32>,
-    /// uv per vertex; empty without texture coordinates.
-    pub uvs: Vec<f32>,
+    /// Texture coordinate sets, one per texture layer of the mesh's
+    /// shading ID: uv per vertex each. Empty without texture coordinates.
+    pub uvs: Vec<Vec<f32>>,
     /// Three per triangle.
     pub indices: Vec<u32>,
 }
@@ -45,10 +46,31 @@ pub struct RenderMaterial {
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
     pub emissive: [f32; 3],
-    /// Index into `RenderScene::textures`.
-    pub texture: Option<u32>,
+    /// Texture layers in the order they are applied: the first to the lit
+    /// material color, each further one to the result before it.
+    pub layers: Vec<RenderLayer>,
     pub vertex_colors: bool,
     pub lighting: bool,
+}
+
+/// One texture layer of a material (see `u3d::TextureLayer`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RenderLayer {
+    /// Index into `RenderScene::textures`.
+    pub texture: u32,
+    /// Index into the geometry's `uvs`.
+    pub uv: u32,
+    pub intensity: f32,
+    /// "replace" (the texture alone), "add", "multiply" or "blend" (mix by
+    /// the texture's alpha or `blend_constant`).
+    pub blend: &'static str,
+    /// For "blend": weight from the texture's alpha, else `blend_constant`.
+    pub blend_alpha: bool,
+    pub blend_constant: f32,
+    /// Applied to (u, v, 0, 1), column-major.
+    pub transform: Mat4,
+    pub repeat_u: bool,
+    pub repeat_v: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,7 +184,7 @@ const DEFAULT_MATERIAL: RenderMaterial = RenderMaterial {
     ambient: [0.0; 3],
     specular: [0.2; 3],
     emissive: [0.0; 3],
-    texture: None,
+    layers: Vec::new(),
     vertex_colors: false,
     lighting: true,
 };
@@ -170,18 +192,24 @@ const DEFAULT_MATERIAL: RenderMaterial = RenderMaterial {
 /// Indexed geometry for the faces of `mesh` with shading ID `sid`.
 fn build_geometry(mesh: &Mesh, sid: u32) -> Geometry {
     let mut g = Geometry::default();
-    let mut map: HashMap<(u32, u32, u32, u32), u32> = HashMap::new();
+    let mut map: HashMap<(u32, u32, u32, [u32; 8]), u32> = HashMap::new();
     let faces: Vec<_> = mesh.faces.iter().filter(|f| f.shading == sid).collect();
     let has_normals = !mesh.normals.is_empty() && faces.iter().all(|f| f.normal.is_some());
     let has_colors = !mesh.diffuse.is_empty() && faces.iter().all(|f| f.diffuse.is_some());
-    let has_uvs = !mesh.tex_coords.is_empty() && faces.iter().all(|f| f.tex.is_some());
+    // Texture coordinate sets every face of this shading ID has.
+    let uv_sets = if mesh.tex_coords.is_empty() { 0 } else { faces.iter().map(|f| f.tex.len()).min().unwrap_or(0).min(8) };
+    g.uvs = vec![Vec::new(); uv_sets];
     for f in faces {
         for c in 0..3 {
+            let mut tex = [0u32; 8];
+            for (l, t) in tex.iter_mut().enumerate().take(uv_sets) {
+                *t = f.tex[l][c];
+            }
             let key = (
                 f.position[c],
                 if has_normals { f.normal.map_or(0, |n| n[c]) } else { 0 },
                 if has_colors { f.diffuse.map_or(0, |d| d[c]) } else { 0 },
-                if has_uvs { f.tex.map_or(0, |t| t[c]) } else { 0 },
+                tex,
             );
             let next = map.len() as u32;
             let v = *map.entry(key).or_insert_with(|| {
@@ -193,9 +221,9 @@ fn build_geometry(mesh: &Mesh, sid: u32) -> Geometry {
                 if has_colors {
                     g.colors.extend_from_slice(&mesh.diffuse[key.2 as usize][..3]);
                 }
-                if has_uvs {
-                    let t = mesh.tex_coords[key.3 as usize];
-                    g.uvs.extend_from_slice(&[t[0], t[1]]);
+                for (l, set) in g.uvs.iter_mut().enumerate() {
+                    let t = mesh.tex_coords[key.3[l] as usize];
+                    set.extend_from_slice(&[t[0], t[1]]);
                 }
                 next
             });
@@ -271,7 +299,12 @@ pub fn prepare(scene: &Scene) -> RenderScene {
                             out.geometries.push(build_geometry(mesh, sid));
                             out.geometries.len() as u32 - 1
                         });
-                        let material = material_for(scene, &node.shading, sid, &out.geometries[gi as usize], &out.textures);
+                        let (material, notes) = material_for(scene, &node.shading, sid, &out.geometries[gi as usize], &out.textures);
+                        for n in notes {
+                            if !out.warnings.contains(&n) {
+                                out.warnings.push(n);
+                            }
+                        }
                         let mi_out = match out.materials.iter().position(|m| *m == material) {
                             Some(i) => i,
                             None => {
@@ -303,7 +336,8 @@ fn material_for(
     sid: u32,
     geometry: &Geometry,
     textures: &[TextureRef],
-) -> RenderMaterial {
+) -> (RenderMaterial, Vec<String>) {
+    let mut notes = Vec::new();
     let shader = shading
         .get(sid as usize)
         .and_then(|l| l.first())
@@ -311,7 +345,7 @@ fn material_for(
         // No shading modifier: U3D uses the first shader of the palette
         // only when it is the default; fall back to our default instead.
         ;
-    let mut m = DEFAULT_MATERIAL;
+    let mut m = DEFAULT_MATERIAL.clone();
     if let Some(sh) = shader {
         m.lighting = sh.attributes & 1 != 0;
         if let Some(mat) = scene.materials.iter().find(|x| x.name == sh.material) {
@@ -320,18 +354,51 @@ fn material_for(
             m.specular = mat.specular;
             m.emissive = mat.emissive;
         }
-        if !geometry.uvs.is_empty() {
-            m.texture = sh
-                .textures
-                .first()
-                .and_then(|t| textures.iter().position(|x| &x.name == t))
-                .map(|i| i as u32);
+        // Channel n uses the mesh's texture coordinate layer n; a channel
+        // beyond the mesh's layers has no coordinates and is not drawn
+        // (Acrobat does the same with Intel's TextureLayers scene).
+        for (i, layer) in sh.layers.iter().enumerate() {
+            let Some(texture) = textures.iter().position(|x| x.name == layer.texture) else { continue };
+            if layer.mode != 0 {
+                // Planar, cylindrical, spherical and reflection mapping
+                // generate the coordinates in the viewer.
+                let mode = ["", "planar", "cylindrical", "spherical", "reflection"].get(layer.mode as usize).copied().unwrap_or("unknown");
+                notes.push(format!("texture layer {} of shader {}: {mode} mapping not shown", i + 1, sh.name));
+                continue;
+            }
+            if layer.channel as usize >= geometry.uvs.len() {
+                continue; // no texture coordinates for this layer
+            }
+            let blend = match layer.blend_function {
+                0 => "replace",
+                1 => "add",
+                2 => "multiply",
+                3 => "blend",
+                other => {
+                    notes.push(format!("texture layer {} of shader {}: blend function {other} unknown, multiplied", i + 1, sh.name));
+                    "multiply"
+                }
+            };
+            if (layer.intensity - 1.0).abs() > 1e-3 {
+                notes.push(format!("texture layer {} of shader {}: intensity {} not applied", i + 1, sh.name, layer.intensity));
+            }
+            m.layers.push(RenderLayer {
+                texture: texture as u32,
+                uv: layer.channel,
+                intensity: layer.intensity,
+                blend,
+                blend_alpha: layer.blend_source == 0,
+                blend_constant: layer.blend_constant,
+                transform: layer.transform,
+                repeat_u: layer.repeat & 1 != 0,
+                repeat_v: layer.repeat & 2 != 0,
+            });
         }
         m.vertex_colors = sh.attributes & 4 != 0 && !geometry.colors.is_empty();
     } else {
         m.vertex_colors = !geometry.colors.is_empty();
     }
-    m
+    (m, notes)
 }
 
 /// Grows `bounds` by every vertex of `g` placed with `m`: the exact
@@ -364,7 +431,7 @@ struct PackedGeometry {
     positions: Range,
     normals: Option<Range>,
     colors: Option<Range>,
-    uvs: Option<Range>,
+    uvs: Vec<Range>,
     indices: Range,
 }
 
@@ -390,7 +457,7 @@ struct Header<'a> {
     triangles: usize,
 }
 
-/// Binary layout: `"D3S1"`, u32 header length, UTF-8 JSON header, zero
+/// Binary layout: `"D3S2"`, u32 header length, UTF-8 JSON header, zero
 /// padding to 4 bytes, then the data section. Ranges in the header are byte
 /// offsets into the data section; float and index arrays are 4-byte
 /// aligned little-endian `f32` / `u32`.
@@ -414,7 +481,7 @@ pub fn pack(s: &RenderScene) -> Vec<u8> {
             positions: put(&f32s(&g.positions)),
             normals: (!g.normals.is_empty()).then(|| put(&f32s(&g.normals))),
             colors: (!g.colors.is_empty()).then(|| put(&f32s(&g.colors))),
-            uvs: (!g.uvs.is_empty()).then(|| put(&f32s(&g.uvs))),
+            uvs: g.uvs.iter().map(|set| put(&f32s(set))).collect(),
             indices: put(&g.indices.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()),
         })
         .collect();
@@ -438,7 +505,7 @@ pub fn pack(s: &RenderScene) -> Vec<u8> {
     };
     let json = serde_json::to_vec(&header).expect("serialize header");
     let mut out = Vec::with_capacity(8 + json.len() + 3 + data.len());
-    out.extend_from_slice(b"D3S1");
+    out.extend_from_slice(b"D3S2");
     out.extend_from_slice(&(json.len() as u32).to_le_bytes());
     out.extend_from_slice(&json);
     while out.len() % 4 != 0 {

@@ -53,7 +53,7 @@ function sphere(diffuse) {
   return packScene({
     geometries: [{ positions, normals, indices }],
     instances: [{ node: "Kugel", path: ["Kugel"], matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], geometry: 0, material: 0 }],
-    materials: [{ diffuse: [diffuse, diffuse, diffuse, 1], ambient: [0, 0, 0], specular: [0.25, 0.25, 0.25], emissive: [0, 0, 0], texture: null, vertex_colors: false, lighting: true }],
+    materials: [{ diffuse: [diffuse, diffuse, diffuse, 1], ambient: [0, 0, 0], specular: [0.25, 0.25, 0.25], emissive: [0, 0, 0], layers: [], vertex_colors: false, lighting: true }],
     tree: [{ name: "Kugel", kind: "model", parents: [""] }],
     bounds: [[-radius, -radius, -radius], [radius, radius, radius]],
   });

@@ -217,3 +217,69 @@ fn damaged_files_fail_soft() {
         Err(u3d::U3dError::NotU3d)
     ));
 }
+
+/// Texture layers: every layer of a shader reaches the renderer with its
+/// blend function, and a channel without texture coordinates is left out.
+#[test]
+fn texture_layers_and_blend_functions() {
+    // TextureLayers.u3d: shader 1 uses channels 0 ("Texture2") and 2
+    // ("Texture RGB"), the mesh carries two coordinate layers (0 and 1);
+    // shader 2 uses channel 0 ("Lines Texture"). All layers are stored
+    // with blend function 2 = multiply (the Intel reference's default).
+    let s = u3d::parse(&fixture("TextureLayers.u3d")).unwrap();
+    let sh = s.shaders.iter().find(|x| x.name == "ModelShader1").unwrap();
+    assert_eq!(sh.layers.iter().map(|l| (l.channel, l.texture.as_str(), l.blend_function)).collect::<Vec<_>>(), vec![(0, "Texture2", 2), (2, "Texture RGB", 2)]);
+    assert!(sh.layers.iter().all(|l| l.mode == 0 && l.blend_source == 1 && l.blend_constant == 0.5 && l.repeat == 3 && l.transform == u3d::IDENTITY));
+    let mesh = only_mesh(&s);
+    assert_eq!(mesh.shading.iter().map(|d| d.texture_layers).collect::<Vec<_>>(), vec![2, 1]);
+    for f in &mesh.faces {
+        assert_eq!(f.tex.len(), mesh.shading[f.shading as usize].texture_layers as usize);
+    }
+
+    let r = render::prepare(&s);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let name = |i: u32| r.textures[i as usize].name.as_str();
+    let mut seen = Vec::new();
+    for inst in &r.instances {
+        let (g, m) = (&r.geometries[inst.geometry as usize], &r.materials[inst.material as usize]);
+        for set in &g.uvs {
+            assert_eq!(set.len() / 2, g.positions.len() / 3, "one uv per vertex");
+        }
+        let layers: Vec<_> = m.layers.iter().map(|l| (name(l.texture), l.uv, l.blend)).collect();
+        seen.push((g.uvs.len(), layers));
+    }
+    seen.sort();
+    assert_eq!(seen, vec![(1, vec![("Lines Texture", 0, "multiply")]), (2, vec![("Texture2", 0, "multiply")])]);
+}
+
+/// Blend functions as stored (values of the Intel reference), and layers
+/// the viewer cannot draw are named in the warnings.
+#[test]
+fn blend_function_values_and_unsupported_layers() {
+    let mut s = u3d::parse(&fixture("TextureLayers.u3d")).unwrap();
+    let texture = |s: &u3d::Scene, i: usize| s.shaders.iter().find(|x| x.name == "ModelShader1").unwrap().layers[i].clone();
+    let base = texture(&s, 0);
+    let layers = |s: &mut u3d::Scene, v: Vec<u3d::TextureLayer>| s.shaders.iter_mut().find(|x| x.name == "ModelShader1").unwrap().layers = v;
+
+    // Channels 0 and 1 both have coordinates in this mesh.
+    let with = |f: u8, channel: u32| u3d::TextureLayer { blend_function: f, channel, ..base.clone() };
+    layers(&mut s, vec![with(0, 0), with(3, 1)]);
+    let r = render::prepare(&s);
+    let m = r.materials.iter().find(|m| m.layers.len() == 2).expect("two layers drawn");
+    assert_eq!(m.layers.iter().map(|l| (l.uv, l.blend, l.blend_alpha)).collect::<Vec<_>>(), vec![(0, "replace", false), (1, "blend", false)]);
+    layers(&mut s, vec![with(1, 0), u3d::TextureLayer { blend_source: 0, ..with(3, 1) }]);
+    let r = render::prepare(&s);
+    let m = r.materials.iter().find(|m| m.layers.len() == 2).unwrap();
+    assert_eq!(m.layers.iter().map(|l| (l.blend, l.blend_alpha)).collect::<Vec<_>>(), vec![("add", false), ("blend", true)]);
+
+    // Generated coordinates, an unknown function, an intensity.
+    layers(&mut s, vec![u3d::TextureLayer { mode: 3, ..with(2, 0) }, u3d::TextureLayer { intensity: 0.5, ..with(9, 1) }]);
+    let r = render::prepare(&s);
+    let m = r.materials.iter().find(|m| m.layers.iter().any(|l| l.uv == 1)).unwrap();
+    assert_eq!(m.layers.len(), 1, "the spherical layer is not drawn");
+    assert_eq!(m.layers[0].blend, "multiply");
+    let w = r.warnings.join("\n");
+    assert!(w.contains("texture layer 1 of shader ModelShader1: spherical mapping not shown"), "{w}");
+    assert!(w.contains("texture layer 2 of shader ModelShader1: blend function 9 unknown, multiplied"), "{w}");
+    assert!(w.contains("texture layer 2 of shader ModelShader1: intensity 0.5 not applied"), "{w}");
+}

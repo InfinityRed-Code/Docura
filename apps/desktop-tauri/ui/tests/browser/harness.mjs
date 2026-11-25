@@ -68,8 +68,14 @@ export async function startViewerPage({ width = 900, height = 700 } = {}) {
 
   try {
     const portFile = path.join(profile, "DevToolsActivePort");
-    for (let i = 0; i < 300 && !fs.existsSync(portFile); i++) await sleep(50);
-    const port = fs.readFileSync(portFile, "utf8").split("\n")[0].trim();
+    // The browser writes the file while starting: it can be missing,
+    // empty or still locked for a moment.
+    let port = "";
+    for (let i = 0; i < 400 && !port; i++) {
+      try { port = fs.readFileSync(portFile, "utf8").split("\n")[0].trim(); } catch { /* not there yet */ }
+      if (!port) await sleep(50);
+    }
+    if (!port) throw new Error("the browser did not open a DevTools port");
     let target;
     for (let i = 0; i < 100 && !target; i++) {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
@@ -162,7 +168,7 @@ export function packScene({ geometries, instances, materials, textures = [], tre
       positions: put(f32(g.positions)),
       normals: g.normals ? put(f32(g.normals)) : null,
       colors: g.colors ? put(f32(g.colors)) : null,
-      uvs: g.uvs ? put(f32(g.uvs)) : null,
+      uvs: (g.uvs ?? []).map((set) => put(f32(set))),
       indices: put(u32(g.indices)),
     })),
     instances, materials,
@@ -173,7 +179,7 @@ export function packScene({ geometries, instances, materials, textures = [], tre
   };
   const json = Buffer.from(JSON.stringify(header), "utf8");
   const head = Buffer.alloc(8);
-  head.write("D3S1", 0, "latin1");
+  head.write("D3S2", 0, "latin1");
   head.writeUInt32LE(json.length, 4);
   const pad = Buffer.alloc((4 - ((8 + json.length) % 4)) % 4, 0x20);
   return Buffer.concat([head, json, pad, ...chunks]).toString("base64");
@@ -275,4 +281,35 @@ export function compareImages(a, b, ignore = () => false) {
     bboxA: bbox(inA), bboxB: bbox(inB),
     overlap: either ? both / either : 1,
   };
+}
+
+/** Encodes RGBA pixels as a PNG (for textures of synthetic test scenes). */
+export function encodePng(width, height, rgba) {
+  const table = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  const crc = (buf) => {
+    let c = 0xffffffff;
+    for (const x of buf) c = table[(c ^ x) & 255] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, sum]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const raw = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; y++) Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(raw, y * (width * 4 + 1) + 1);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }

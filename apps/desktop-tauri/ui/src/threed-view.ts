@@ -42,14 +42,14 @@ export function displaySpace(renderer: THREE.WebGLRenderer): THREE.WebGLRenderer
 
 type Range = { offset: number; length: number };
 type PackedHeader = {
-  geometries: { positions: Range; normals: Range | null; colors: Range | null; uvs: Range | null; indices: Range }[];
+  geometries: { positions: Range; normals: Range | null; colors: Range | null; uvs: Range[]; indices: Range }[];
   instances: { node: string; path: string[]; matrix: number[]; geometry: number; material: number }[];
   materials: {
     diffuse: [number, number, number, number];
     ambient: Vec3;
     specular: Vec3;
     emissive: Vec3;
-    texture: number | null;
+    layers: TextureLayer[];
     vertex_colors: boolean;
     lighting: boolean;
   }[];
@@ -62,6 +62,64 @@ type PackedHeader = {
   warnings: string[];
   triangles: number;
 };
+
+/** A texture layer of a material (pdf_3d::render::RenderLayer). */
+type TextureLayer = {
+  texture: number;
+  uv: number;
+  intensity: number;
+  blend: "multiply" | "add" | "replace" | "blend";
+  blend_alpha: boolean;
+  blend_constant: number;
+  transform: number[];
+  repeat_u: boolean;
+  repeat_v: boolean;
+};
+
+/** Adds a material's texture layers to its shader. U3D applies them like
+ * the texture stages of a fixed-function pipeline: the first layer to the
+ * lit color, each further one to the result before it, with the blend
+ * function the shader declares (ECMA-363 9.8.3.10). `maps` holds one
+ * texture per layer. */
+function applyTextureLayers(mat: THREE.Material, layers: TextureLayer[], maps: THREE.Texture[]) {
+  if (layers.length === 0) return;
+  const stage = (l: TextureLayer, i: number) => {
+    const t = `layerTexel${i}`;
+    const read = `vec4 ${t} = texture2D( layerMap${i}, vLayerUv${i} );`;
+    switch (l.blend) {
+      case "add": return `${read} outgoingLight += ${t}.rgb;`;
+      case "replace": return `${read} outgoingLight = ${t}.rgb;`;
+      case "blend": return `${read} outgoingLight = mix( outgoingLight, ${t}.rgb, ${l.blend_alpha ? `${t}.a` : `layerConstant${i}`} );`;
+      default: return `${read} outgoingLight *= ${t}.rgb;`;
+    }
+  };
+  const key = layers.map((l) => `${l.blend}${l.blend_alpha ? "a" : "c"}${l.uv}`).join("|");
+  mat.onBeforeCompile = (shader) => {
+    layers.forEach((l, i) => {
+      shader.uniforms[`layerMap${i}`] = { value: maps[i] };
+      shader.uniforms[`layerConstant${i}`] = { value: l.blend_constant };
+      shader.uniforms[`layerTransform${i}`] = { value: new THREE.Matrix4().fromArray(l.transform) };
+    });
+    const n = layers.map((_, i) => i);
+    const sets = [...new Set(layers.map((l) => l.uv))]; // one attribute per uv set, whatever layers use it
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", `#include <common>\n${sets.map((u) => `attribute vec2 layerUv${u};`).join("\n")}\n${n.map((i) => `uniform mat4 layerTransform${i}; varying vec2 vLayerUv${i};`).join("\n")}`)
+      .replace("#include <begin_vertex>", `#include <begin_vertex>\n${n.map((i) => `vLayerUv${i} = ( layerTransform${i} * vec4( layerUv${layers[i].uv}, 0.0, 1.0 ) ).xy;`).join("\n")}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", `#include <common>\n${n.map((i) => `uniform sampler2D layerMap${i}; uniform float layerConstant${i}; varying vec2 vLayerUv${i};`).join("\n")}`)
+      .replace("#include <opaque_fragment>", `${layers.map(stage).join("\n")}\n#include <opaque_fragment>`);
+  };
+  mat.customProgramCacheKey = () => `layers:${key}`;
+}
+
+/** A copy of `base` for a render mode; `Material.clone` drops the shader
+ * hooks that draw the texture layers. */
+function cloneMaterial<T extends THREE.Material>(base: T): T {
+  const mat = cloneMaterial(base);
+  mat.onBeforeCompile = base.onBeforeCompile;
+  mat.customProgramCacheKey = base.customProgramCacheKey;
+  return mat;
+}
 
 /** A decoded scene ready to be added to a three.js scene. */
 export type Model3D = {
@@ -78,7 +136,7 @@ export type Model3D = {
 export function unpackScene(buf: ArrayBuffer): Model3D {
   const bytes = new Uint8Array(buf);
   const magic = String.fromCharCode(...bytes.subarray(0, 4));
-  if (magic !== "D3S1") throw new Error("bad 3D scene data");
+  if (magic !== "D3S2") throw new Error("bad 3D scene data");
   const n = new DataView(buf).getUint32(4, true);
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + n))) as PackedHeader;
   const base = Math.ceil((8 + n) / 4) * 4;
@@ -87,23 +145,30 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
 
   const urls: string[] = [];
   const loading: Promise<void>[] = [];
-  const textures = header.textures.map((tx) => {
+  const blobUrls = header.textures.map((tx) => {
     const blob = new Blob([bytes.subarray(base + tx.data.offset, base + tx.data.offset + tx.data.length)], { type: tx.mime });
     const url = URL.createObjectURL(blob);
     urls.push(url);
+    return url;
+  });
+  const textures: THREE.Texture[] = [];
+  /** A texture object per use: layers differ in how they repeat. */
+  const textureFor = (l: TextureLayer): THREE.Texture => {
     let done!: () => void;
     loading.push(new Promise<void>((resolve) => (done = resolve)));
-    const tex = new THREE.TextureLoader().load(url, done, undefined, done);
+    const tex = new THREE.TextureLoader().load(blobUrls[l.texture] ?? "", done, undefined, done);
     tex.colorSpace = THREE.NoColorSpace; // display values, like the colors
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.wrapS = l.repeat_u ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+    tex.wrapT = l.repeat_v ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+    textures.push(tex);
     return tex;
-  });
+  };
   const geometries = header.geometries.map((g) => {
     let geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(f32(g.positions), 3));
     if (g.normals) geo.setAttribute("normal", new THREE.BufferAttribute(f32(g.normals), 3));
     if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(f32(g.colors), 3));
-    if (g.uvs) geo.setAttribute("uv", new THREE.BufferAttribute(f32(g.uvs), 2));
+    g.uvs.forEach((set, i) => geo.setAttribute(`layerUv${i}`, new THREE.BufferAttribute(f32(set), 2)));
     geo.setIndex(new THREE.BufferAttribute(u32(g.indices), 1));
     if (!g.normals) {
       // No normals in the file: flat shading.
@@ -121,7 +186,6 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
       transparent: m.diffuse[3] < 0.999,
       side: THREE.DoubleSide,
       vertexColors: m.vertex_colors,
-      map: m.texture !== null ? textures[m.texture] ?? null : null,
     };
     const mat = m.lighting
       ? new THREE.MeshPhongMaterial({
@@ -131,7 +195,7 @@ export function unpackScene(buf: ArrayBuffer): Model3D {
           shininess: SHININESS,
         })
       : new THREE.MeshBasicMaterial(opts);
-    if (mat.map) mat.color.setRGB(1, 1, 1); // textures replace the diffuse color
+    applyTextureLayers(mat, m.layers, m.layers.map(textureFor));
     return mat;
   });
   const root = new THREE.Group();
@@ -251,7 +315,8 @@ function buildLights(scheme: string, model: Model3D, camera: THREE.Camera, scene
     made.push(amb);
     return made;
   }
-  const def = LIGHTING[scheme === "None" ? "None" : LIGHTING[scheme] ? scheme : "CAD"];
+  if (scheme === "None") return made; // no lights: only what the materials emit
+  const def = LIGHTING[LIGHTING[scheme] ? scheme : "CAD"];
   if (!def) {
     const amb = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(amb);
@@ -510,12 +575,12 @@ export class Viewer3D {
       } else if (p.hiddenLine) {
         mat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
       } else if (p.transparent) {
-        mat = base.clone();
+        mat = cloneMaterial(base);
         mat.transparent = true;
         mat.opacity = base.opacity * 0.5;
         mat.depthWrite = false;
       } else if (p.edges || p.wire) {
-        mat = base.clone();
+        mat = cloneMaterial(base);
         mat.polygonOffset = true;
         mat.polygonOffsetFactor = 1;
         mat.polygonOffsetUnits = 1;

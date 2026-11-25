@@ -42,19 +42,34 @@ scope each tag landed.
   the source file are not written.
 - U3D line and point sets, animations and bones are not shown; section
   planes are not capped.
-- A U3D model without views in the PDF opens with the model's own camera
-  on a white background; Acrobat uses its own default camera and a grey
-  background there. Only the first texture layer of a material is shown.
-- Shading follows Acrobat's "CAD" lighting scheme closely for the materials
-  Docura writes (within about 0.1 of the display value on the faces
-  measured); the other lighting schemes and highlights seen straight from
-  above are approximations.
+- Texture layers with generated coordinates (planar, cylindrical,
+  spherical, reflection mapping) are not drawn and a layer's intensity is
+  not applied; the 3D view's tooltip names such layers.
+- A model without any view in the PDF is lit by its own lights, or by the
+  "CAD" scheme when it has none. Acrobat shows it unlit there (only what
+  the materials emit, so most such models appear black); camera and
+  background are the same as in Acrobat.
+- Shading is measured against Acrobat for the "CAD" scheme (mean
+  deviation 0.01 of the display range) and spot-checked for "Day" and
+  "Red" (0.02); the other schemes use the same model with unverified light
+  tables.
 
 ### Verified
 - Files written by Docura (the inserter and the sample generator) were
   checked in Adobe Acrobat Reader 26.003 and Foxit PDF Reader 2026.1:
   camera convention, the preset views, colours, model tree and poster
-  match what Docura shows.
+  match what Docura shows. The shading follows Acrobat's lighting model
+  (lights fixed to the model, headlamp at the camera, highlight exponent
+  4), measured on a sphere in all seven preset views.
+- U3D files from other tools without a view in the PDF open with Acrobat's
+  default camera (azimuth 202.5, elevation 11.25 degrees, fitted to the
+  bounding box) and its dark grey background. All texture layers of a
+  material are drawn with the blend function the shader declares
+  (replace, add, multiply, blend by alpha or by a constant); Intel's
+  textured test scenes match Acrobat's picture pixel for pixel when unlit.
+- `pnpm test:browser` (apps/desktop-tauri/ui) runs the 3D viewer in a
+  headless Edge or Chrome and compares its picture with reference crops
+  taken from Acrobat Reader.
 
 ### Third-party
 - three.js 0.187.0 (MIT, with fflate, MIT) for the 3D view and the model

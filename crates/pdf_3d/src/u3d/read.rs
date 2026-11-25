@@ -475,28 +475,41 @@ impl Parser {
         let channels = r.u32();
         let _alpha_channels = r.u32();
         let material = r.string();
-        let mut textures = Vec::new();
-        for _ in 0..(channels & 0xFF).count_ones() {
+        let mut layers = Vec::new();
+        for channel in (0..8).filter(|c| channels & (1 << c) != 0) {
             if r.overrun() {
                 break;
             }
             let texture = r.string();
-            r.f32(); // intensity
-            r.u8(); // blend function
-            r.u8(); // blend source
-            r.f32(); // blend constant
-            r.u8(); // texture mode
-            for _ in 0..32 {
-                r.f32(); // texture and wrap transforms
+            let intensity = r.f32();
+            let blend_function = r.u8();
+            let blend_source = r.u8();
+            let blend_constant = r.f32();
+            let mode = r.u8();
+            let mut transform = [0f32; 16];
+            let mut wrap_transform = [0f32; 16];
+            for v in transform.iter_mut().chain(wrap_transform.iter_mut()) {
+                *v = r.f32();
             }
-            r.u8(); // repeat
-            textures.push(texture);
+            let repeat = r.u8();
+            layers.push(TextureLayer {
+                channel,
+                texture,
+                intensity,
+                blend_function,
+                blend_source,
+                blend_constant,
+                mode,
+                transform,
+                wrap_transform,
+                repeat,
+            });
         }
         self.scene.shaders.push(Shader {
             name,
             attributes,
             material,
-            textures,
+            layers,
         });
         Ok(())
     }

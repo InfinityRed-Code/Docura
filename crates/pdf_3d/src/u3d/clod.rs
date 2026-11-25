@@ -772,8 +772,16 @@ impl Clod {
                 normal: (!self.exclude_normals && ok(&nrm, self.normals.len())).then_some(nrm),
                 diffuse: (dif && ok(&d, self.diffuse.len())).then_some(d),
                 specular: (spe && ok(&s, self.specular.len())).then_some(s),
-                tex: (tl > 0 && layers > 0 && ok(&self.f_tex[0][i], self.tex.len()))
-                    .then(|| self.f_tex[0][i]),
+                // All layers or none: a face with a broken index in one
+                // layer is drawn without textures.
+                tex: {
+                    let n = (tl as usize).min(layers);
+                    if n > 0 && (0..n).all(|l| ok(&self.f_tex[l][i], self.tex.len())) {
+                        (0..n).map(|l| self.f_tex[l][i]).collect()
+                    } else {
+                        Vec::new()
+                    }
+                },
             });
         }
         mesh.positions = self.positions;
