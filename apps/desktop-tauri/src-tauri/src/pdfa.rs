@@ -50,16 +50,17 @@ pub fn ui_error(code: &str, detail: impl std::fmt::Display) -> String {
     format!("PDFA_ERR:{code}:{detail}")
 }
 
+/// The detail is the cause only; the UI supplies the translated sentence.
 pub fn map_error(e: &PdfaError) -> String {
-    let code = match e {
-        PdfaError::PasswordRequired => "password",
-        PdfaError::Parse(_) => "parse",
-        PdfaError::Unsupported(_) => "unsupported",
-        PdfaError::NeedsRasterizer(_) => "render",
-        PdfaError::AttachmentRequired => "attachment_required",
-        PdfaError::Write(_) => "write",
+    let (code, detail) = match e {
+        PdfaError::PasswordRequired => ("password", ""),
+        PdfaError::Parse(d) => ("parse", d.as_str()),
+        PdfaError::Unsupported(d) => ("unsupported", d.as_str()),
+        PdfaError::NeedsRasterizer(d) => ("render", d.as_str()),
+        PdfaError::AttachmentRequired => ("attachment_required", ""),
+        PdfaError::Write(d) => ("write", d.as_str()),
     };
-    ui_error(code, e)
+    ui_error(code, detail)
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -157,7 +158,12 @@ mod tests {
             assert!(l.parse::<Level>().is_ok(), "{l}");
         }
         assert_eq!(ui_error("password", "x"), "PDFA_ERR:password:x");
-        assert!(map_error(&PdfaError::AttachmentRequired).starts_with("PDFA_ERR:attachment_required:"));
+        assert_eq!(map_error(&PdfaError::AttachmentRequired), "PDFA_ERR:attachment_required:");
+        assert_eq!(map_error(&PdfaError::PasswordRequired), "PDFA_ERR:password:");
+        assert_eq!(map_error(&PdfaError::Parse("bad header".into())), "PDFA_ERR:parse:bad header");
+        assert_eq!(map_error(&PdfaError::Unsupported("x".into())), "PDFA_ERR:unsupported:x");
+        assert_eq!(map_error(&PdfaError::NeedsRasterizer("y".into())), "PDFA_ERR:render:y");
+        assert_eq!(map_error(&PdfaError::Write("z".into())), "PDFA_ERR:write:z");
     }
 
     #[test]

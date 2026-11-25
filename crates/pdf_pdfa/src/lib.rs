@@ -27,7 +27,9 @@ mod forms;
 mod icc;
 mod level;
 mod oc;
+mod pagebox;
 mod prepare;
+mod spot;
 mod tagging;
 mod util;
 mod write;
@@ -191,6 +193,7 @@ pub fn convert(input: &[u8], opts: &Options) -> Result<Converted> {
 
 fn run_pipeline(ctx: &mut Ctx) -> Result<()> {
     prepare::run(ctx)?;
+    pagebox::run(ctx);
     actions::run(ctx);
     attachments::run(ctx)?;
     forms::run(ctx);
@@ -200,6 +203,7 @@ fn run_pipeline(ctx: &mut Ctx) -> Result<()> {
     xobjects::run(ctx)?;
     fonts::run(ctx)?;
     color::run(ctx);
+    spot::run(ctx);
     tagging::run(ctx)?;
     cos::run(ctx);
     xmp::run(ctx);

@@ -29,8 +29,11 @@ pub fn run(ctx: &mut Ctx) {
             doc.objects.insert(id, Object::Dictionary(afd));
         }
         None => {
+            // An indirect AcroForm is what form editors expect (the app's
+            // own form filling does not handle an inline one).
+            let id = doc.add_object(Object::Dictionary(afd));
             if let Some(c) = dict_mut(doc, cat_id) {
-                c.set("AcroForm", Object::Dictionary(afd));
+                c.set("AcroForm", Object::Reference(id));
             }
         }
     }

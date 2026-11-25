@@ -11,6 +11,59 @@ scope each tag landed.
 
 ## [Unreleased]
 
+PDF/A without Ghostscript, at every level (#3).
+
+### Added
+- **Built-in PDF/A converter (#3).** The new crate `pdf_pdfa` turns any PDF
+  into PDF/A in pure Rust, for all eleven levels: 1a, 1b, 2a, 2b, 2u, 3a, 3b,
+  3u, 4, 4e and 4f. It needs no Ghostscript. What it does:
+  - sRGB output intent; `DeviceCMYK` content gets a calibrated default space.
+  - Fonts that are not embedded, or embedded with wrong widths or missing
+    glyphs, are embedded again from the system fonts or from their own
+    program, with exact widths and a Unicode mapping.
+  - Comments keep their look: flags and appearances are corrected, missing
+    appearances are drawn, types a level does not allow are removed.
+  - **Forms stay fillable.** The Ghostscript path flattened them.
+  - JavaScript and other active content are removed.
+  - Attachments per level: removed (part 1), attached PDFs converted to PDF/A
+    (parts 2 and 4), any file kept and linked (part 3 and 4f).
+  - Levels a: an existing structure tree is repaired; documents without one
+    are tagged automatically (text, images, artifacts).
+  - Spot colours: every colorant of a DeviceN space is described, and
+    Separations with the same name use the same definition.
+  - Pages larger than 14400 units are scaled to fit and keep their printed
+    size through `UserUnit`; page boxes outside their MediaBox are clipped.
+  - PDF/A-1 pages with transparency, JPEG 2000 or more than eight DeviceN
+    colorants, and pages whose font cannot be repaired, are stored as an
+    image with an invisible text layer, so they stay searchable.
+  - Clear errors instead of a non-conformant file: a password-protected
+    input, PDF/A-4f without an attachment.
+- **Converter choice** in Settings › PDF/A export: "Built-in" (default) or
+  "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
+  in the settings and in the convert pane.
+- **Conformance tests against veraPDF.** `just pdfa-check` stages veraPDF
+  (`scripts/fetch-verapdf.ps1`) and validates 24 synthetic test files at all
+  eleven levels: 231 conversions pass, 33 are the expected refusals
+  (password-protected input, 4f without an attachment), none fails.
+  `just pdfa-coverage` reports the test coverage, `just pdfa-bench` compares
+  speed, size and conformance with Ghostscript.
+
+### Changed
+- "Save as PDF/A", the batch conversion and the virtual printer use the
+  built-in converter. The virtual printer still needs Ghostscript to turn the
+  print job (PostScript) into a PDF; the PDF/A step after that is built in.
+- A document opened with its password can be saved as PDF/A (the copy is not
+  protected, since PDF/A forbids encryption).
+- Conversion notes (removed signatures, JavaScript, attachments, rendered
+  pages) and errors appear translated in the status bar.
+
+### Fixed
+- **PDF/A-4 could be selected but never worked (#3).** Ghostscript has no
+  PDF/A-4 mode and aborted with a range check error.
+- Ghostscript output did not pass validation: the app called it without an
+  output intent, so veraPDF rejects its 1b/2b/3b files for device colours.
+  The built-in converter is validated at every level.
+
 ## [1.3.2] — 2026-11-23
 
 Installer: a new version installs over the installed one, no uninstall first

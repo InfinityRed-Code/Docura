@@ -169,6 +169,22 @@ impl Level {
         self.part == 4 && self.conformance == Conformance::E
     }
 
+    /// Page boundaries are limited to 3 … 14400 units (required by parts 2
+    /// and 3; part 1 inherits the same limit from PDF 1.4 viewers and would
+    /// otherwise hit its limit for real numbers).
+    pub fn limits_page_size(self) -> bool {
+        self.part <= 3
+    }
+
+    /// Largest number of DeviceN colorants.
+    pub fn max_devicen_components(self) -> usize {
+        if self.part == 1 {
+            8
+        } else {
+            32
+        }
+    }
+
     /// PDF/A-1 implementation limits are stricter.
     pub fn max_real(self) -> f64 {
         if self.part == 1 {

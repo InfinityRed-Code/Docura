@@ -34,7 +34,10 @@ impl B {
             "Contents" => c,
             "Resources" => resources,
         };
-        d.extend(&extra);
+        // Not `extend`: that merges arrays (a second MediaBox would be appended).
+        for (k, v) in extra.iter() {
+            d.set(k.clone(), v.clone());
+        }
         let id = self.doc.add_object(d);
         self.kids.push(id.into());
         id
@@ -115,6 +118,10 @@ pub fn corpus() -> Vec<Case> {
         Case { name: "optional_content", bytes: optional_content(), expect: Expect::Ok },
         Case { name: "legacy_misc", bytes: legacy_misc(), expect: Expect::Ok },
         Case { name: "tagged_input", bytes: tagged_input(), expect: Expect::Ok },
+        Case { name: "cff_type1_missing_glyphs", bytes: cff_type1_missing_glyphs(), expect: Expect::Ok },
+        Case { name: "vertical_cjk", bytes: vertical_cjk(), expect: Expect::Ok },
+        Case { name: "spot_colors", bytes: spot_colors(), expect: Expect::Ok },
+        Case { name: "page_boxes", bytes: page_boxes(), expect: Expect::Ok },
     ];
     for c in &mut v {
         if c.expect == Expect::Ok && c.name != "attachments" {
@@ -627,6 +634,394 @@ pub fn tagged_input() -> Vec<u8> {
         "MarkInfo" => dictionary! { "Marked" => true },
         "Lang" => Object::string_literal("de_DE"),
     })
+}
+
+// ---------------------------------------------------------------- synthetic font programs
+
+/// Type 2 charstring number.
+fn cs_num(v: i32) -> Vec<u8> {
+    if (-107..=107).contains(&v) {
+        vec![(v + 139) as u8]
+    } else if (108..=1131).contains(&v) {
+        let x = v - 108;
+        vec![(x / 256 + 247) as u8, (x % 256) as u8]
+    } else if (-1131..=-108).contains(&v) {
+        let x = -v - 108;
+        vec![(x / 256 + 251) as u8, (x % 256) as u8]
+    } else {
+        vec![28, (v >> 8) as u8, v as u8]
+    }
+}
+
+fn cff_index(items: &[Vec<u8>]) -> Vec<u8> {
+    if items.is_empty() {
+        return vec![0, 0];
+    }
+    let mut out = (items.len() as u16).to_be_bytes().to_vec();
+    out.push(2);
+    let mut off = 1u16;
+    out.extend_from_slice(&off.to_be_bytes());
+    for i in items {
+        off += i.len() as u16;
+        out.extend_from_slice(&off.to_be_bytes());
+    }
+    for i in items {
+        out.extend_from_slice(i);
+    }
+    out
+}
+
+/// A complete, minimal name-keyed CFF font (Standard Encoding) with a box
+/// glyph for each of `glyphs` (ASCII letters) and the given advance widths.
+pub fn minimal_cff(name: &str, glyphs: &[(char, i32)]) -> Vec<u8> {
+    let dict_int = |v: i32| -> Vec<u8> {
+        let mut o = vec![29u8];
+        o.extend_from_slice(&v.to_be_bytes());
+        o
+    };
+    let header = vec![1u8, 0, 4, 1];
+    let name_idx = cff_index(&[name.as_bytes().to_vec()]);
+    // Charstrings: .notdef, then one box per glyph.
+    let mut css: Vec<Vec<u8>> = Vec::new();
+    let mut notdef = cs_num(500);
+    notdef.push(14);
+    css.push(notdef);
+    for (_, w) in glyphs {
+        let mut c = Vec::new();
+        for v in [*w, 100, 0] {
+            c.extend(cs_num(v));
+        }
+        c.push(21); // rmoveto
+        for (x, y) in [(300, 0), (0, 600), (-300, 0)] {
+            c.extend(cs_num(x));
+            c.extend(cs_num(y));
+            c.push(5); // rlineto
+        }
+        c.push(14); // endchar
+        css.push(c);
+    }
+    let charstrings = cff_index(&css);
+    let mut charset = vec![0u8];
+    for (ch, _) in glyphs {
+        charset.extend_from_slice(&(*ch as u16 - 31).to_be_bytes());
+    }
+    // Private: defaultWidthX 0, nominalWidthX 0.
+    let mut private = dict_int(0);
+    private.push(20);
+    private.extend(dict_int(0));
+    private.push(21);
+    // Top DICT has a fixed size (5-byte operands), so offsets are known.
+    let top_len = 4 * 5 + 1 + 6 + 6 + 11;
+    let top_idx_len = 2 + 1 + 4 + top_len;
+    let charset_off = header.len() + name_idx.len() + top_idx_len + 2 + 2;
+    let cs_off = charset_off + charset.len();
+    let priv_off = cs_off + charstrings.len();
+    let mut top = Vec::new();
+    for v in [0, 0, 1000, 700] {
+        top.extend(dict_int(v));
+    }
+    top.push(5); // FontBBox
+    top.extend(dict_int(charset_off as i32));
+    top.push(15);
+    top.extend(dict_int(cs_off as i32));
+    top.push(17);
+    top.extend(dict_int(private.len() as i32));
+    top.extend(dict_int(priv_off as i32));
+    top.push(18);
+    assert_eq!(top.len(), top_len);
+    let mut out = header;
+    out.extend(name_idx);
+    out.extend(cff_index(&[top]));
+    out.extend_from_slice(&[0, 0]); // String INDEX
+    out.extend_from_slice(&[0, 0]); // Global Subr INDEX
+    out.extend(charset);
+    out.extend(charstrings);
+    out.extend(private);
+    out
+}
+
+fn t1_encrypt(plain: &[u8], mut r: u16) -> Vec<u8> {
+    let mut out = Vec::new();
+    for &p in plain {
+        let c = p ^ (r >> 8) as u8;
+        r = (c as u16).wrapping_add(r).wrapping_mul(52845).wrapping_add(22719);
+        out.push(c);
+    }
+    out
+}
+
+/// A minimal Type 1 font program; returns (data, Length1, Length2, Length3).
+pub fn minimal_type1(name: &str, glyphs: &[(char, i32)]) -> (Vec<u8>, usize, usize, usize) {
+    let mut clear = format!(
+        "%!PS-AdobeFont-1.0: {name} 001.000\n11 dict begin\n/FontInfo 1 dict dup begin /FullName ({name}) readonly def end readonly def\n/FontName /{name} def\n/PaintType 0 def\n/FontType 1 def\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/FontBBox {{0 0 1000 700}} readonly def\n/Encoding 256 array\n0 1 255 {{1 index exch /.notdef put}} for\n"
+    )
+    .into_bytes();
+    for (c, _) in glyphs {
+        clear.extend_from_slice(format!("dup {} /{} put\n", *c as u32, c).as_bytes());
+    }
+    clear.extend_from_slice(b"readonly def\ncurrentdict end\ncurrentfile eexec\n");
+    let mut private = b"\0\0\0\0dup /Private 8 dict dup begin\n/RD {string currentfile exch readstring pop} executeonly def\n/ND {noaccess def} executeonly def\n/NP {noaccess put} executeonly def\n/BlueValues [] def\n/MinFeature {16 16} def\n/password 5839 def\n/lenIV 4 def\n/Subrs 0 array\nND\n".to_vec();
+    private.extend_from_slice(format!("2 index /CharStrings {} dict dup begin\n", glyphs.len() + 1).as_bytes());
+    let mut all: Vec<(String, i32)> = vec![(".notdef".into(), 500)];
+    all.extend(glyphs.iter().map(|(c, w)| (c.to_string(), *w)));
+    for (gname, w) in all {
+        // 0 w hsbw; box; endchar
+        let mut cs = vec![0u8; 4];
+        cs.push(139);
+        cs.push(255);
+        cs.extend_from_slice(&w.to_be_bytes());
+        cs.push(13);
+        if gname != ".notdef" {
+            cs.extend_from_slice(&[239, 139, 21]); // 100 0 rmoveto
+            cs.extend_from_slice(&[247, 192, 6]); // 300 hlineto
+            cs.extend_from_slice(&[248, 236, 7]); // 600 vlineto
+            cs.extend_from_slice(&[251, 192, 6]); // -300 hlineto
+            cs.push(9); // closepath
+        }
+        cs.push(14);
+        let enc = t1_encrypt(&cs, 4330);
+        private.extend_from_slice(format!("/{gname} {} RD ", enc.len()).as_bytes());
+        private.extend_from_slice(&enc);
+        private.extend_from_slice(b" ND\n");
+    }
+    private.extend_from_slice(b"end\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n");
+    let enc = t1_encrypt(&private, 55665);
+    let (l1, l2) = (clear.len(), enc.len());
+    let mut out = clear;
+    out.extend_from_slice(&enc);
+    let mut trailer = Vec::new();
+    for _ in 0..8 {
+        trailer.extend_from_slice(&[b'0'; 64]);
+        trailer.push(b'\n');
+    }
+    trailer.extend_from_slice(b"cleartomark\n");
+    let l3 = trailer.len();
+    out.extend_from_slice(&trailer);
+    (out, l1, l2, l3)
+}
+
+fn simple_descriptor(b: &mut B, name: &str, key: &str, file: ObjectId) -> ObjectId {
+    let mut fd = dictionary! {
+        "Type" => "FontDescriptor", "FontName" => Object::Name(name.as_bytes().to_vec()), "Flags" => 32,
+        "FontBBox" => vec![0.into(), 0.into(), 1000.into(), 700.into()],
+        "ItalicAngle" => 0, "Ascent" => 700, "Descent" => 0, "CapHeight" => 600, "StemV" => 80,
+    };
+    fd.set(key, file);
+    b.doc.add_object(fd)
+}
+
+/// Embedded CFF and Type 1 fonts: complete programs whose /Widths are
+/// wrong (stay embedded), a subset with a missing glyph and no system
+/// replacement (page is rendered), and a subset of a common font with a
+/// missing glyph that is installed on the system (replaced from there).
+pub fn cff_type1_missing_glyphs() -> Vec<u8> {
+    let mut b = B::new();
+    let w3 = |w: i64| -> Vec<Object> { vec![w.into(), w.into(), w.into()] };
+    // Page 1: complete CFF, /Widths disagree with the program.
+    let cff = minimal_cff("DocuraCffOk", &[('A', 600), ('B', 700), ('C', 650)]);
+    let ff = b.doc.add_object(Stream::new(dictionary! { "Subtype" => "Type1C" }, cff));
+    let fd = simple_descriptor(&mut b, "DocuraCffOk", "FontFile3", ff);
+    let f1 = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "DocuraCffOk", "FirstChar" => 65, "LastChar" => 67,
+        "Widths" => w3(500), "Encoding" => "WinAnsiEncoding", "FontDescriptor" => fd,
+    });
+    b.page(b"BT /F1 24 Tf 72 700 Td (ABCCBA) Tj ET", font_res(f1), Dictionary::new());
+    // Page 2: CFF subset without the glyph for "C", unknown font name.
+    let cff = minimal_cff("AAAAAA+DocuraCffSubset", &[('A', 600), ('B', 700)]);
+    let ff = b.doc.add_object(Stream::new(dictionary! { "Subtype" => "Type1C" }, cff));
+    let fd = simple_descriptor(&mut b, "AAAAAA+DocuraCffSubset", "FontFile3", ff);
+    let f2 = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "AAAAAA+DocuraCffSubset", "FirstChar" => 65, "LastChar" => 67,
+        "Widths" => vec![600.into(), 700.into(), 650.into()], "Encoding" => "WinAnsiEncoding", "FontDescriptor" => fd,
+    });
+    b.page(b"BT /F1 24 Tf 72 700 Td (ABC) Tj ET", font_res(f2), Dictionary::new());
+    // Page 3: Type 1 subset without the glyph for "C" whose font exists on
+    // most systems (replaced from there; rendered where it does not).
+    let (t1, l1, l2, l3) = minimal_type1("BBBBBB+ArialMT", &[('A', 600), ('B', 600)]);
+    let ff = b.doc.add_object(Stream::new(dictionary! { "Length1" => l1 as i64, "Length2" => l2 as i64, "Length3" => l3 as i64 }, t1));
+    let fd = simple_descriptor(&mut b, "BBBBBB+ArialMT", "FontFile", ff);
+    let f3 = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "BBBBBB+ArialMT", "FirstChar" => 65, "LastChar" => 67,
+        "Widths" => w3(600), "Encoding" => "WinAnsiEncoding", "FontDescriptor" => fd,
+    });
+    b.page(b"BT /F1 24 Tf 72 700 Td (ABC) Tj ET", font_res(f3), Dictionary::new());
+    // Page 4: complete Type 1 with wrong widths (stays embedded).
+    let (t1, l1, l2, l3) = minimal_type1("DocuraType1Ok", &[('A', 600), ('B', 700)]);
+    let ff = b.doc.add_object(Stream::new(dictionary! { "Length1" => l1 as i64, "Length2" => l2 as i64, "Length3" => l3 as i64 }, t1));
+    let fd = simple_descriptor(&mut b, "DocuraType1Ok", "FontFile", ff);
+    let f4 = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "DocuraType1Ok", "FirstChar" => 65, "LastChar" => 66,
+        "Widths" => vec![500.into(), 500.into()], "FontDescriptor" => fd,
+    });
+    b.page(b"BT /F1 24 Tf 72 700 Td (ABBA) Tj ET", font_res(f4), Dictionary::new());
+    b.finish()
+}
+
+/// Vertical writing (WMode 1): an unembedded CJK font with Identity-V and
+/// an embedded font used vertically.
+pub fn vertical_cjk() -> Vec<u8> {
+    let mut b = B::new();
+    // Page 1: not embedded, vertical.
+    let tu = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n3 beginbfchar <0001> <65E5> <0002> <672C> <0003> <8A9E> endbfchar\nendcmap end end";
+    let tus = b.doc.add_object(Stream::new(Dictionary::new(), tu.to_vec()));
+    let fd = b.doc.add_object(dictionary! {
+        "Type" => "FontDescriptor", "FontName" => "MS-Mincho", "Flags" => 6,
+        "FontBBox" => vec![0.into(), (-140).into(), 1000.into(), 860.into()],
+        "ItalicAngle" => 0, "Ascent" => 860, "Descent" => (-140), "CapHeight" => 700, "StemV" => 80,
+    });
+    let cf = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "MS-Mincho",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Japan1"), "Supplement" => 2 },
+        "FontDescriptor" => fd, "DW" => 1000, "DW2" => vec![880.into(), (-1000).into()],
+    });
+    let f = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "MS-Mincho", "Encoding" => "Identity-V",
+        "DescendantFonts" => vec![cf.into()], "ToUnicode" => tus,
+    });
+    b.page(b"BT /F1 24 Tf 300 760 Td <000100020003> Tj ET", font_res(f), Dictionary::new());
+    // Page 2: embedded TrueType font, vertical.
+    let data = pdf_fonts::family("Roboto").unwrap().face(false, false).to_vec();
+    let face = ttf_parser::Face::parse(&data, 0).unwrap();
+    let upem = face.units_per_em() as f64;
+    let mut codes = Vec::new();
+    let mut w = Vec::new();
+    for ch in "Vertikal".chars() {
+        let g = face.glyph_index(ch).unwrap();
+        codes.extend_from_slice(&g.0.to_be_bytes());
+        let adv = (face.glyph_hor_advance(g).unwrap() as f64 * 1000.0 / upem).round() as i64;
+        w.push(Object::Integer(g.0 as i64));
+        w.push(Object::Array(vec![adv.into()]));
+    }
+    let mut ff = Stream::new(dictionary! { "Length1" => data.len() as i64 }, data.clone());
+    let _ = ff.compress();
+    let ffid = b.doc.add_object(ff);
+    let fd = simple_descriptor(&mut b, "Roboto-Regular", "FontFile2", ffid);
+    let cf = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "Roboto-Regular",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "FontDescriptor" => fd, "W" => w, "DW2" => vec![880.into(), (-1000).into()], "CIDToGIDMap" => "Identity",
+    });
+    let f2 = b.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "Roboto-Regular", "Encoding" => "Identity-V",
+        "DescendantFonts" => vec![cf.into()],
+    });
+    let mut c = b"BT /F1 24 Tf 300 760 Td <".to_vec();
+    for x in &codes {
+        c.extend_from_slice(format!("{x:02X}").as_bytes());
+    }
+    c.extend_from_slice(b"> Tj ET");
+    b.page(&c, font_res(f2), Dictionary::new());
+    b.finish()
+}
+
+fn ps_function(inputs: usize, code: &str) -> Stream {
+    let mut domain = Vec::new();
+    for _ in 0..inputs {
+        domain.push(Object::Integer(0));
+        domain.push(Object::Integer(1));
+    }
+    let range: Vec<Object> = (0..4).flat_map(|_| [Object::Integer(0), Object::Integer(1)]).collect();
+    Stream::new(dictionary! { "FunctionType" => 4, "Domain" => domain, "Range" => range }, code.as_bytes().to_vec())
+}
+
+/// Spot colours: Separation and DeviceN with and without a Colorants
+/// dictionary, the same spot name with different alternates, /All and
+/// /None, and a DeviceN with more than eight components.
+pub fn spot_colors() -> Vec<u8> {
+    let mut b = B::new();
+    let f = helv(&mut b);
+    let name = |s: &str| Object::Name(s.as_bytes().to_vec());
+    let tint = |c1: [f32; 4]| -> Object {
+        Object::Dictionary(dictionary! { "FunctionType" => 2, "Domain" => vec![0.into(), 1.into()], "C0" => vec![0.into(), 0.into(), 0.into(), 0.into()], "C1" => c1.iter().map(|v| Object::Real(*v)).collect::<Vec<_>>(), "N" => 1 })
+    };
+    let sep_a = b.doc.add_object(Object::Array(vec![name("Separation"), name("HKS 43"), name("DeviceCMYK"), tint([1.0, 0.5, 0.0, 0.0])]));
+    // Same colorant, other alternate space and tint transform.
+    let sep_b = b.doc.add_object(Object::Array(vec![
+        name("Separation"),
+        name("HKS 43"),
+        name("DeviceRGB"),
+        Object::Dictionary(dictionary! { "FunctionType" => 2, "Domain" => vec![0.into(), 1.into()], "C0" => vec![1.into(), 1.into(), 1.into()], "C1" => vec![0.into(), 0.3.into(), 0.8.into()], "N" => 1 }),
+    ]));
+    let sep_all = b.doc.add_object(Object::Array(vec![name("Separation"), name("All"), name("DeviceCMYK"), tint([1.0, 1.0, 1.0, 1.0])]));
+    let sep_none = b.doc.add_object(Object::Array(vec![
+        name("Separation"),
+        name("None"),
+        name("DeviceGray"),
+        Object::Dictionary(dictionary! { "FunctionType" => 2, "Domain" => vec![0.into(), 1.into()], "C0" => vec![1.into()], "C1" => vec![0.into()], "N" => 1 }),
+    ]));
+    // DeviceN without attributes.
+    let fn2 = b.doc.add_object(ps_function(3, "{ pop 0 0 }"));
+    let dn_plain = b.doc.add_object(Object::Array(vec![name("DeviceN"), Object::Array(vec![name("Cyan"), name("HKS 43"), name("None")]), name("DeviceCMYK"), fn2.into()]));
+    // DeviceN (NChannel) with Colorants and Process.
+    let fn2b = b.doc.add_object(ps_function(2, "{ exch 0 exch 0 exch 0 }"));
+    let gold = Object::Array(vec![name("Separation"), name("Gold"), name("DeviceCMYK"), tint([0.0, 0.2, 0.8, 0.1])]);
+    let dn_attr = b.doc.add_object(Object::Array(vec![
+        name("DeviceN"),
+        Object::Array(vec![name("Magenta"), name("Gold")]),
+        name("DeviceCMYK"),
+        fn2b.into(),
+        Object::Dictionary(dictionary! {
+            "Subtype" => "NChannel",
+            "Colorants" => dictionary! { "Gold" => gold },
+            "Process" => dictionary! { "ColorSpace" => "DeviceCMYK", "Components" => vec![name("Cyan"), name("Magenta"), name("Yellow"), name("Black")] },
+        }),
+    ]));
+    // Nine components (PDF/A-1 allows eight).
+    let fn9 = b.doc.add_object(ps_function(9, "{ pop pop pop pop pop }"));
+    let nine: Vec<Object> = (1..=9).map(|i| name(&format!("Spot{i}"))).collect();
+    let dn_nine = b.doc.add_object(Object::Array(vec![name("DeviceN"), Object::Array(nine), name("DeviceCMYK"), fn9.into()]));
+    // Image in a Separation space.
+    let img = b.doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 2, "Height" => 1, "ColorSpace" => sep_a, "BitsPerComponent" => 8 },
+        vec![255, 64],
+    ));
+    let res = dictionary! {
+        "Font" => dictionary! { "F1" => f },
+        "XObject" => dictionary! { "Im1" => img },
+        "ColorSpace" => dictionary! { "A" => sep_a, "B" => sep_b, "All" => sep_all, "None" => sep_none, "N2" => dn_plain, "N2a" => dn_attr, "N9" => dn_nine },
+    };
+    let mut c = TEXT.to_vec();
+    c.extend_from_slice(b"/A cs 0.8 scn 72 600 80 80 re f /B cs 0.8 scn 172 600 80 80 re f /All cs 1 scn 272 600 80 80 re f /None cs 1 scn 372 600 80 80 re f\n");
+    c.extend_from_slice(b"/N2 cs 0.5 0.9 0 scn 72 480 80 80 re f /N2a CS 0.3 0.7 SCN 4 w 172 480 80 80 re S /N9 cs 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 scn 272 480 80 80 re f\n");
+    c.extend_from_slice(b"q 160 0 0 80 72 360 cm /Im1 Do Q\n");
+    b.page(&c, res, Dictionary::new());
+    b.finish()
+}
+
+/// Page boundaries outside what PDF/A allows (3 … 14400 units) and boxes
+/// that do not fit their MediaBox.
+pub fn page_boxes() -> Vec<u8> {
+    let mut b = B::new();
+    let f = helv(&mut b);
+    let bx = |a: f32, c: f32, d: f32, e: f32| -> Object { vec![Object::Real(a), Object::Real(c), Object::Real(d), Object::Real(e)].into() };
+    // Too large, with an annotation that has to move along.
+    let link = b.doc.add_object(dictionary! {
+        "Type" => "Annot", "Subtype" => "Link", "Rect" => bx(1000.0, 18000.0, 6000.0, 19000.0), "F" => 4,
+        "A" => dictionary! { "S" => "URI", "URI" => Object::string_literal("https://example.com") }, "Border" => vec![0.into(), 0.into(), 0.into()],
+    });
+    b.page(
+        b"BT /F1 600 Tf 1000 18000 Td (Riesenseite) Tj ET 0 0 1 RG 100 w 500 500 19000 19000 re S",
+        font_res(f),
+        dictionary! { "MediaBox" => bx(0.0, 0.0, 20000.0, 20000.0), "Annots" => vec![link.into()] },
+    );
+    // Too small.
+    b.page(b"0 1 0 rg 0 0 2 2 re f", Dictionary::new(), dictionary! { "MediaBox" => bx(0.0, 0.0, 2.0, 2.0) });
+    // Boxes larger than the MediaBox, reversed corners, UserUnit.
+    b.page(
+        TEXT,
+        font_res(f),
+        dictionary! {
+            "CropBox" => bx(-100.0, -100.0, 700.0, 900.0), "TrimBox" => bx(-200.0, -200.0, 800.0, 1000.0),
+            "ArtBox" => bx(500.0, 700.0, 100.0, 100.0), "BleedBox" => bx(0.0, 0.0, 30000.0, 30000.0), "UserUnit" => 2,
+        },
+    );
+    // Negative origin and a CropBox flatter than three units.
+    b.page(
+        b"BT /F1 12 Tf -280 0 Td (Ursprung in der Mitte) Tj ET",
+        font_res(f),
+        dictionary! { "MediaBox" => bx(-300.0, -400.0, 295.0, 442.0), "CropBox" => bx(-300.0, 0.0, 295.0, 1.5) },
+    );
+    b.finish()
 }
 
 /// Plain (code-per-byte) LZW encoder (TIFF/PDF flavour, early change).

@@ -80,6 +80,18 @@ ci: fmt-check lint test
 fmt-check:
     cargo fmt --all -- --check
 
+# PDF/A gate: stage veraPDF if missing, unit tests + conformance matrix (corpus x all levels), fails on any FAIL
+pdfa-check:
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/pdfa-check.ps1
+
+# Function/line coverage of the PDF/A converter (needs `cargo install cargo-llvm-cov`)
+pdfa-coverage:
+    cargo llvm-cov -p pdf_pdfa --ignore-filename-regex "fonts.tables\.rs|examples|pdf_(pdfium|mutate|fonts|core|types|cache|render|text)" --summary-only
+
+# PDF/A benchmark against Ghostscript on the test corpus; pass directories or files to add your own PDFs
+pdfa-bench *ARGS:
+    cargo run --release -p pdf_pdfa --example pdfa_bench -- --corpus {{ARGS}}
+
 # Install UI deps
 install:
     pnpm --dir {{ui_dir}} install

@@ -25,6 +25,8 @@ pub fn is_standard_blend(n: &[u8]) -> bool {
 pub enum Reason {
     Transparency,
     Jpx,
+    /// DeviceN colour space with more colorants than PDF/A-1 allows.
+    Colorants,
 }
 
 struct Scan<'a> {
@@ -224,11 +226,14 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
     let pages = util::pages(&ctx.doc);
     let mut flattened = Vec::new();
     for (idx, page) in pages.iter().enumerate() {
-        if let Some(reason) = page_reason(&ctx.doc, *page) {
+        let reason = page_reason(&ctx.doc, *page)
+            .or_else(|| crate::spot::page_has_wide_devicen(&ctx.doc, *page, ctx.level.max_devicen_components()).then_some(Reason::Colorants));
+        if let Some(reason) = reason {
             let Some(r) = ctx.opts.rasterizer.clone() else {
                 let what = match reason {
                     Reason::Transparency => "transparency",
                     Reason::Jpx => "JPEG 2000 image",
+                    Reason::Colorants => "DeviceN colour space with more than 8 colorants",
                 };
                 return Err(PdfaError::NeedsRasterizer(format!("{what} on page {}", idx + 1)));
             };
