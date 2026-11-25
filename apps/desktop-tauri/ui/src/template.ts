@@ -349,6 +349,7 @@ export function buildHtml(): string {
           <option value="FreeText">${t("kind.FreeText")}</option>
           <option value="Stamp">${t("kind.Stamp")}</option>
           <option value="Text">${t("kind.Text")}</option>
+          <option value="3D">${t("kind.3D")}</option>
         </select>
         <input id="commentAuthorFilter" type="text" placeholder="${t("ph.author")}" />
         <label class="commentChk"><input type="checkbox" id="commentHasContent" /> ${t("lbl.withComment")}</label>

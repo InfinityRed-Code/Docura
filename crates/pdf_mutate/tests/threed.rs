@@ -55,7 +55,7 @@ fn view(name: &str) -> ThreeDView {
     ThreeDView {
         name: name.into(),
         internal_name: Some(name.into()),
-        c2w: Some([1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.5, -5.0, 0.5]),
+        c2w: Some(pdf_mutate::c2w_look_at([0.5, -5.0, 0.5], [0.5, 0.0, 0.5], [0.0, 0.0, 1.0])),
         center_of_orbit: Some(5.0),
         fov: Some(30.0),
         fov_span: Some("Min".into()),
@@ -228,4 +228,75 @@ fn foreign_structures_are_understood() {
     assert_eq!(doc.model_3d(0, "rm").unwrap().1, tetra_u3d());
     let p = list.iter().find(|a| a.id == "prc").unwrap();
     assert_eq!(p.format, "PRC");
+}
+
+/// The /C2W convention of written views: columns left, up, view and the
+/// position (a proper rotation), as media9 and Acrobat write it. The same
+/// reference values are checked for the app's TypeScript camera math in
+/// `apps/desktop-tauri/ui/tests/threed-camera.test.mjs`.
+#[test]
+fn c2w_convention_is_left_up_view() {
+    let close = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
+    // media9's default camera: at -Y looking along +Y, Z up.
+    let front = pdf_mutate::c2w_look_at([0.0, -10.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    assert!(close(&front, &[-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, -10.0, 0.0]), "{front:?}");
+    // Top view with +Y up on screen.
+    let top = pdf_mutate::c2w_look_at([0.0, 0.0, 5.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    assert!(close(&top, &[-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 5.0]), "{top:?}");
+    // Any view: orthonormal, determinant +1, x = y x z, up column points up.
+    let m = pdf_mutate::c2w_look_at([7.0, -4.0, 3.0], [1.0, 2.0, 0.5], [0.0, 0.0, 1.0]);
+    let (x, y, z) = (&m[0..3], &m[3..6], &m[6..9]);
+    let dot = |a: &[f32], b: &[f32]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: &[f32], b: &[f32]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    for v in [x, y, z] {
+        assert!((dot(v, v) - 1.0).abs() < 1e-5);
+    }
+    assert!(dot(x, y).abs() < 1e-5 && dot(y, z).abs() < 1e-5 && dot(x, z).abs() < 1e-5);
+    assert!(close(x, &cross(y, z)), "x = y x z (proper rotation)");
+    assert!(y[2] > 0.0, "up column points up");
+
+    // The matrix survives writing and reading unchanged.
+    let doc = MutableDoc::from_bytes(&with_3d(1, 0)).unwrap();
+    let read = doc.list_3d()[0].views[0].c2w.unwrap();
+    assert!(close(&read, &[-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.5, -5.0, 0.5]), "{read:?}");
+}
+
+/// On a page with /Rotate the poster is turned into the appearance form so
+/// it reads upright on screen, and the placement rect comes back as given.
+#[test]
+fn poster_is_upright_on_a_rotated_page() {
+    let mut doc = MutableDoc::from_bytes(&blank_pdf(1)).unwrap();
+    doc.rotate_pages(&[0], 90).unwrap();
+    // The page is now 400 x 600 on screen; a 100 x 300 box in view space.
+    let rect = RectPt { x0: 50.0, y0: 100.0, x1: 150.0, y1: 400.0 };
+    doc.add_3d_annotation(
+        0,
+        &ThreeDAnnotation {
+            rect,
+            u3d: tetra_u3d(),
+            views: vec![view("Iso")],
+            default_view: 0,
+            poster: png(),
+            name: "teil.stl".into(),
+            activation: "XA".into(),
+        },
+    )
+    .unwrap();
+    let bytes = doc.to_bytes().unwrap();
+    let a = &MutableDoc::from_bytes(&bytes).unwrap().list_3d()[0];
+    assert!((a.rect_pt.x0 - 50.0).abs() < 0.01 && (a.rect_pt.y1 - 400.0).abs() < 0.01, "{:?}", a.rect_pt);
+
+    let d = Document::load_mem(&bytes).unwrap();
+    let form = d
+        .objects
+        .values()
+        .filter_map(|o| o.as_stream().ok())
+        .find(|s| s.dict.get(b"Subtype").ok().and_then(|n| n.as_name().ok()) == Some(b"Form".as_slice()))
+        .expect("poster form");
+    // In page space the box is 300 wide and 100 high.
+    let bbox: Vec<f32> = form.dict.get(b"BBox").unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect();
+    assert_eq!(bbox, vec![0.0, 0.0, 300.0, 100.0]);
+    // The image (100 x 300 on screen) is turned a quarter into the form.
+    let content = String::from_utf8(form.content.clone()).unwrap();
+    assert_eq!(content, "q\n0.0000 100.0000 -300.0000 0.0000 300.0000 0.0000 cm\n/Im0 Do\nQ\n");
 }

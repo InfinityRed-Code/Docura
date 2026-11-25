@@ -7,6 +7,7 @@ use pdf_types::{RectPt, ThreeDAnnot, ThreeDCrossSection, ThreeDNodeState, ThreeD
 
 use crate::annotations::{
     annot_id_string, append_annot_to_page, now_pdf_date, page_id_for, page_view, pdf_string_utf16be, rect_native,
+    screen_turns, upright_matrix, upright_size,
 };
 use crate::read::{decode_pdf_string, read_rect_top, read_string_field};
 use crate::{MutateError, MutateResult};
@@ -375,6 +376,32 @@ pub struct ThreeDAnnotation {
     pub activation: String,
 }
 
+/// The `/C2W` matrix of a camera at `position` looking at `target`; `up`
+/// is the rough up direction (it need not be perpendicular to the view).
+///
+/// Convention (ISO 32000-1 13.6.5 as Acrobat and media9 write it): columns
+/// x, y, z and the position; the camera looks along +z, +y is up on screen
+/// and the matrix is a proper rotation, so +x points to the *left* of the
+/// screen (`left = up x view`). The front view of a Z-up model is
+/// `[-1 0 0  0 0 1  0 1 0  cx cy-d cz]`. The app's inserter computes the
+/// same in `threed-camera.ts` (`c2wLookAt`).
+pub fn c2w_look_at(position: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 12] {
+    let norm = |v: [f32; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { [0.0, 0.0, 1.0] }
+    };
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let view = norm([target[0] - position[0], target[1] - position[1], target[2] - position[2]]);
+    let left = norm(cross(up, view));
+    let true_up = cross(view, left);
+    let mut m = [0f32; 12];
+    m[..3].copy_from_slice(&left);
+    m[3..6].copy_from_slice(&true_up);
+    m[6..9].copy_from_slice(&view);
+    m[9..].copy_from_slice(&position);
+    m
+}
+
 fn real(v: f32) -> Object {
     Object::Real(if v.is_finite() { v } else { 0.0 })
 }
@@ -455,8 +482,22 @@ pub fn add_3d_annotation(doc: &mut Document, page_index: u32, a: &ThreeDAnnotati
         },
         jpeg,
     ));
+    // The poster is rendered for the box as seen on screen; on a page with
+    // /Rotate it is turned into form space so it reads upright (like stamps).
+    let turns = screen_turns(view.1, 0);
+    let m = upright_matrix(turns, w, h);
+    let (uw, uh) = upright_size(turns, w, h);
     let mut content = Vec::new();
-    let _ = write!(&mut content, "q\n{w:.4} 0 0 {h:.4} 0 0 cm\n/Im0 Do\nQ\n");
+    let _ = write!(
+        &mut content,
+        "q\n{:.4} {:.4} {:.4} {:.4} {:.4} {:.4} cm\n/Im0 Do\nQ\n",
+        m[0] * uw,
+        m[1] * uw,
+        m[2] * uh,
+        m[3] * uh,
+        m[4],
+        m[5],
+    );
     let form_id = doc.add_object(Stream::new(
         dictionary! {
             "Type" => "XObject", "Subtype" => "Form", "FormType" => 1,

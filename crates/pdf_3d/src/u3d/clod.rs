@@ -17,6 +17,7 @@
 //! `STATIC_FULL + 0` behaves like a dynamic context (handled in `bits`).
 //! It reconstructs only the final resolution, so face updates are applied
 //! directly instead of being stored for later resolution changes.
+//! License notice: `crates/pdf_3d/licenses/README.md`.
 
 use super::bits::{BitReader, STATIC_FULL};
 use super::{Face, Mesh, ShadingDesc, U3dError};

@@ -5,6 +5,8 @@
 //! - `building.pdf`: a building frame like a structural CAD export
 //!   (storeys as groups, ~1000 columns/beams/slabs as parts), no poster.
 //! - `terrain.pdf`: one large mesh (~500k triangles), no poster.
+//! - `orientation.pdf`: coloured axis bars, activated on page open, to
+//!   cross-check camera convention and colours in other viewers.
 //! - `blank.pdf`: an empty page to insert models into.
 //! - `prc_placeholder.pdf`: a 3D annotation declaring PRC data (not a real
 //!   PRC model) with a poster, for the "format not supported" path.
@@ -157,43 +159,54 @@ fn terrain() -> ExportScene {
     }
 }
 
-/// Iso / front / top views (Z up) like the app's inserter writes them.
+/// The inserter's preset views (Z up), see `standardViews` in
+/// `threed-camera.ts`.
 fn views(lo: [f32; 3], hi: [f32; 3]) -> Vec<ThreeDView> {
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
     let r = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt() / 2.0;
     let dist = r / (15f32.to_radians()).sin() * 1.02;
-    let norm = |v: [f32; 3]| {
-        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-        [v[0] / l, v[1] / l, v[2] / l]
-    };
-    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    [("Isometrisch", [1.0, -1.0, 0.8], [0.0, 0.0, 1.0]), ("Vorne", [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]), ("Oben", [0.0, 0.0, 1.0], [0.0, 1.0, 0.0])]
-        .into_iter()
-        .map(|(name, dir, up)| {
-            let d = norm(dir);
-            let pos = [c[0] + d[0] * dist, c[1] + d[1] * dist, c[2] + d[2] * dist];
-            let fwd = [-d[0], -d[1], -d[2]];
-            let right = norm(cross(fwd, up));
-            let down = norm(cross(fwd, right));
-            let mut m = [0f32; 12];
-            m[..3].copy_from_slice(&right);
-            m[3..6].copy_from_slice(&down);
-            m[6..9].copy_from_slice(&fwd);
-            m[9..].copy_from_slice(&pos);
-            ThreeDView {
-                name: name.into(),
-                internal_name: Some(name.into()),
-                c2w: Some(m),
-                center_of_orbit: Some(dist),
-                fov: Some(30.0),
-                fov_span: Some("Min".into()),
-                background: Some([1.0, 1.0, 1.0]),
-                render_mode: Some("Solid".into()),
-                lighting: Some("CAD".into()),
-                ..Default::default()
-            }
-        })
-        .collect()
+    [
+        ("Isometrisch", [1.0, -1.0, 0.8], [0.0, 0.0, 1.0]),
+        ("Vorne", [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]),
+        ("Hinten", [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        ("Links", [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        ("Rechts", [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        ("Oben", [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        ("Unten", [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]),
+    ]
+    .into_iter()
+    .map(|(name, dir, up): (&str, [f32; 3], [f32; 3])| {
+        let l = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        let pos = [c[0] + dir[0] / l * dist, c[1] + dir[1] / l * dist, c[2] + dir[2] / l * dist];
+        ThreeDView {
+            name: name.into(),
+            internal_name: Some(name.into()),
+            c2w: Some(pdf_mutate::c2w_look_at(pos, c, up)),
+            center_of_orbit: Some(dist),
+            fov: Some(30.0),
+            fov_span: Some("Min".into()),
+            background: Some([1.0, 1.0, 1.0]),
+            render_mode: Some("Solid".into()),
+            lighting: Some("CAD".into()),
+            ..Default::default()
+        }
+    })
+    .collect()
+}
+
+/// Coloured axis bars of different lengths plus an L-shaped marker: makes
+/// a wrong camera convention (mirrored, upside down) or wrong colours
+/// obvious when the file is checked in another viewer.
+fn orientation() -> ExportScene {
+    let groups = vec![ExportGroup { name: "Achsen".into(), parent: None, transform: IDENTITY }];
+    let bar = |name: &str, hi: [f32; 3], color: [f32; 4]| cuboid(name.into(), "Achsen", [0.0, 0.0, 0.0], hi, color);
+    let meshes = vec![
+        bar("X rot (lang)", [300.0, 20.0, 20.0], [0.90, 0.10, 0.10, 1.0]),
+        bar("Y gruen (mittel)", [20.0, 200.0, 20.0], [0.10, 0.70, 0.15, 1.0]),
+        bar("Z blau (kurz)", [20.0, 20.0, 120.0], [0.10, 0.25, 0.90, 1.0]),
+        cuboid("Marke gelb (+X oben)".into(), "Achsen", [260.0, 0.0, 20.0], [300.0, 20.0, 60.0], [0.95, 0.80, 0.10, 1.0]),
+    ];
+    ExportScene { groups, meshes, units_m: Some(0.001) }
 }
 
 fn bounds(s: &ExportScene) -> ([f32; 3], [f32; 3]) {
@@ -220,6 +233,10 @@ fn gray_png() -> Vec<u8> {
 /// Writes a one-page PDF with the scene as a 3D annotation; `poster` false
 /// strips the appearance so viewers must render a preview themselves.
 fn write_pdf(path: &std::path::Path, title: &str, scene: &ExportScene, poster: bool) {
+    write_pdf_with(path, title, scene, poster, "XA")
+}
+
+fn write_pdf_with(path: &std::path::Path, title: &str, scene: &ExportScene, poster: bool, activation: &str) {
     let u3d = pdf_3d::u3d::write(scene);
     let (lo, hi) = bounds(scene);
     let (w, h) = (842.0, 595.0);
@@ -233,7 +250,7 @@ fn write_pdf(path: &std::path::Path, title: &str, scene: &ExportScene, poster: b
             default_view: 0,
             poster: gray_png(),
             name: title.into(),
-            activation: "XA".into(),
+            activation: activation.into(),
         },
     )
     .unwrap();
@@ -260,10 +277,20 @@ fn main() {
     std::fs::create_dir_all(&out).unwrap();
     std::fs::write(out.join("blank.pdf"), page_pdf("Docura 3D-Test: Modell einfuegen", 842.0, 595.0)).unwrap();
     write_pdf(&out.join("building.pdf"), "Docura 3D-Test: Tragwerk (5 Geschosse)", &building(), false);
-    write_pdf(&out.join("terrain.pdf"), "Docura 3D-Test: Gelände (500k Dreiecke)", &terrain(), false);
+    write_pdf(&out.join("terrain.pdf"), "Docura 3D-Test: Gelaende (500k Dreiecke)", &terrain(), false);
+    // For cross-checks in Acrobat Reader / Foxit: opens activated (/A /PO).
+    // Expected in "Vorne": red X bar to the right, blue Z bar up, the yellow
+    // mark on top of the right end; in "Oben": red to the right, green up.
+    write_pdf_with(
+        &out.join("orientation.pdf"),
+        "Docura 3D-Test: Achsen. Vorne: rot (X) nach rechts, blau (Z) nach oben, gelb rechts oben",
+        &orientation(),
+        false,
+        "PO",
+    );
 
     // PRC placeholder: a 3D annotation whose stream says PRC.
-    let mut doc = lopdf::Document::load_mem(&page_pdf("Docura 3D-Test: PRC (nicht unterstützt)", 842.0, 595.0)).unwrap();
+    let mut doc = lopdf::Document::load_mem(&page_pdf("Docura 3D-Test: PRC (nicht unterstuetzt)", 842.0, 595.0)).unwrap();
     let page_id = *doc.get_pages().get(&1).unwrap();
     let img = doc.add_object(Stream::new(
         dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 1, "Height" => 1, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8 },

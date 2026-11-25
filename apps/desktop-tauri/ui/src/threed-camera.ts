@@ -2,10 +2,11 @@
 // three.js so the inserter and the viewer share one definition.
 //
 // A PDF view's /C2W is a 3x4 camera-to-world matrix: columns x, y, z and the
-// camera position; the camera looks along +z. The standard text says +y is
-// "up", which only holds for a mirrored matrix; writers (Acrobat, media9)
-// use proper rotations whose y axis points *down* on screen. The handedness
-// of the matrix tells which convention a file uses.
+// camera position. The camera looks along +z and +y is up on screen. Writers
+// (Acrobat, media9) store a proper rotation, so in the right-handed world +x
+// points to the *left* of the screen: C2W = [left up view position] with
+// left = up x view. The front view of a Z-up model at distance d is
+// [-1 0 0  0 0 1  0 1 0  cx cy-d cz] (media9's default, see c2wLookAt).
 
 import type { ThreeDView } from "./types";
 
@@ -81,12 +82,10 @@ export function cameraForView(
   let up: Vec3;
   if (v.c2w && v.c2w.length === 12) {
     const m = v.c2w;
-    const x: Vec3 = [m[0], m[1], m[2]];
-    const y: Vec3 = [m[3], m[4], m[5]];
-    const z: Vec3 = [m[6], m[7], m[8]];
+    // The x column (left, or right in a mirrored matrix) is not needed.
     position = [m[9], m[10], m[11]];
-    forward = norm(z);
-    up = dot(x, cross(y, z)) >= 0 ? norm(scale(y, -1)) : norm(y);
+    forward = norm([m[6], m[7], m[8]]);
+    up = norm([m[3], m[4], m[5]]);
   } else if (v.u3d_path.length > 0) {
     const name = v.u3d_path[v.u3d_path.length - 1];
     const cam = cameras.find((c) => c.name === name);
@@ -145,6 +144,15 @@ export function fitCamera(bounds: Bounds, dir: Vec3, up: Vec3, fovV: number, asp
   };
 }
 
+/** The /C2W matrix of a camera at `position` looking at `target`; `up` is
+ * the rough up direction (it need not be perpendicular to the view). */
+export function c2wLookAt(position: Vec3, target: Vec3, up: Vec3): number[] {
+  const view = norm(sub(target, position));
+  const left = norm(cross(up, view));
+  const trueUp = cross(view, left);
+  return [...left, ...trueUp, ...view, ...position];
+}
+
 /** Preset views for an inserted model (Z up), written as /C2W views. */
 export function standardViews(bounds: Bounds, names: Record<string, string>, w: number, h: number): ThreeDView[] {
   const fov = 30;
@@ -160,13 +168,10 @@ export function standardViews(bounds: Bounds, names: Record<string, string>, w: 
   const fovV = verticalFov(fov, "Min", w, h);
   return presets.map(([key, dir, up]) => {
     const cam = fitCamera(bounds, dir, up, fovV, w / h);
-    const forward = norm(sub(cam.target, cam.position));
-    const right = norm(cross(forward, up));
-    const down = norm(cross(forward, right)); // y column: down on screen
     return {
       name: names[key] ?? key,
       internal_name: key,
-      c2w: [...right, ...down, ...forward, ...cam.position],
+      c2w: c2wLookAt(cam.position, cam.target, up),
       u3d_path: [],
       center_of_orbit: len(sub(cam.target, cam.position)),
       orthographic: false,

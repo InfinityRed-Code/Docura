@@ -128,13 +128,13 @@ pub(crate) fn random_nm() -> String {
 /// Clockwise quarter turns an annotation's appearance is shown turned by on
 /// screen: the page's own /Rotate plus the viewer rotation (`view_quadrant`
 /// quarter turns) it was created in.
-fn screen_turns(page_rotation: i32, view_quadrant: u8) -> u8 {
+pub(crate) fn screen_turns(page_rotation: i32, view_quadrant: u8) -> u8 {
     ((page_rotation.rem_euclid(360) / 90) as u8 + (view_quadrant & 3)) & 3
 }
 
 /// Size of a `w` × `h` appearance form as seen after `turns` clockwise
 /// quarter turns.
-fn upright_size(turns: u8, w: f32, h: f32) -> (f32, f32) {
+pub(crate) fn upright_size(turns: u8, w: f32, h: f32) -> (f32, f32) {
     if turns & 1 == 1 { (h, w) } else { (w, h) }
 }
 
@@ -142,7 +142,7 @@ fn upright_size(turns: u8, w: f32, h: f32) -> (f32, f32) {
 /// origin bottom left) into the space of a `w` × `h` appearance form that is
 /// shown turned by `turns` clockwise quarter turns ([`screen_turns`]). It
 /// counter-rotates, so what is drawn through it reads upright on screen.
-fn upright_matrix(turns: u8, w: f32, h: f32) -> [f32; 6] {
+pub(crate) fn upright_matrix(turns: u8, w: f32, h: f32) -> [f32; 6] {
     match turns & 3 {
         0 => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         1 => [0.0, 1.0, -1.0, 0.0, w, 0.0],

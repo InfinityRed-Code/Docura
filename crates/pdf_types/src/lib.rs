@@ -363,8 +363,8 @@ pub struct ThreeDView {
     /// `/IN`.
     #[serde(default)]
     pub internal_name: Option<String>,
-    /// `/C2W` (with `/MS /M`): camera-to-world matrix, columns x, y, z
-    /// (view direction) and position. The camera looks along +z.
+    /// `/C2W` (with `/MS /M`): camera-to-world matrix, columns x (left of
+    /// the screen), y (up), z (view direction) and position.
     #[serde(default)]
     pub c2w: Option<[f32; 12]>,
     /// `/U3DPath` (with `/MS /U3D`): view node names in the U3D model.

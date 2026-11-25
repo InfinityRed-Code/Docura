@@ -11,6 +11,47 @@ scope each tag landed.
 
 ## [Unreleased]
 
+### Added
+- **3D PDFs: show U3D models and insert 3D models (part of #1).** A 3D
+  annotation with a U3D model now opens in the page: a "3D" badge marks it,
+  a click (or the file's own activation on page open) replaces the poster
+  with an interactive view. Orbit, pan and zoom with the mouse; a toolbar
+  offers the file's saved views, render modes (solid, wireframe,
+  transparent, illustration and others), the lighting schemes, perspective /
+  orthographic projection, the model tree with visibility per part or
+  group, a section plane, fullscreen and the export of the model data.
+  Files without a poster (common for LaTeX and tool exports, which showed
+  an empty area before) get a rendered preview. RichMedia annotations with
+  a U3D asset are treated the same way.
+- **Insert a 3D model.** Edit → "3D model": pick a glTF/GLB, OBJ (+MTL),
+  STL, PLY or 3MF file, check it in a preview (up axis, units) and drag a
+  rectangle on the page. The model is written as U3D with seven preset
+  views (isometric, front, back, left, right, top, bottom) and a poster, so
+  other viewers show it too. The poster stays upright on rotated pages.
+- 3D models appear in the comment list as "3D model" (with their own
+  filter entry) and can be removed with the eraser; extracting, inserting
+  and rotating pages keep the model, redaction removes it.
+- New crate `pdf_3d`: U3D (ECMA-363) decoder with arithmetic decoding,
+  scene graph, materials, textures and progressive meshes, hardened against
+  damaged files, and a U3D writer.
+
+### Known limits
+- PRC models are not shown interactively: poster or nothing, a hint, and
+  the export of the raw data.
+- Inserted models carry one colour per part; textures and vertex colours of
+  the source file are not written.
+- U3D line and point sets, animations and bones are not shown; section
+  planes are not capped.
+- Checked against Foxit PDF Reader (views, orientation, colours). A check
+  in Adobe Acrobat Reader is still open.
+
+### Third-party
+- three.js 0.187.0 (MIT, with fflate, MIT) for the 3D view and the model
+  import, loaded only when a document has 3D content or a model is
+  inserted. The progressive mesh decoder is a Rust port of the decoder in
+  Intel's Universal 3D Sample Software (Apache-2.0). Notices and license
+  texts: `crates/pdf_3d/licenses/`, installed under `licenses/3d/`.
+
 ## [1.3.2] — 2026-11-23
 
 Installer: a new version installs over the installed one, no uninstall first

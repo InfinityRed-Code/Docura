@@ -31,7 +31,7 @@ pub use annotations::{
 };
 pub use encryption::{encrypt_pdf, is_encrypted_pdf, probably_encrypted, PermissionOptions};
 pub use images::images_to_pdf;
-pub use threed::ThreeDAnnotation;
+pub use threed::{c2w_look_at, ThreeDAnnotation};
 pub use ocr::OcrWord;
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
