@@ -186,8 +186,8 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
   (`doc/`, `examples/`; Handbuch mit 8000 Objekten, Illustrator-Grafiken,
   DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
   ihnen der Anhang) die Prüfung: 170 von 170.
-- **Abdeckung** (`just pdfa-coverage`, Unit-Tests plus Matrix): 98,4 % der
-  Funktionen (1042 von 1059, Closures und Testcode mitgezählt), 92,6 % der
+- **Abdeckung** (`just pdfa-coverage`, Unit-Tests plus Matrix): 98,5 % der
+  Funktionen (1041 von 1057, Closures und Testcode mitgezählt), 92,6 % der
   Zeilen. Jede benannte Funktion des Crates wird ausgeführt. Nicht ausgeführt
   werden acht Closures für Fälle, die sich im Test nicht herstellen lassen
   oder eine besondere Schrift bräuchten: Schreibfehler in einen Speicherpuffer

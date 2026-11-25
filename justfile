@@ -86,7 +86,7 @@ pdfa-check:
 
 # Function/line coverage of the PDF/A converter (needs `cargo install cargo-llvm-cov`)
 pdfa-coverage:
-    cargo llvm-cov -p pdf_pdfa --ignore-filename-regex "fonts.tables\.rs|examples|pdf_(pdfium|mutate|fonts|core|types|cache|render|text)" --summary-only
+    cargo llvm-cov -p pdf_pdfa --ignore-filename-regex "examples|tests.common|pdf_(pdfium|mutate|fonts|core|types|cache|render|text)" --summary-only
 
 # PDF/A benchmark against Ghostscript on the test corpus; pass directories or files to add your own PDFs
 pdfa-bench *ARGS:
