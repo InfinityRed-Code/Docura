@@ -8,9 +8,11 @@
 //! matching system font. Fonts that cannot be fixed that way leave their
 //! pages to the rasterizer fallback.
 
+mod cff;
 mod embed;
 mod encoding;
 mod sfnt;
+mod shrink;
 pub mod tables;
 mod type1;
 mod usage;
@@ -42,6 +44,9 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
     if ctx.level.part() == 1 {
         unwrap_opentype(&mut ctx.doc);
     }
+    // Font programs of the input; what this pass embeds itself is a
+    // subset already.
+    let input_programs = shrink::font_files(&ctx.doc);
     field_appearances(ctx)?;
     let uses = usage::collect(&ctx.doc);
     let mut reembedded = Vec::new();
@@ -53,6 +58,9 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
             Outcome::Reembedded => reembedded.push(name),
             Outcome::Unfixable(why) => unfixable.push((*fid, format!("{name}: {why}"))),
         }
+    }
+    if ctx.opts.reduce_size {
+        shrink::run(ctx, &uses, &input_programs);
     }
     cleanup_descriptors(ctx, &uses);
     if ctx.level.part() == 4 {

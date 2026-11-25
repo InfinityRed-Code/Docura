@@ -95,6 +95,10 @@ pub struct Options {
     /// Directories searched for fonts to embed (system fonts). Empty means
     /// the platform defaults.
     pub font_dirs: Vec<std::path::PathBuf>,
+    /// Leave out what no viewer needs (default: on): application-private
+    /// data (`PieceInfo`) and, in embedded fonts, unused glyph outlines
+    /// and tables. Page content and images are never touched by this.
+    pub reduce_size: bool,
     /// Nesting depth for embedded PDFs converted along the way.
     pub(crate) depth: u8,
 }
@@ -108,6 +112,7 @@ impl Options {
             flatten_dpi: 300.0,
             producer: "Docura PDF".into(),
             font_dirs: Vec::new(),
+            reduce_size: true,
             depth: 0,
         }
     }
@@ -125,6 +130,7 @@ impl std::fmt::Debug for Options {
             .field("lang", &self.lang)
             .field("rasterizer", &self.rasterizer.is_some())
             .field("flatten_dpi", &self.flatten_dpi)
+            .field("reduce_size", &self.reduce_size)
             .finish()
     }
 }

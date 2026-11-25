@@ -35,7 +35,7 @@ pub struct Glyph {
     pub width: Option<f64>,
 }
 
-fn subset_tag(seed: &[u8]) -> String {
+pub(super) fn subset_tag(seed: &[u8]) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in seed {
         h ^= *b as u64;

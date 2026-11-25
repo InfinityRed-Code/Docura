@@ -74,6 +74,12 @@ impl<'a> Sfnt<'a> {
         self.data.get(o..o + l)
     }
 
+    /// Byte range of a table inside the font file.
+    pub fn table_range(&self, tag: &[u8; 4]) -> Option<(usize, usize)> {
+        let (o, l) = *self.tables.get(tag)?;
+        (o + l <= self.data.len()).then_some((o, o + l))
+    }
+
     pub fn has(&self, tag: &[u8; 4]) -> bool {
         self.tables.contains_key(tag)
     }
@@ -440,6 +446,71 @@ pub fn subset(src: &Sfnt, glyphs: &[OutGlyph], cmap: Option<&CmapSpec>) -> SResu
     if let Some(t) = src.table(b"name") {
         tables.push((*b"name", slim_name(t)));
     }
+    Ok(Subset { data: assemble(tables), num_glyphs: n })
+}
+
+/// Tables a PDF viewer reads from an embedded TrueType program, besides
+/// glyf, head and loca. Layout (GSUB, GPOS, GDEF, kern), bitmaps, device
+/// metrics and signatures are not among them: a PDF places every glyph
+/// itself.
+const VIEWER_TABLES: [&[u8; 4]; 12] = [b"OS/2", b"cmap", b"cvt ", b"fpgm", b"gasp", b"hhea", b"hmtx", b"maxp", b"post", b"prep", b"vhea", b"vmtx"];
+
+/// The same font with only the outlines of the glyphs in `keep` (and the
+/// components they are built from) and only the tables a viewer reads.
+/// Glyph ids, metrics, cmap, glyph names and hinting stay as they are.
+/// Returns the font and how many outlines were removed.
+pub fn slim(src: &Sfnt, keep: &std::collections::BTreeSet<u16>) -> SResult<(Vec<u8>, usize)> {
+    if !src.has(b"glyf") || !src.has(b"loca") {
+        return Err(SfntError::NoGlyf);
+    }
+    let head = src.table(b"head").ok_or(SfntError::Invalid("head"))?;
+    if head.len() < 54 {
+        return Err(SfntError::Invalid("short tables"));
+    }
+    let n = src.num_glyphs();
+    let mut all = keep.clone();
+    let mut todo: Vec<u16> = keep.iter().copied().collect();
+    while let Some(g) = todo.pop() {
+        for c in src.components(g) {
+            if c < n && all.insert(c) {
+                todo.push(c);
+            }
+        }
+    }
+    let mut glyf = Vec::new();
+    let mut loca = Vec::with_capacity((n as usize + 1) * 4);
+    let mut removed = 0;
+    for gid in 0..n {
+        loca.extend_from_slice(&(glyf.len() as u32).to_be_bytes());
+        let data = src.glyph_data(gid);
+        if all.contains(&gid) {
+            glyf.extend_from_slice(data);
+            while glyf.len() % 4 != 0 {
+                glyf.push(0);
+            }
+        } else if !data.is_empty() {
+            removed += 1;
+        }
+    }
+    loca.extend_from_slice(&(glyf.len() as u32).to_be_bytes());
+    let mut head_t = head.to_vec();
+    head_t[8..12].copy_from_slice(&0u32.to_be_bytes());
+    head_t[50..52].copy_from_slice(&1u16.to_be_bytes());
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = vec![(*b"glyf", glyf), (*b"head", head_t), (*b"loca", loca)];
+    for tag in VIEWER_TABLES {
+        if let Some(t) = src.table(tag) {
+            tables.push((*tag, t.to_vec()));
+        }
+    }
+    if let Some(t) = src.table(b"name") {
+        tables.push((*b"name", slim_name(t)));
+    }
+    Ok((assemble(tables), removed))
+}
+
+/// Write a font file from its tables (head with a zero checksum
+/// adjustment, which is filled in here).
+fn assemble(mut tables: Vec<([u8; 4], Vec<u8>)>) -> Vec<u8> {
     tables.sort_by(|a, b| a.0.cmp(&b.0));
 
     let num = tables.len() as u16;
@@ -475,7 +546,7 @@ pub fn subset(src: &Sfnt, glyphs: &[OutGlyph], cmap: Option<&CmapSpec>) -> SResu
     font.extend_from_slice(&body);
     let adj = 0xB1B0_AFBAu32.wrapping_sub(checksum(&font));
     font[head_off + 8..head_off + 12].copy_from_slice(&adj.to_be_bytes());
-    Ok(Subset { data: font, num_glyphs: n })
+    font
 }
 
 #[cfg(test)]
@@ -484,6 +555,60 @@ pub(crate) mod tests {
 
     pub fn roboto() -> &'static [u8] {
         pdf_fonts::family("Roboto").expect("bundled Roboto").face(false, false)
+    }
+
+    #[test]
+    fn slim_keeps_glyph_ids_and_drops_the_rest() {
+        use std::collections::BTreeSet;
+        let src = Sfnt::parse(roboto(), 0).unwrap();
+        let face = ttf_parser::Face::parse(roboto(), 0).unwrap();
+        // A composite glyph (an accented letter) pulls in its parts.
+        let composite = (1..src.num_glyphs()).find(|g| !src.components(*g).is_empty()).expect("Roboto has composite glyphs");
+        let part = src.components(composite)[0];
+        let (data, removed) = slim(&src, &BTreeSet::from([0, composite])).unwrap();
+        assert!(removed > 100);
+        assert!(data.len() * 4 < roboto().len());
+        let new = Sfnt::parse(&data, 0).unwrap();
+        assert_eq!(new.num_glyphs(), src.num_glyphs());
+        // (Glyph data is padded to four bytes.)
+        for g in [composite, part] {
+            assert!(new.glyph_data(g).starts_with(src.glyph_data(g)) && new.glyph_data(g).len() < src.glyph_data(g).len() + 4);
+        }
+        assert_eq!(new.h_metrics(part), src.h_metrics(part));
+        let other = face.glyph_index('Z').unwrap().0;
+        assert!(new.glyph_data(other).is_empty() && !src.glyph_data(other).is_empty());
+        assert_eq!(new.table(b"cmap"), src.table(b"cmap"));
+        assert_eq!(new.table(b"post"), src.table(b"post"));
+        assert!(!new.has(b"GSUB") && !new.has(b"GPOS") && src.has(b"GSUB"));
+        assert_eq!(new.table_range(b"glyf").map(|r| r.1 - r.0), new.table(b"glyf").map(|t| t.len()));
+        assert_eq!(new.table_range(b"zzzz"), None);
+        assert!(ttf_parser::Face::parse(&data, 0).is_ok());
+        // Keeping everything removes nothing.
+        let every: BTreeSet<u16> = (0..src.num_glyphs()).collect();
+        assert_eq!(slim(&src, &every).unwrap().1, 0);
+        // Fonts without TrueType outlines or with a broken head table.
+        let mut no_glyf = roboto().to_vec();
+        let mut short_head = roboto().to_vec();
+        let n = u16::from_be_bytes([no_glyf[4], no_glyf[5]]) as usize;
+        for i in 0..n {
+            let r = 12 + 16 * i;
+            if &no_glyf[r..r + 4] == b"glyf" {
+                no_glyf[r..r + 4].copy_from_slice(b"glyX");
+            }
+            if &short_head[r..r + 4] == b"head" {
+                short_head[r + 12..r + 16].copy_from_slice(&10u32.to_be_bytes());
+            }
+        }
+        assert_eq!(slim(&Sfnt::parse(&no_glyf, 0).unwrap(), &every).unwrap_err(), SfntError::NoGlyf);
+        assert_eq!(slim(&Sfnt::parse(&short_head, 0).unwrap(), &every).unwrap_err(), SfntError::Invalid("short tables"));
+        let mut no_head = roboto().to_vec();
+        for i in 0..n {
+            let r = 12 + 16 * i;
+            if &no_head[r..r + 4] == b"head" {
+                no_head[r..r + 4].copy_from_slice(b"heaX");
+            }
+        }
+        assert_eq!(slim(&Sfnt::parse(&no_head, 0).unwrap(), &every).unwrap_err(), SfntError::Invalid("head"));
     }
 
     #[test]

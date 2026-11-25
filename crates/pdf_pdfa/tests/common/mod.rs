@@ -703,11 +703,16 @@ pub fn minimal_cff(name: &str, glyphs: &[(char, i32)]) -> Vec<u8> {
             c.extend(cs_num(v));
         }
         c.push(21); // rmoveto
-        for (x, y) in [(300, 0), (0, 600), (-300, 0)] {
+        for (x, y) in [(300, 0), (0, 600)] {
             c.extend(cs_num(x));
             c.extend(cs_num(y));
             c.push(5); // rlineto
         }
+        // The top edge is a curve back to the left side.
+        for v in [-100, 50, -100, -50, -100, 0] {
+            c.extend(cs_num(v));
+        }
+        c.push(8); // rrcurveto
         c.push(14); // endchar
         css.push(c);
     }

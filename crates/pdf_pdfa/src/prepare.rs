@@ -43,9 +43,6 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
         for k in [b"NeedsRendering".as_slice(), b"Requirements", b"Version", b"Perms"] {
             cat.remove(k);
         }
-        if level.part() == 4 {
-            cat.remove(b"PieceInfo");
-        }
     }
     // Names: AlternatePresentations.
     let names = util::catalog(doc)
@@ -70,21 +67,29 @@ pub fn run(ctx: &mut Ctx) -> Result<()> {
     for page in util::pages(doc) {
         if let Some(d) = dict_mut(doc, page) {
             d.remove(b"PresSteps");
-            if level.part() == 4 {
-                d.remove(b"PieceInfo");
-            }
         }
     }
-    if level.part() == 4 {
+    // Application-private data (PieceInfo: what Illustrator, InDesign and
+    // others store to edit the file again) on the catalog, pages and form
+    // XObjects. PDF/A-4 forbids it; elsewhere it is dropped to keep the
+    // file small. Whatever only it refers to goes with it when the file is
+    // written. Nothing a viewer shows depends on it.
+    let mut private = 0;
+    if level.part() == 4 || ctx.opts.reduce_size {
         let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
         for id in ids {
             if let Some(d) = dict_mut(doc, id) {
-                d.remove(b"PieceInfo");
+                if d.remove(b"PieceInfo").is_some() {
+                    private += 1;
+                }
             }
         }
     }
 
     make_fonts_indirect(doc);
+    if private > 0 {
+        ctx.report.note("private_data_removed", format!("{private}"));
+    }
     remove_signatures(ctx);
     Ok(())
 }

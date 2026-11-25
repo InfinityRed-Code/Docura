@@ -39,6 +39,15 @@ PDF/A without Ghostscript, at every level (#3).
     image with an invisible text layer, so they stay searchable.
   - Clear errors instead of a non-conformant file: a password-protected
     input, PDF/A-4f without an attachment.
+  - Smaller files without touching images: data other programs store for
+    their own editing (`PieceInfo`, for example from Illustrator) is left
+    out, with a note in the status bar; embedded fonts lose the outlines
+    of glyphs the document does not use and the tables no PDF viewer
+    reads. Text and rendering stay identical: a test compares the
+    extracted text and every rendered page with and without the reduction
+    (1486 pages, no pixel differs). Fonts a form needs for new input,
+    Type 1 fonts and fonts whose use cannot be told for sure are left as
+    they are.
 - **Converter choice** in Settings › PDF/A export: "Built-in" (default) or
   "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
   in the settings and in the convert pane.
@@ -49,10 +58,10 @@ PDF/A without Ghostscript, at every level (#3).
   `just pdfa-coverage` reports the test coverage (every function runs,
   93 % of the lines), `just pdfa-bench` compares speed, size and conformance
   with Ghostscript: on the test files and on 17 documents shipped with
-  Ghostscript the built-in converter is 10 to 18 times faster, and every
-  output validates. Its files are larger, because Ghostscript recompresses
-  images and the built-in converter keeps them as they are.
-
+  Ghostscript the built-in converter is 10 to 17 times faster, and every
+  output validates. Its files are larger (12.4 MiB against 4.7 MiB for the
+  17 documents), because Ghostscript recompresses images with loss and the
+  built-in converter keeps them as they are.
 - **CI.** A GitHub Actions workflow runs `just pdfa-check` on every pull
   request and on pushes to main; a conversion that veraPDF rejects fails it.
 

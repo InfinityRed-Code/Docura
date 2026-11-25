@@ -235,3 +235,45 @@ fn every_level_converts_the_edge_cases() {
     let doc = reload(&p3.bytes);
     assert!(doc.catalog().unwrap().has(b"AF"));
 }
+
+#[test]
+fn private_application_data_is_dropped() {
+    // PieceInfo on the catalog, a page and a form XObject, each with a
+    // large private stream nothing else refers to.
+    let mut b = common::B::new();
+    let font = common::helv(&mut b);
+    let private = |b: &mut common::B| {
+        let data = b.doc.add_object(Stream::new(Dictionary::new(), b"EDITDATA".repeat(2000)));
+        dictionary! { "Illustrator" => dictionary! { "LastModified" => Object::string_literal("D:20240101000000Z"), "Private" => data } }
+    };
+    let form_private = private(&mut b);
+    let form = b.doc.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 50.into(), 50.into()], "PieceInfo" => form_private },
+        b"0 0 50 50 re f".to_vec(),
+    ));
+    let page_private = private(&mut b);
+    let res = dictionary! { "Font" => dictionary! { "F1" => font }, "XObject" => dictionary! { "Fm" => form } };
+    b.page(b"BT /F1 12 Tf 72 700 Td (Privat) Tj ET /Fm Do", res, dictionary! { "PieceInfo" => page_private });
+    let catalog_private = private(&mut b);
+    let input = b.finish_with(dictionary! { "PieceInfo" => catalog_private });
+    let holds = |bytes: &[u8]| bytes.windows(9).any(|w| w == b"PieceInfo");
+
+    let mut o = opts("2b");
+    let small = convert(&input, &o).unwrap();
+    assert!(small.report.notes.iter().any(|n| n.code == "private_data_removed" && n.detail == "3"), "{:?}", small.report.notes);
+    assert!(!holds(&small.bytes));
+    // The page still shows its text and its form.
+    let doc = reload(&small.bytes);
+    let page = *doc.get_pages().values().next().unwrap();
+    assert!(String::from_utf8_lossy(&doc.get_page_content(page).unwrap()).contains("/Fm Do"));
+
+    // Switched off, parts 1 to 3 keep the data; PDF/A-4 never may.
+    o.reduce_size = false;
+    let large = convert(&input, &o).unwrap();
+    assert!(!large.report.has("private_data_removed") && holds(&large.bytes));
+    assert!(large.bytes.len() > small.bytes.len() + 100);
+    let mut o4 = opts("4");
+    o4.reduce_size = false;
+    let four = convert(&input, &o4).unwrap();
+    assert!(four.report.has("private_data_removed") && !holds(&four.bytes));
+}

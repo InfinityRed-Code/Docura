@@ -186,33 +186,38 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
   (`doc/`, `examples/`; Handbuch mit 8000 Objekten, Illustrator-Grafiken,
   DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
   ihnen der Anhang) die Prüfung: 170 von 170.
-- **Abdeckung** (`just pdfa-coverage`, Unit-Tests plus Matrix): 100 % der
-  Funktionen (1092 von 1092, Closures und Testcode mitgezählt), 93,1 % der
-  Zeilen. Nichts ist von der Messung ausgenommen außer den Beispielprogrammen
-  und dem Test-Korpus. Für die zuletzt fehlenden Fehlerpfade gibt es eigene
-  Tests: ein Schreibziel, das jeden Schreibversuch ablehnt; die
-  Schriftverzeichnisse mit vorgegebener Umgebung (ohne `WINDIR`); eine
-  Testschrift, deren Glyphen Namen außerhalb der Adobe Glyph List und von
-  MacRoman tragen; ein CID-kodiertes CFF-Programm.
+- **Abdeckung** (`just pdfa-coverage`, Unit-Tests, Matrix und
+  Wiedergabetest): 100 % der Funktionen (1157 von 1157, Closures und
+  Testcode mitgezählt), 94,1 % der Zeilen. Von der Messung ausgenommen sind
+  nur die Beispielprogramme und der Test-Korpus.
+- **Wiedergabetest** (`cargo test -p pdf_pdfa --test fidelity`): Jede
+  Korpusdatei und die 17 Ghostscript-Dokumente werden in 1b und 2b je einmal
+  mit und einmal ohne Größenreduktion konvertiert. PDFium muss aus beiden
+  Fassungen denselben Text mit denselben Positionen (Toleranz 0,01 pt) lesen
+  und jede Seite bei 108 dpi pixelgleich rendern. Ergebnis: 90
+  Konvertierungen, 1486 Seiten, 770 723 Textläufe, kein Unterschied.
 - **Benchmark** (`just pdfa-bench`, Median aus 5 Läufen, Ghostscript 10.07.1
   mit dem Aufruf der App):
 
-  | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
-  |---|---|---|---|---|---|---|---|---|
-  | Korpus (28) | 1b | 1,44 s | 13,95 s | 9,7× | 3714 KiB | 1320 KiB | 28/28 | 0/28 |
-  | Korpus (28) | 2b | 0,37 s | 5,07 s | 13,8× | 1570 KiB | 241 KiB | 28/28 | 0/28 |
-  | Korpus (28) | 3b | 0,37 s | 5,07 s | 13,9× | 1558 KiB | 241 KiB | 28/28 | 0/28 |
-  | Ghostscript-Dokumente (17) | 1b | 0,84 s | 13,38 s | 15,9× | 19,2 MiB | 6,2 MiB | 17/17 | 0/17 |
-  | Ghostscript-Dokumente (17) | 2b | 0,43 s | 7,83 s | 18,1× | 17,8 MiB | 4,7 MiB | 17/17 | 0/17 |
-  | Ghostscript-Dokumente (17) | 3b | 0,43 s | 7,82 s | 18,2× | 17,8 MiB | 4,7 MiB | 17/17 | 0/17 |
+  | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern vorher | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
+  |---|---|---|---|---|---|---|---|---|---|
+  | Korpus (28) | 1b | 1,39 s | 14,04 s | 10,1× | 3714 KiB | 3456 KiB | 1320 KiB | 28/28 | 0/28 |
+  | Korpus (28) | 2b | 0,36 s | 5,09 s | 14,2× | 1570 KiB | 1247 KiB | 243 KiB | 28/28 | 0/28 |
+  | Korpus (28) | 3b | 0,36 s | 5,15 s | 14,2× | 1558 KiB | 1235 KiB | 243 KiB | 28/28 | 0/28 |
+  | Ghostscript-Dokumente (17) | 1b | 0,86 s | 13,52 s | 15,7× | 19,2 MiB | 13,8 MiB | 6,2 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 2b | 0,47 s | 7,94 s | 17,0× | 17,8 MiB | 12,4 MiB | 4,7 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 3b | 0,46 s | 7,96 s | 17,2× | 17,8 MiB | 12,4 MiB | 4,7 MiB | 17/17 | 0/17 |
 
-  Die Ausgaben des internen Konverters sind größer: Er lässt Bilder und
-  Inhalte, wie sie sind (17,8 MiB bei 17,9 MiB Eingabe), Ghostscript
-  komprimiert Bilder neu und verwirft private Daten. Bei den kleinen
-  Korpusdateien zählen die eingebetteten Schriften (TrueType-Subsets mit
-  Hinting) und die als Bild gespeicherten Seiten. Die 29. Korpusdatei
-  (Benutzerkennwort) lehnt der interne Konverter ab; Ghostscript liefert für
-  sie ohne Fehlermeldung ein leeres Dokument.
+  „Vorher“ ist der Stand ohne Größenreduktion. Die Reduktion lässt Bilder
+  unangetastet und spart bei den Ghostscript-Dokumenten 5,5 MiB (2b):
+  5,0 MiB private Anwendungsdaten (`PieceInfo`), 0,44 MiB in TrueType-Fonts
+  (Tabellen, die kein Viewer liest: `GPOS`, `GSUB`, `DSIG`, `kern`,
+  eingebettete Bitmaps). Die Fonts dieser Dokumente waren schon Subsets;
+  ihre Type-1-Programme (0,54 MiB) bleiben, wie sie sind. Der Rest des
+  Abstands zu Ghostscript sind Bilder, die Ghostscript verlustbehaftet neu
+  komprimiert. Die 29. Korpusdatei (Benutzerkennwort) lehnt der interne
+  Konverter ab; Ghostscript liefert für sie ohne Fehlermeldung ein leeres
+  Dokument.
 
 ## 6. App-Integration
 
