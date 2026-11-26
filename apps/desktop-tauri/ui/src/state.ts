@@ -85,6 +85,8 @@ export const state = {
 
   // Settings
   gsInfo: { available: false, path: null, version: null } as GhostscriptInfo,
+  /** PDF/A converter: built-in (pdf_pdfa) or the previous Ghostscript path. */
+  pdfaEngine: "builtin" as "builtin" | "ghostscript",
 
   // Redaction (pending marks, applied via the Protect tab)
   pendingRedactions: [] as { page: number; rect: RectPt }[],

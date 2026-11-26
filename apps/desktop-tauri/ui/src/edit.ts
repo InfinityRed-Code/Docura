@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { pdfaErrorText, pdfaLang, syncLevelSelect } from "./pdfa";
 import { open, save, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import type {
   DocSnapshot, InsertWhere, MergeFile, OpenedDocument, RibbonTab,
@@ -336,6 +337,7 @@ async function runSplit() {
 export function enterConvertMode() {
   if (state.ribbonTab !== "convert") setRibbonTab("convert");
   document.body.classList.add("convert");
+  syncLevelSelect(dom.convertLevelEl);
   if (dom.pdfaLevelEl && dom.pdfaLevelEl.value !== "off") {
     dom.convertLevelEl.value = dom.pdfaLevelEl.value;
   }
@@ -679,24 +681,26 @@ export function initEdit() {
     const level = dom.convertLevelEl.value;
     setStatus(t("st.converting", { n: paths.length, level }));
     try {
-      type ConvertResult = { files: string[]; failed: string[] };
+      type ConvertResult = { files: string[]; failed: string[]; errors: string[] };
       const res = await invoke<ConvertResult>("convert_files_to_pdfa", {
         paths,
         outDir: state.convertOutDir,
         level,
+        lang: pdfaLang(),
       });
       const okCount = res.files.length;
       if (res.failed.length > 0) {
-        setStatus(t("st.convertPartial", {
-          ok: okCount, total: paths.length, failed: res.failed.map(fileNameFromPath).join(", "),
-        }));
+        const failed = res.failed
+          .map((p, i) => `${fileNameFromPath(p)}${res.errors[i] ? ` (${pdfaErrorText(res.errors[i])})` : ""}`)
+          .join(", ");
+        setStatus(t("st.convertPartial", { ok: okCount, total: paths.length, failed }));
       } else {
         setStatus(t("st.converted", { n: okCount, dir: state.convertOutDir ?? "" }));
       }
       state.convertFiles = [];
       renderConvertList();
     } catch (e) {
-      setStatus(t("st.convertError", { e: String(e) }));
+      setStatus(t("st.convertError", { e: pdfaErrorText(e) }));
     }
   }));
 

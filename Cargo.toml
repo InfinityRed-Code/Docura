@@ -11,6 +11,7 @@ members = [
     "crates/pdf_export",
     "crates/pdf_fonts",
     "crates/pdf_3d",
+    "crates/pdf_pdfa",
     "apps/desktop-tauri/src-tauri",
 ]
 
@@ -43,6 +44,7 @@ pdf_sign = { path = "crates/pdf_sign" }
 pdf_export = { path = "crates/pdf_export" }
 pdf_fonts = { path = "crates/pdf_fonts" }
 pdf_3d = { path = "crates/pdf_3d" }
+pdf_pdfa = { path = "crates/pdf_pdfa" }
 
 [profile.release]
 lto = "thin"

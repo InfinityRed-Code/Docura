@@ -1,0 +1,26 @@
+[package]
+name = "pdf_pdfa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "PDF → PDF/A (parts 1–4, all conformance levels) without Ghostscript"
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }
+lopdf = { workspace = true }
+image = { workspace = true }
+pdf_fonts = { workspace = true }
+ttf-parser = "0.25"
+flate2 = "1"
+adler2 = "2"
+jpeg-encoder = "0.7"
+zune-jpeg = "0.5"
+
+[dev-dependencies]
+pdf_mutate = { workspace = true }
+pdf_pdfium = { workspace = true }
+pdf_core = { workspace = true }
+pdf_types = { workspace = true }
+weezl = "0.1"

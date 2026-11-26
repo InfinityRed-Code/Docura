@@ -11,7 +11,87 @@ scope each tag landed.
 
 ## [Unreleased]
 
+PDF/A without Ghostscript, at every level (#3), and 3D PDFs: U3D models are
+shown and 3D models can be inserted (part of #1).
+
 ### Added
+- **Built-in PDF/A converter (#3).** The new crate `pdf_pdfa` turns any PDF
+  into PDF/A in pure Rust, for all eleven levels: 1a, 1b, 2a, 2b, 2u, 3a, 3b,
+  3u, 4, 4e and 4f. It needs no Ghostscript. What it does:
+  - sRGB output intent; `DeviceCMYK` content gets a calibrated default space.
+  - Fonts that are not embedded, or embedded with wrong widths or missing
+    glyphs, are embedded again from the system fonts or from their own
+    program, with exact widths and a Unicode mapping. Fonts wrapped in an
+    OpenType file are unwrapped for PDF/A-1, which does not know that form.
+  - Comments keep their look: flags and appearances are corrected, missing
+    appearances are drawn, types a level does not allow are removed.
+  - **Forms stay fillable.** The Ghostscript path flattened them.
+  - JavaScript and other active content are removed.
+  - Attachments per level: removed (part 1), attached PDFs converted to PDF/A
+    (parts 2 and 4), any file kept and linked (part 3 and 4f).
+  - Levels a: an existing structure tree is repaired; documents without one
+    are tagged automatically (text, images, artifacts).
+  - Spot colours: every colorant of a DeviceN space is described, and
+    Separations with the same name use the same definition.
+  - Pages larger than 14400 units are scaled to fit and keep their printed
+    size through `UserUnit`; page boxes outside their MediaBox are clipped.
+  - PDF/A-1 pages with transparency, JPEG 2000 or more than eight DeviceN
+    colorants, and pages whose font cannot be repaired, are stored as an
+    image with an invisible text layer, so they stay searchable.
+  - PDF/A-1 limits real numbers to ±32767. Large drawings in a fine unit go
+    beyond that (an A0 plan written in 1/720 inch has coordinates up to
+    33 700); such coordinates are written as the nearest whole number, which
+    moves a line by less than 0.02 mm on that plan. Later parts have no such
+    limit and stay untouched.
+  - Page-size images (a scanned or rendered plan: a few megabytes in the
+    file, gigabytes of samples) are never held in memory as a whole. Above
+    512 MiB of samples an image is decoded row by row and packed in bands
+    on all cores. Three such plans of 2.4 to 3.0 GB of samples take 2.0 to
+    2.6 s and 64 to 76 MiB each, where Ghostscript takes 18 to 23 s and
+    does not make them smaller (here: 45 % smaller, every sample the
+    same). Images of that size are not stored as JPEG.
+  - Clear errors instead of a non-conformant file: a password-protected
+    input, PDF/A-4f without an attachment.
+  - Smaller files, without loss: data other programs store for their own
+    editing (`PieceInfo`, for example from Illustrator) is left out, with a
+    note in the status bar; embedded fonts lose the outlines of glyphs the
+    document does not use and the tables no PDF viewer reads; images
+    stored without loss are packed tighter (Flate with a PNG predictor).
+    Text and rendering stay identical: a test compares the extracted text
+    and every rendered page with and without the reduction (1492 pages, no
+    pixel differs). Fonts a form needs for new input, Type 1 fonts and
+    fonts whose use cannot be told for sure are left as they are.
+  - **Photographs are stored as JPEG**, as Ghostscript does, but more
+    carefully. Only images that look like a photograph are touched; line
+    art, screenshots, text-like, small, masked, indexed and 1-bit images
+    stay lossless, and so does everything that is JPEG already. No
+    downsampling, no chroma subsampling, the colour space stays (CMYK
+    remains CMYK). Every result is decoded and measured against the
+    original: it is used only with SSIM of at least 0.98, PSNR of at least
+    34 dB and a stream at least a fifth smaller, otherwise the original
+    stays. On Ghostscript's own two CMYK test photographs that is SSIM
+    0.983 where Ghostscript's settings give 0.946 and 0.894. The status
+    bar says how many images were recompressed.
+- **"Keep images lossless"** in Settings › PDF/A export (off by default)
+  switches the JPEG step off: no image is changed then.
+- **Converter choice** in Settings › PDF/A export: "Built-in" (default) or
+  "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
+  in the settings and in the convert pane.
+- **Conformance tests against veraPDF.** `just pdfa-check` stages veraPDF
+  (`scripts/fetch-verapdf.ps1`) and validates 31 synthetic test files at all
+  eleven levels: 302 conversions pass, 39 are the expected refusals
+  (password-protected input, 4f without an attachment), none fails.
+  `just pdfa-coverage` reports the test coverage (every function runs,
+  94.7 % of the lines), `just pdfa-bench` compares speed, size and
+  conformance with Ghostscript: on the test files and on 17 documents
+  shipped with Ghostscript the built-in converter is 10 to 14 times faster,
+  and every output validates. Its files are still larger (7.8 MiB against
+  4.7 MiB for the 17 documents, from 17.8 MiB without size reduction):
+  Ghostscript also turns screenshots with text into JPEG, recodes JPEGs a
+  second time, converts CMYK to RGB and uses a much lower quality.
+  `docs/pdfa-rewrite.md` lists what remains, with numbers.
+- **CI.** A GitHub Actions workflow runs `just pdfa-check` on every pull
+  request and on pushes to main; a conversion that veraPDF rejects fails it.
 - **3D PDFs: show U3D models and insert 3D models (part of #1).** A 3D
   annotation with a U3D model now opens in the page: a "3D" badge marks it,
   a click (or the file's own activation on page open) replaces the poster
@@ -34,6 +114,26 @@ scope each tag landed.
 - New crate `pdf_3d`: U3D (ECMA-363) decoder with arithmetic decoding,
   scene graph, materials, textures and progressive meshes, hardened against
   damaged files, and a U3D writer.
+
+### Changed
+- "Save as PDF/A", the batch conversion and the virtual printer use the
+  built-in converter. The virtual printer still needs Ghostscript to turn the
+  print job (PostScript) into a PDF; the PDF/A step after that is built in.
+- A document opened with its password can be saved as PDF/A (the copy is not
+  protected, since PDF/A forbids encryption).
+- Conversion notes (removed signatures, JavaScript, attachments, rendered
+  pages) and errors appear translated in the status bar.
+
+### Fixed
+- **PDF/A-4 could be selected but never worked (#3).** Ghostscript has no
+  PDF/A-4 mode and aborted with a range check error.
+- Ghostscript output did not pass validation: the app called it without an
+  output intent, so veraPDF rejects its 1b/2b/3b files for device colours
+  (none of 46 test documents passed at any of the three levels). The
+  built-in converter is validated at every level.
+- Images stored with LZW and the TIFF predictor, or with a PNG predictor
+  below 8 bits per component, are decoded correctly (lopdf handles
+  neither; such an LZW image came out garbled).
 
 ### Known limits
 - PRC models are not shown interactively: poster or nothing, a hint, and

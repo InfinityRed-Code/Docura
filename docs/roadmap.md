@@ -71,7 +71,8 @@ Seiten manipulieren — klassischer PDF24-Einstieg.
 Archivierung (PDF/A) und systemweiter Print-to-PDF — das PDF24/Adobe-Kernstück für Workflows.
 
 - [x] Ghostscript-Erkennung (Registry + Path-Suche) + Download-Prompt [S][U]
-- [x] Speichern als PDF/A-1b/2b/3b/4 via Ghostscript `pdfwrite` [X: Ghostscript]
+- [x] Speichern als PDF/A-1b/2b/3b via Ghostscript `pdfwrite` [X: Ghostscript] (PDF/A-4 konnte Ghostscript nie; seit #3 nur noch wählbare Alternative)
+- [x] PDF/A ohne Ghostscript: eigener Konverter `pdf_pdfa` für alle Stufen 1a/1b, 2a/2b/2u, 3a/3b/3u, 4/4e/4f, Formulare bleiben ausfüllbar, mit veraPDF geprüft (`just pdfa-check`), Konverter-Auswahl in den Einstellungen, Größenreduktion (Fonts, private Daten, Fotos als JPEG mit gemessener Qualität; „Bilder verlustfrei lassen“ schaltet das ab) (#3) [C][U]
 - [x] Einstellungen-Modal (Zahnrad in der Ribbon) [U]
 - [x] Windows virtueller Drucker "rustpdf" (Microsoft PS Class Driver + lokaler Dateiport) [S]
 - [x] Auto-Registrierung des PS Class Drivers aus DriverStore (pnputil Fallback) [S]

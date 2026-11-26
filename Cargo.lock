@@ -965,6 +965,7 @@ dependencies = [
  "pdf_export",
  "pdf_fonts",
  "pdf_mutate",
+ "pdf_pdfa",
  "pdf_pdfium",
  "pdf_services",
  "pdf_sign",
@@ -2515,6 +2516,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "js-sys"
 version = "0.3.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3422,6 +3429,27 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "ttf-parser",
+]
+
+[[package]]
+name = "pdf_pdfa"
+version = "1.3.2"
+dependencies = [
+ "adler2",
+ "flate2",
+ "image",
+ "jpeg-encoder",
+ "lopdf",
+ "pdf_core",
+ "pdf_fonts",
+ "pdf_mutate",
+ "pdf_pdfium",
+ "pdf_types",
+ "thiserror 2.0.18",
+ "tracing",
+ "ttf-parser",
+ "weezl",
+ "zune-jpeg",
 ]
 
 [[package]]

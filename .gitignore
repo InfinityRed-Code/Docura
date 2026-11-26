@@ -32,3 +32,6 @@ vendor/tesseract/
 
 # Generated encrypted sample PDFs (cargo run -p pdf_mutate --example make_encrypted)
 /test-encrypted*.pdf
+
+# veraPDF + portable JRE for PDF/A conformance tests (scripts/fetch-verapdf.ps1)
+vendor/verapdf/

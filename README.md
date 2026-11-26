@@ -56,15 +56,23 @@ full inventory lives in [`docs/roadmap.md`](docs/roadmap.md).
   sanitize, and a hidden-content scanner (layers, comments, invisible text).
 - **Export & convert.** PDF → PNG/JPG, plain text, HTML, Word (.docx,
   flow-reconstructed), Excel (.xlsx, table heuristic); images → PDF; Office
-  files → PDF via headless LibreOffice. Save as PDF/A-1b/2b/3b/4 via
-  Ghostscript, batch convert from a tray.
+  files → PDF via headless LibreOffice.
+- **PDF/A without Ghostscript.** Save as PDF/A at every level (1a, 1b, 2a,
+  2b, 2u, 3a, 3b, 3u, 4, 4e, 4f) with the built-in converter `pdf_pdfa`,
+  batch convert from a tray. Fonts are embedded, forms stay fillable, levels
+  a are tagged automatically. Files get smaller: unused font data and
+  private application data are dropped, photographs are stored as JPEG with
+  a measured lower bound on quality (SSIM 0.98; "Keep images lossless" in
+  the settings switches that off). Every level is validated with veraPDF
+  (`just pdfa-check`). Plan and details: `docs/pdfa-rewrite.md`.
 - **OCR.** Tesseract-CLI OCR (parallelised across pages) with an invisible text
   layer over the image, UI-driven language packs (`tessdata_fast`), image
   preprocessing (deskew / despeckle / contrast), batch OCR, and an auto-detect
   banner for text-less scans.
 - **Print to PDF.** Windows virtual printer (auto-installed PS class driver +
   Ghostscript pipeline). Jobs dropped into a watched spool folder land back in
-  the reader automatically. Optional system-tray / autostart mode keeps the
+  the reader automatically, as PDF/A when a default level is set. Optional
+  system-tray / autostart mode keeps the
   spool watcher running in the background without an open window.
 - **3D PDFs.** 3D annotations with a U3D model (as written by Tekla, Allplan,
   MeshLab, LaTeX media9 and others) open in the page as an interactive view:
@@ -99,6 +107,7 @@ crates/
   pdf_sign           # PAdES digital signatures (pure RustCrypto)
   pdf_export         # PDF → Word/Excel/text/HTML export
   pdf_3d             # U3D (ECMA-363) decoder and writer for 3D annotations
+  pdf_pdfa           # PDF → PDF/A (parts 1–4, all levels) without Ghostscript
 
 vendor/pdfium/       # Bundled PDFium binaries (per-target)
 docs/                # Architecture and roadmap
@@ -132,8 +141,11 @@ Full detail in [`docs/architecture.md`](docs/architecture.md).
 - Node.js LTS + pnpm
 - Git
 - Windows: MSVC C++ Build Tools + Windows SDK + WebView2 runtime
-- Ghostscript (optional — PDF/A export and the virtual printer). The settings
-  dialog detects it and links to the installer.
+- Ghostscript (optional — only the virtual printer needs it, to read print
+  jobs; PDF/A export is built in). The settings dialog detects it and links
+  to the installer.
+- veraPDF (optional — PDF/A conformance tests). `just pdfa-check` stages it
+  with a portable Java runtime into `vendor/verapdf`.
 - Tesseract (OCR). The Windows installer bundles it (UB-Mannheim build with
   `deu` + `eng`); `just tesseract` stages it into `vendor/tesseract` and needs
   7-Zip. At runtime the app prefers the bundled copy (debug builds: the staged
