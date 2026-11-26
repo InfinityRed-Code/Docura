@@ -882,4 +882,34 @@ mod tests {
         assert_eq!(listed[1].0.subtype, "PolyLine");
         assert_eq!(listed[1].1.as_ref().unwrap().endings, Some(("None".into(), "OpenArrow".into())));
     }
+
+    #[test]
+    fn sticky_note_keeps_its_place_on_rotated_pages() {
+        // A note is pinned at the upper-left corner of its /Rect, which on a
+        // rotated page is not the top-left corner of the turned rectangle.
+        let rect = |d: &Document| -> Vec<f32> {
+            let page = d.page_iter().next().unwrap();
+            let annots = d.get_dictionary(page).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+            let note = d.get_dictionary(annots[0].as_reference().unwrap()).unwrap();
+            note.get(b"Rect").unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect()
+        };
+        for rotate in [0, 90, 180, 270] {
+            let mut a = one_page_doc(rotate);
+            let note = TextNoteAnnotation {
+                x_pt: 100.0,
+                y_pt: 150.0,
+                contents: "Notiz".into(),
+                color: [1.0, 0.9, 0.2],
+                icon: None,
+                author: None,
+                print: true,
+            };
+            annotations::add_text_note_annotation(&mut a, 0, &note).unwrap();
+            let xml = export(&a, None).unwrap();
+            let mut b = one_page_doc(rotate);
+            assert_eq!(import(&mut b, &xml).unwrap(), 1);
+            let (ra, rb) = (rect(&a), rect(&b));
+            assert!(ra.iter().zip(&rb).all(|(x, y)| close(*x, *y)), "/Rotate {rotate}: {ra:?} -> {rb:?}");
+        }
+    }
 }

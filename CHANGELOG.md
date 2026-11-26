@@ -134,6 +134,20 @@ shown and 3D models can be inserted (part of #1).
 - Images stored with LZW and the TIFF predictor, or with a PNG predictor
   below 8 bits per component, are decoded correctly (lopdf handles
   neither; such an LZW image came out garbled).
+- **Note icons stay upright on rotated pages (#15).** On a page with
+  /Rotate, or in a rotated view, the icon of a sticky note lay on its side
+  and beside the clicked point: PDFium turns the icon with the page, although
+  text annotations are never rotated (they behave as NoRotate, and PDFium
+  ignores the explicit flag as well). The renderer now draws the note icons
+  itself: upright, right of and below the pinned corner, in the note's
+  colour, the same on every page and in print, image export and thumbnails.
+  The icon follows /Name (note sheet, speech bubble for Acrobat's `Comment`,
+  caret for `Insert`); an appearance stream of the note is not used, as in
+  Acrobat. The hover area, the popup and the eraser follow the icon. Saved
+  files are unchanged, they were correct before.
+- The eraser deletes a sticky note when its icon is clicked (the click used
+  to open the note instead), and an XFDF export and import keeps a note on a
+  rotated page in its place.
 - **Settings showed "Not found. Install from ghostscript.com" although
   Ghostscript was found (#24).** The stylesheet had no rule for a plain
   `class="hidden"`, so elements hidden that way stayed visible. The same

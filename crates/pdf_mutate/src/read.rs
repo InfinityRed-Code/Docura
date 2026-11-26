@@ -131,6 +131,28 @@ pub(crate) fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 
     })
 }
 
+/// Where the icon of a text annotation (sticky note) is shown. It does not
+/// turn with the page: the upper-left corner of /Rect is pinned and the
+/// icon stands upright right of and below it (ISO 32000-1 §12.5.6.4, text
+/// annotations behave as NoRotate), as a square of the shorter /Rect side.
+/// The renderer draws it there (`pdf_pdfium::notes`); on a page without
+/// /Rotate this is /Rect itself.
+fn read_note_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4], rot: i32) -> Option<RectPt> {
+    let arr = obj_as_array(doc, dict.get(b"Rect").ok()?)?;
+    if arr.len() != 4 {
+        return None;
+    }
+    let (x0, y0, x1, y1) = (
+        obj_to_f32(&arr[0])?,
+        obj_to_f32(&arr[1])?,
+        obj_to_f32(&arr[2])?,
+        obj_to_f32(&arr[3])?,
+    );
+    let side = (x1 - x0).abs().min((y1 - y0).abs());
+    let pin = pdf_to_view(x0.min(x1), y0.max(y1), vb, rot);
+    Some(RectPt { x0: pin.0, y0: pin.1, x1: pin.0 + side, y1: pin.1 + side })
+}
+
 fn page_view_box(doc: &Document, page_id: ObjectId) -> [f32; 4] {
     crate::resolve_view_box(doc, page_id)
 }
@@ -308,7 +330,12 @@ pub(crate) fn list_annotations_detailed(doc: &Document) -> Vec<(AnnotationInfo, 
                 Some(name) => String::from_utf8_lossy(name).to_string(),
                 None => continue,
             };
-            let rect_pt = match read_rect_top(doc, dict, vb, rot) {
+            let rect = if subtype == "Text" {
+                read_note_rect_top(doc, dict, vb, rot)
+            } else {
+                read_rect_top(doc, dict, vb, rot)
+            };
+            let rect_pt = match rect {
                 Some(r) => r,
                 None => continue,
             };

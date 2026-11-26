@@ -2473,6 +2473,18 @@ mod tests {
             if !close(pin, (100.0, 100.0)) || d.has(b"AP") {
                 bad.push(format!("Text note, /Rotate {page_rot}: upper-left corner at {pin:?}"));
             }
+            // It is written like any annotation (no flags beyond Print: the
+            // subtype already implies NoRotate), and listed where the icon
+            // is shown: upright, right of and below the clicked point.
+            let flags = d.get(b"F").unwrap().as_i64().unwrap();
+            let listed = crate::read::list_annotations(&doc);
+            let shown = listed.iter().find(|a| a.subtype == "Text").unwrap().rect_pt;
+            if flags != 4
+                || !close((shown.x0, shown.y0), (100.0, 100.0))
+                || !close((shown.x1, shown.y1), (122.0, 122.0))
+            {
+                bad.push(format!("Text note, /Rotate {page_rot}: /F {flags}, listed at {shown:?}"));
+            }
         }
         assert!(bad.is_empty(), "not where drawn:\n{}", bad.join("\n"));
     }
