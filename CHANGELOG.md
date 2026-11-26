@@ -125,6 +125,13 @@ PDF/A without Ghostscript, at every level (#3).
 - The eraser deletes a sticky note when its icon is clicked (the click used
   to open the note instead), and an XFDF export and import keeps a note on a
   rotated page in its place.
+- **Settings showed "Not found. Install from ghostscript.com" although
+  Ghostscript was found (#24).** The stylesheet had no rule for a plain
+  `class="hidden"`, so elements hidden that way stayed visible. The same
+  cause is fixed for the virtual printer's "Ghostscript is required" warning
+  (shown even with Ghostscript installed), the "Type" and "Import" sections
+  of the signature dialog and the Windows certificate section of the digital
+  signature dialog (all shown at once instead of only the active tab).
 
 ## [1.3.2] — 2026-11-23
 
