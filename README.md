@@ -9,7 +9,7 @@ traits so the same binary plan applies once the Linux PDFium binary is in place.
 > The application is branded **Docura PDF** (`com.docura.pdf`). The repository,
 > crates, and internal keys stay named `rustpdf` for historical reasons.
 
-Current status: **v1.3.2** — milestones v0.1 through v1.0 (Reader, Navigation,
+Current status: **v1.4.0** — milestones v0.1 through v1.0 (Reader, Navigation,
 Organise, Export & Virtual printer, Annotation, Forms, Fill & Sign, Security &
 Redaction, Export & Conversion, OCR) are shipped; v1.1 "Performance & Polish"
 is largely done (simplified UI, render pool, caches, tray, accessibility —

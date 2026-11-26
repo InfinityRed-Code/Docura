@@ -11,8 +11,27 @@ scope each tag landed.
 
 ## [Unreleased]
 
-PDF/A without Ghostscript, at every level (#3), and 3D PDFs: U3D models are
-shown and 3D models can be inserted (part of #1).
+## [1.4.0] — 2026-11-26
+
+PDF/A is built in, at every level, without Ghostscript (#3). 3D PDFs: U3D
+models are shown and 3D models can be inserted (#1). Note icons stay upright
+on rotated pages (#15).
+
+For users, in short:
+- **PDF/A without Ghostscript (#3).** "Save as PDF/A", the batch conversion
+  and the virtual printer convert with the built-in converter, at every
+  level (1a to 4f). Ghostscript is optional now: only the virtual printer
+  still needs it, to read the print job.
+- **3D PDFs (#1).** U3D models are shown interactively in the page, and 3D
+  models (glTF/GLB, OBJ, STL, PLY, 3MF) can be inserted.
+- **Note icons on rotated pages (#15)** stay upright and at the clicked
+  point.
+- **New setting "Keep images lossless"** (German: "Bilder verlustfrei
+  lassen") in Settings › PDF/A export. By default the PDF/A converter stores
+  photographs as JPEG to keep files small; with the setting on, no image is
+  changed.
+- The settings no longer show "Not found" for Ghostscript when it is
+  installed (#24).
 
 ### Added
 - **Built-in PDF/A converter (#3).** The new crate `pdf_pdfa` turns any PDF
@@ -72,8 +91,9 @@ shown and 3D models can be inserted (part of #1).
     stays. On Ghostscript's own two CMYK test photographs that is SSIM
     0.983 where Ghostscript's settings give 0.946 and 0.894. The status
     bar says how many images were recompressed.
-- **"Keep images lossless"** in Settings › PDF/A export (off by default)
-  switches the JPEG step off: no image is changed then.
+- **"Keep images lossless"** ("Bilder verlustfrei lassen") in Settings ›
+  PDF/A export (off by default) switches the JPEG step off: no image is
+  changed then.
 - **Converter choice** in Settings › PDF/A export: "Built-in" (default) or
   "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
   in the settings and in the convert pane.
@@ -92,7 +112,7 @@ shown and 3D models can be inserted (part of #1).
   `docs/pdfa-rewrite.md` lists what remains, with numbers.
 - **CI.** A GitHub Actions workflow runs `just pdfa-check` on every pull
   request and on pushes to main; a conversion that veraPDF rejects fails it.
-- **3D PDFs: show U3D models and insert 3D models (part of #1).** A 3D
+- **3D PDFs: show U3D models and insert 3D models (#1).** A 3D
   annotation with a U3D model now opens in the page: a "3D" badge marks it,
   a click (or the file's own activation on page open) replaces the poster
   with an interactive view. Orbit, pan and zoom with the mouse; a toolbar
