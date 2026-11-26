@@ -781,6 +781,10 @@ export function buildHtml(): string {
 }
 
 export const CSS = `
+  /* Base rule for every element toggled with classList "hidden". It comes
+     first and is not !important, so the component rules below still win
+     (e.g. body.organize .sidebar.hidden, body.merge #mergePane). */
+  .hidden { display:none; }
   :root {
     --accent:#2b6cdf; --accent-strong:#1a5fd0; --accent-tint:#e8f0fd;
     --bg:#ffffff; --bg-2:#f4f5f7; --bg-3:#eaecf0; --hover:#eef2f8;

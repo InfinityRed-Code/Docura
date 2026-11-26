@@ -8,6 +8,7 @@ import type {
   FitMode, GhostscriptInfo, SearchHit, VirtualPrinterInfo,
 } from "./types";
 import { state } from "./state";
+import { ghostscriptView } from "./gsview";
 import { getLang, setLang, t, type Lang } from "./i18n";
 import { refreshIcons } from "./icons";
 import { dom, setStatus } from "./dom";
@@ -324,16 +325,10 @@ async function refreshGhostscript() {
   dom.gsInstallEl.classList.add("hidden");
   try {
     state.gsInfo = await invoke<GhostscriptInfo>("check_ghostscript");
-    if (state.gsInfo.available) {
-      dom.gsStatusEl.textContent = t("gs.found", {
-        version: state.gsInfo.version ?? "", path: state.gsInfo.path ?? "",
-      });
-      dom.gsStatusEl.style.color = OK_COLOR;
-    } else {
-      dom.gsStatusEl.textContent = t("gs.notFound");
-      dom.gsStatusEl.style.color = BAD_COLOR;
-      dom.gsInstallEl.classList.remove("hidden");
-    }
+    const view = ghostscriptView(state.gsInfo);
+    dom.gsStatusEl.textContent = t(view.key, view.params);
+    dom.gsStatusEl.style.color = view.ok ? OK_COLOR : BAD_COLOR;
+    dom.gsInstallEl.classList.toggle("hidden", !view.showInstall);
   } catch (e) {
     dom.gsStatusEl.textContent = t("gs.error", { e: String(e) });
     dom.gsStatusEl.style.color = BAD_COLOR;
