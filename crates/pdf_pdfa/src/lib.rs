@@ -25,6 +25,7 @@ mod flatten;
 mod fonts;
 mod forms;
 mod icc;
+mod images;
 mod level;
 mod oc;
 mod pagebox;
@@ -48,6 +49,7 @@ use std::sync::Arc;
 
 use lopdf::Document;
 
+pub use images::{psnr, ssim, Similarity, JPEG_QUALITIES, PSNR_MIN, SSIM_MIN};
 pub use level::{AttachmentPolicy, Conformance, Level, ALL_LEVELS};
 
 /// A rendered page for the fallback paths.
@@ -96,9 +98,14 @@ pub struct Options {
     /// the platform defaults.
     pub font_dirs: Vec<std::path::PathBuf>,
     /// Leave out what no viewer needs (default: on): application-private
-    /// data (`PieceInfo`) and, in embedded fonts, unused glyph outlines
-    /// and tables. Page content and images are never touched by this.
+    /// data (`PieceInfo`), in embedded fonts unused glyph outlines and
+    /// tables, and pack losslessly stored images tighter. Nothing a reader
+    /// sees changes: page content and every pixel stay the same.
     pub reduce_size: bool,
+    /// Store photographs as JPEG (default: on). Lossy, with a measured
+    /// lower bound on the quality; line art, text-like, small and masked
+    /// images are never touched. Off keeps every image lossless.
+    pub recompress_images: bool,
     /// Nesting depth for embedded PDFs converted along the way.
     pub(crate) depth: u8,
 }
@@ -113,6 +120,7 @@ impl Options {
             producer: "Docura PDF".into(),
             font_dirs: Vec::new(),
             reduce_size: true,
+            recompress_images: true,
             depth: 0,
         }
     }
@@ -131,6 +139,7 @@ impl std::fmt::Debug for Options {
             .field("rasterizer", &self.rasterizer.is_some())
             .field("flatten_dpi", &self.flatten_dpi)
             .field("reduce_size", &self.reduce_size)
+            .field("recompress_images", &self.recompress_images)
             .finish()
     }
 }
@@ -215,6 +224,7 @@ fn run_pipeline(ctx: &mut Ctx) -> Result<()> {
     oc::run(ctx);
     flatten::run(ctx)?;
     xobjects::run(ctx)?;
+    images::run(ctx);
     fonts::run(ctx)?;
     color::run(ctx);
     spot::run(ctx);

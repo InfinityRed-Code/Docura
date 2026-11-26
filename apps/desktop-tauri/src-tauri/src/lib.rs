@@ -3560,6 +3560,10 @@ struct PersistedSettings {
     /// `"builtin"` (default) or `"ghostscript"` (previous converter).
     #[serde(default)]
     pdfa_engine: Option<String>,
+    /// "Keep images lossless": the built-in converter leaves photographs as
+    /// they are instead of storing them as JPEG. Off by default.
+    #[serde(default)]
+    pdfa_images_lossless: bool,
     /// Tesseract language code(s) for OCR, e.g. `"deu"` or `"deu+eng"`.
     #[serde(default)]
     ocr_language: Option<String>,
@@ -3649,6 +3653,24 @@ fn set_pdfa_engine(state: tauri::State<'_, AppState>, engine: String) -> Result<
     s.pdfa_engine = Some(e.id().to_string());
     save_settings(cfg, &s).map_err(|e| e.to_string())?;
     pdfa::set_engine(e);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_pdfa_images_lossless() -> bool {
+    pdfa::images_lossless()
+}
+
+#[tauri::command]
+fn set_pdfa_images_lossless(state: tauri::State<'_, AppState>, lossless: bool) -> Result<(), String> {
+    let guard = state.settings_path.lock();
+    let Some(cfg) = guard.as_ref() else {
+        return Err("settings path unavailable".into());
+    };
+    let mut s = load_settings(cfg);
+    s.pdfa_images_lossless = lossless;
+    save_settings(cfg, &s).map_err(|e| e.to_string())?;
+    pdfa::set_images_lossless(lossless);
     Ok(())
 }
 
@@ -3835,6 +3857,7 @@ pub fn run() {
                 let s = load_settings(path);
                 vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
                 pdfa::set_engine(pdfa_engine_from_settings(&s));
+                pdfa::set_images_lossless(s.pdfa_images_lossless);
                 // Apply the persisted render-cache budget over the default.
                 state
                     .cache
@@ -3968,6 +3991,8 @@ pub fn run() {
             get_default_pdfa,
             get_pdfa_engine,
             set_pdfa_engine,
+            get_pdfa_images_lossless,
+            set_pdfa_images_lossless,
             set_default_pdfa,
             get_cache_mb,
             set_cache_mb,

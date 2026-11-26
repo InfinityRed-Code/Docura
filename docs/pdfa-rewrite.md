@@ -83,6 +83,8 @@ pdf_pdfa
 ├── oc.rs           Optional Content je Stufe
 ├── tagging.rs      a-Stufen: vorhandene Struktur reparieren (RoleMap, MarkInfo, Lang)
 │                   oder automatisch taggen (Text→P, Bild→Figure mit Alt, Rest→Artifact)
+├── images.rs       Fotos als JPEG mit gemessener Qualität, übrige Bilder verlustfrei
+│                   enger packen (siehe „Größe“ in Abschnitt 5)
 ├── xmp.rs          XMP neu schreiben (pdfaid, dc, xmp, pdf, xmpMM), Info abgleichen/entfernen
 └── write.rs        Serialisierung mit PDF/A-konformer Syntax (Header, Binärkommentar,
                     klassische Xref für Teil 1, Objekt-Streams ab Teil 2, ID)
@@ -179,45 +181,151 @@ gebaut, CFF wird vollständig eingebettet).
 
 Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
 
-- **veraPDF-Matrix** (`just pdfa-check`): 29 synthetische Dateien × 11 Stufen,
-  282 × PASS, 0 × FAIL, 37 erwartete Ablehnungen (Datei mit Benutzerkennwort,
+- **veraPDF-Matrix** (`just pdfa-check`): 30 synthetische Dateien × 11 Stufen,
+  292 × PASS, 0 × FAIL, 38 erwartete Ablehnungen (Datei mit Benutzerkennwort,
   4f ohne Anhang).
 - **Echte Dokumente:** die 17 PDFs, die Ghostscript 10.07.1 mitbringt
   (`doc/`, `examples/`; Handbuch mit 8000 Objekten, Illustrator-Grafiken,
   DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
   ihnen der Anhang) die Prüfung: 170 von 170.
 - **Abdeckung** (`just pdfa-coverage`, Unit-Tests, Matrix und
-  Wiedergabetest): 100 % der Funktionen (1157 von 1157, Closures und
-  Testcode mitgezählt), 94,1 % der Zeilen. Von der Messung ausgenommen sind
-  nur die Beispielprogramme und der Test-Korpus.
+  Wiedergabetest): 100 % der Funktionen (1200 von 1200, Closures und
+  Testcode mitgezählt), 94,5 % der Zeilen (10 496, davon 577 nicht
+  ausgeführt). Von der Messung ausgenommen sind nur die Beispielprogramme
+  und der Test-Korpus, wie bisher.
 - **Wiedergabetest** (`cargo test -p pdf_pdfa --test fidelity`): Jede
-  Korpusdatei und die 17 Ghostscript-Dokumente werden in 1b und 2b je einmal
-  mit und einmal ohne Größenreduktion konvertiert. PDFium muss aus beiden
-  Fassungen denselben Text mit denselben Positionen (Toleranz 0,01 pt) lesen
-  und jede Seite bei 108 dpi pixelgleich rendern. Ergebnis: 90
-  Konvertierungen, 1486 Seiten, 770 723 Textläufe, kein Unterschied.
+  Korpusdatei und die 17 Ghostscript-Dokumente werden in 1b und 2b dreimal
+  konvertiert: ohne Größenreduktion, mit den verlustfreien Schritten und mit
+  den Standardeinstellungen (Fotos als JPEG). PDFium muss aus allen drei
+  Fassungen denselben Text mit denselben Positionen (Toleranz 0,01 pt)
+  lesen. Die verlustfreie Fassung muss jede Seite bei 108 dpi pixelgleich
+  rendern; die Standardfassung ebenso, außer in Dokumenten mit neu
+  komprimierten Bildern. Dort wird jede geänderte Seite gegen die
+  Fassung ohne Größenreduktion gemessen (SSIM der Helligkeit, PSNR über
+  RGB) und muss über den Schranken des Konverters bleiben. Ergebnis:
+  92 Konvertierungen, 1490 Seiten, 770 727 Textläufe, kein Textunterschied,
+  kein Pixelunterschied in der verlustfreien Fassung. Dokumente mit neu
+  komprimierten Bildern:
+
+  | Dokument | Stufen | Bilder neu komprimiert | Ersparnis | schlechtestes Bild (SSIM / PSNR) | geänderte Seiten | Seite: SSIM min. | Seite: PSNR min. |
+  |---|---|---|---|---|---|---|---|
+  | `images` (Korpus) | 1b, 2b | 3 | 112 KiB | 0,989 / 42,5 dB | 1 von 2 | 0,9984 | 53,8 dB |
+  | `GS9_Color_Management.pdf` | 1b, 2b | 2 | 2113 KiB | 0,983 / 34,9 dB | 1 von 42 | 1,0000 | 67,0 dB |
+  | `Object_Color.pdf` | 1b, 2b | 2 | 2113 KiB | 0,983 / 34,9 dB | 1 von 1 | 0,9999 | 56,8 dB |
+
+  Die Seitenwerte liegen höher als die Bildwerte, weil die Bilder nur einen
+  Teil der Seite füllen und verkleinert dargestellt werden. Die Tabelle
+  schreibt der Test nach `target/pdfa-fidelity/images.md`.
 - **Benchmark** (`just pdfa-bench`, Median aus 5 Läufen, Ghostscript 10.07.1
   mit dem Aufruf der App):
 
-  | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern vorher | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
-  |---|---|---|---|---|---|---|---|---|---|
-  | Korpus (28) | 1b | 1,39 s | 14,04 s | 10,1× | 3714 KiB | 3456 KiB | 1320 KiB | 28/28 | 0/28 |
-  | Korpus (28) | 2b | 0,36 s | 5,09 s | 14,2× | 1570 KiB | 1247 KiB | 243 KiB | 28/28 | 0/28 |
-  | Korpus (28) | 3b | 0,36 s | 5,15 s | 14,2× | 1558 KiB | 1235 KiB | 243 KiB | 28/28 | 0/28 |
-  | Ghostscript-Dokumente (17) | 1b | 0,86 s | 13,52 s | 15,7× | 19,2 MiB | 13,8 MiB | 6,2 MiB | 17/17 | 0/17 |
-  | Ghostscript-Dokumente (17) | 2b | 0,47 s | 7,94 s | 17,0× | 17,8 MiB | 12,4 MiB | 4,7 MiB | 17/17 | 0/17 |
-  | Ghostscript-Dokumente (17) | 3b | 0,46 s | 7,96 s | 17,2× | 17,8 MiB | 12,4 MiB | 4,7 MiB | 17/17 | 0/17 |
+  | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern vorher | Größe intern, Bilder verlustfrei | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | Korpus (29) | 1b | 1,61 s | 15,73 s | 9,8× | 4296 KiB | 3911 KiB | 3847 KiB | 1676 KiB | 29/29 | 0/29 |
+  | Korpus (29) | 2b | 0,38 s | 5,14 s | 13,5× | 1924 KiB | 1427 KiB | 1362 KiB | 275 KiB | 29/29 | 0/29 |
+  | Korpus (29) | 3b | 0,38 s | 5,13 s | 13,6× | 1912 KiB | 1415 KiB | 1351 KiB | 275 KiB | 29/29 | 0/29 |
+  | Ghostscript-Dokumente (17) | 1b | 1,17 s | 13,40 s | 11,4× | 19,22 MiB | 11,78 MiB | 9,21 MiB | 6,16 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 2b | 0,75 s | 7,84 s | 10,4× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 3b | 0,75 s | 7,84 s | 10,5× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
 
-  „Vorher“ ist der Stand ohne Größenreduktion. Die Reduktion lässt Bilder
-  unangetastet und spart bei den Ghostscript-Dokumenten 5,5 MiB (2b):
-  5,0 MiB private Anwendungsdaten (`PieceInfo`), 0,44 MiB in TrueType-Fonts
-  (Tabellen, die kein Viewer liest: `GPOS`, `GSUB`, `DSIG`, `kern`,
-  eingebettete Bitmaps). Die Fonts dieser Dokumente waren schon Subsets;
-  ihre Type-1-Programme (0,54 MiB) bleiben, wie sie sind. Der Rest des
-  Abstands zu Ghostscript sind Bilder, die Ghostscript verlustbehaftet neu
-  komprimiert. Die 29. Korpusdatei (Benutzerkennwort) lehnt der interne
-  Konverter ab; Ghostscript liefert für sie ohne Fehlermeldung ein leeres
-  Dokument.
+  „Vorher“ ist die Ausgabe ohne jede Größenreduktion, „Bilder verlustfrei“
+  die mit der Einstellung „Bilder verlustfrei lassen“, „jetzt“ der Standard.
+  Die 30. Korpusdatei (Benutzerkennwort) lehnt der interne Konverter ab;
+  Ghostscript liefert für sie ohne Fehlermeldung ein leeres Dokument.
+
+### Größe: was getan ist und was bleibt
+
+Verlustfrei spart der Konverter bei den 17 Ghostscript-Dokumenten (2b)
+7,43 MiB: private Anwendungsdaten (`PieceInfo`), in eingebetteten Fonts
+nicht benutzte Umrisse und Tabellen, die kein Viewer liest, und Bilder, die
+mit PNG-Prädiktor enger gepackt werden. Fotos als JPEG sparen weitere
+2,57 MiB.
+
+**Bilder (`images.rs`).** Angefasst werden nur Bilder mit 8 Bit je Kanal,
+die verlustfrei gespeichert sind (Flate, LZW, RunLength, unkomprimiert).
+
+- *Fotos werden JPEG.* Als Foto gilt ein Bild, in dem weniger als die
+  Hälfte der Pixel dem rechten und dem unteren Nachbarn gleicht und das mehr
+  als 256 Farben (bei einem Kanal: 64 Graustufen) hat. Nicht angefasst
+  werden: Strichgrafik, Screenshots und textartige Bilder (flächig), Bilder
+  unter 32 Pixel Kantenlänge oder 8 KiB, Bilder mit Maske (`SMask`, `Mask`)
+  und Masken selbst, indizierte Bilder, Lab, Separation und DeviceN,
+  1-Bit-Bilder, Bilder mit eigenem `Decode`, und alles, was schon JPEG,
+  JPEG 2000, CCITT oder JBIG2 ist (eine zweite verlustbehaftete Runde kostet
+  Qualität).
+- *Qualität.* Baseline-JPEG, ein Scan, Standard-Huffman-Tabellen, **keine
+  Farbunterabtastung** (4:4:4). Probiert werden die Qualitäten 80, 85, 90,
+  95 (IJG-Skala); jedes Ergebnis wird dekodiert und mit dem Original
+  verglichen. Genommen wird die erste Stufe mit **SSIM ≥ 0,98** (Helligkeit,
+  Mittel über 8×8-Fenster) **und PSNR ≥ 34 dB** (alle Kanäle), deren Stream
+  höchstens 80 % des bisherigen groß ist; sonst bleibt das Original. Die
+  Pixelmaße ändern sich nie.
+- *Vergleich mit Ghostscript* (`QFactor 0.9` entspricht etwa Qualität 55,
+  dazu 4:2:0). Die beiden CMYK-Fotos aus `Object_Color.pdf`, von Ghostscript
+  mit `-sColorConversionStrategy=LeaveColorUnchanged` kodiert und mit
+  demselben Verfahren gemessen: SSIM 0,946 / PSNR 30,7 dB (121 KiB) und
+  SSIM 0,894 / PSNR 27,6 dB (92 KiB). Der interne Konverter: 0,983 /
+  34,9 dB (197 KiB, Qualität 80) und 0,983 / 36,1 dB (220 KiB,
+  Qualität 90).
+- *Farbraum.* Bleibt, wie er ist. CMYK wird als CMYK-JPEG geschrieben
+  (YCCK mit Adobe-Marker, Werte in der Polarität, die PDF erwartet), nicht
+  nach RGB umgerechnet; für die Konformität ist keine Umrechnung nötig.
+  Ghostscript rechnet mit dem Aufruf der App alles nach RGB um.
+- *Alles andere wird verlustfrei enger gepackt* (Teil von `reduce_size`):
+  Flate mit PNG-Prädiktor, Filter je Zeile gewählt; übernommen, wenn der
+  Stream mindestens 5 % kleiner wird (bei LZW und unkomprimierten Streams,
+  sobald er kleiner ist).
+- *Abschalten:* Einstellungen › PDF/A-Export › „Bilder verlustfrei lassen“
+  (`Options::recompress_images = false`).
+- *Nebenbei behoben:* Der TIFF-Prädiktor und PNG-Prädiktoren mit weniger
+  als 8 Bit je Komponente wurden nicht zurückgerechnet (lopdf kann beides
+  nicht). Ein LZW-Bild mit TIFF-Prädiktor kam dadurch verfälscht in die
+  Ausgabe. `util::stream_data` rechnet Prädiktoren jetzt selbst zurück.
+
+**Was vom Abstand zu Ghostscript bleibt** (2b: 8016 KiB gegen 4802 KiB,
+Differenz 3214 KiB), nach Stream-Art:
+
+| Anteil | intern | Ghostscript | Differenz |
+|---|---|---|---|
+| Bilder, verlustfrei | 2715 KiB | 575 KiB | +2140 KiB |
+| Bilder, JPEG | 1891 KiB | 1231 KiB | +660 KiB |
+| Font-Programme | 988 KiB | 444 KiB | +544 KiB |
+| ICC-Profile | 186 KiB | 0 | +186 KiB |
+| Objekte, Xref, XMP | 422 KiB | 314 KiB | +108 KiB |
+| Seiteninhalte und Übriges | 1814 KiB | 2238 KiB | −424 KiB |
+
+Nach Ursache (gerundet):
+
+- **rund 1,75 MiB: Screenshots im Handbuch** (`Ghostscript.pdf`: neun
+  Bilder mit Text und Diagrammen, 69–95 % der Pixel flächig; zwei enthalten
+  eingebettete Fotos). Verlustfrei rund 2,47 MiB, bei Ghostscript als JPEG
+  0,72 MiB (dort gemessen: SSIM 0,986–0,988, PSNR 34–35 dB). Sie bleiben
+  verlustfrei, weil JPEG an Schriftkanten sichtbar wird. Mit den
+  Foto-Einstellungen oben würden die vier größten geschätzt 1,4 MiB sparen;
+  dafür müsste die Schwelle `FLAT_SHARE` fallen.
+- **rund 0,62 MiB: höhere Qualität der vier CMYK-Fotos** (834 KiB gegen
+  195 KiB bei Ghostscript, das nach RGB umrechnet und mit Qualität 55 und
+  4:2:0 kodiert).
+- **rund 0,59 MiB: vorhandene JPEGs bleiben unangetastet.** Drei
+  CMYK-JPEGs zu je 232 KiB; Ghostscript rechnet sie nach RGB um und kodiert
+  sie ein zweites Mal (31 KiB).
+- **rund 0,41 MiB: Type-1-Programme** (34 Programme, 556 KiB; Ghostscript
+  schreibt sie als CFF neu, 132 KiB). Sie sind schon Subsets. Rund 230 KiB
+  sind Glyphen- und Unterprogramme, eexec-verschlüsselt und damit nicht
+  komprimierbar; geschätzt 250 KiB sind die Einträge leerer Unterprogramme,
+  die der TeX-Subsetter als Platzhalter stehen lässt (etwa 800 je
+  Latin-Modern- und TeX-Gyre-Font). Sie loszuwerden heißt, die
+  Unterprogramme neu zu nummerieren, auch dort, wo die Nummer über die
+  Hint-Ersetzung weitergereicht wird, also Glyphen-Programme umzuschreiben;
+  der Weg von Ghostscript (Umwandlung nach CFF) schreibt zusätzlich alle
+  Hints neu. Für beides fehlt ein unabhängiger Nachweis, dass jede Glyphe
+  gleich bleibt (`ttf-parser` liest kein Type 1), deshalb ist es nicht
+  umgesetzt.
+- **0,18 MiB: ICC-Profile**, die Ghostscript nicht schreibt (deshalb besteht
+  keine seiner Ausgaben veraPDF).
+
+Dagegen stehen 0,41 MiB, die Ghostscript bei den Seiteninhalten mehr
+schreibt.
 
 ## 6. App-Integration
 
@@ -225,6 +333,10 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
   oder `ghostscript` (bisheriger Weg, solange er gebraucht wird).
 - Stufenliste in Einstellungen und Konvertieren-Dialog: 1a, 1b, 2a, 2b, 2u,
   3a, 3b, 3u, 4, 4e, 4f (DE/EN). Ghostscript-Pfad bietet nur 1b/2b/3b.
+- Einstellung `pdfa_images_lossless` („Bilder verlustfrei lassen“, DE/EN,
+  Standard: aus): schaltet die JPEG-Kompression von Fotos im integrierten
+  Konverter ab. Gilt für „Speichern als PDF/A“, „Speichern unter“, die
+  Stapelkonvertierung und den Drucker.
 - Virtueller Drucker: PostScript → PDF bleibt Ghostscript (Issue #2), die
   PDF/A-Umwandlung danach läuft über den neuen Pfad.
 

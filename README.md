@@ -60,7 +60,10 @@ full inventory lives in [`docs/roadmap.md`](docs/roadmap.md).
 - **PDF/A without Ghostscript.** Save as PDF/A at every level (1a, 1b, 2a,
   2b, 2u, 3a, 3b, 3u, 4, 4e, 4f) with the built-in converter `pdf_pdfa`,
   batch convert from a tray. Fonts are embedded, forms stay fillable, levels
-  a are tagged automatically. Every level is validated with veraPDF
+  a are tagged automatically. Files get smaller: unused font data and
+  private application data are dropped, photographs are stored as JPEG with
+  a measured lower bound on quality (SSIM 0.98; "Keep images lossless" in
+  the settings switches that off). Every level is validated with veraPDF
   (`just pdfa-check`). Plan and details: `docs/pdfa-rewrite.md`.
 - **OCR.** Tesseract-CLI OCR (parallelised across pages) with an invisible text
   layer over the image, UI-driven language packs (`tessdata_fast`), image

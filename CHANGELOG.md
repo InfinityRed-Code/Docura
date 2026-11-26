@@ -39,29 +39,44 @@ PDF/A without Ghostscript, at every level (#3).
     image with an invisible text layer, so they stay searchable.
   - Clear errors instead of a non-conformant file: a password-protected
     input, PDF/A-4f without an attachment.
-  - Smaller files without touching images: data other programs store for
-    their own editing (`PieceInfo`, for example from Illustrator) is left
-    out, with a note in the status bar; embedded fonts lose the outlines
-    of glyphs the document does not use and the tables no PDF viewer
-    reads. Text and rendering stay identical: a test compares the
-    extracted text and every rendered page with and without the reduction
-    (1486 pages, no pixel differs). Fonts a form needs for new input,
-    Type 1 fonts and fonts whose use cannot be told for sure are left as
-    they are.
+  - Smaller files, without loss: data other programs store for their own
+    editing (`PieceInfo`, for example from Illustrator) is left out, with a
+    note in the status bar; embedded fonts lose the outlines of glyphs the
+    document does not use and the tables no PDF viewer reads; images
+    stored without loss are packed tighter (Flate with a PNG predictor).
+    Text and rendering stay identical: a test compares the extracted text
+    and every rendered page with and without the reduction (1490 pages, no
+    pixel differs). Fonts a form needs for new input, Type 1 fonts and
+    fonts whose use cannot be told for sure are left as they are.
+  - **Photographs are stored as JPEG**, as Ghostscript does, but more
+    carefully. Only images that look like a photograph are touched; line
+    art, screenshots, text-like, small, masked, indexed and 1-bit images
+    stay lossless, and so does everything that is JPEG already. No
+    downsampling, no chroma subsampling, the colour space stays (CMYK
+    remains CMYK). Every result is decoded and measured against the
+    original: it is used only with SSIM of at least 0.98, PSNR of at least
+    34 dB and a stream at least a fifth smaller, otherwise the original
+    stays. On Ghostscript's own two CMYK test photographs that is SSIM
+    0.983 where Ghostscript's settings give 0.946 and 0.894. The status
+    bar says how many images were recompressed.
+- **"Keep images lossless"** in Settings › PDF/A export (off by default)
+  switches the JPEG step off: no image is changed then.
 - **Converter choice** in Settings › PDF/A export: "Built-in" (default) or
   "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
   in the settings and in the convert pane.
 - **Conformance tests against veraPDF.** `just pdfa-check` stages veraPDF
-  (`scripts/fetch-verapdf.ps1`) and validates 29 synthetic test files at all
-  eleven levels: 282 conversions pass, 37 are the expected refusals
+  (`scripts/fetch-verapdf.ps1`) and validates 30 synthetic test files at all
+  eleven levels: 292 conversions pass, 38 are the expected refusals
   (password-protected input, 4f without an attachment), none fails.
   `just pdfa-coverage` reports the test coverage (every function runs,
-  93 % of the lines), `just pdfa-bench` compares speed, size and conformance
-  with Ghostscript: on the test files and on 17 documents shipped with
-  Ghostscript the built-in converter is 10 to 17 times faster, and every
-  output validates. Its files are larger (12.4 MiB against 4.7 MiB for the
-  17 documents), because Ghostscript recompresses images with loss and the
-  built-in converter keeps them as they are.
+  94.5 % of the lines), `just pdfa-bench` compares speed, size and
+  conformance with Ghostscript: on the test files and on 17 documents
+  shipped with Ghostscript the built-in converter is 10 to 14 times faster,
+  and every output validates. Its files are still larger (7.8 MiB against
+  4.7 MiB for the 17 documents, from 17.8 MiB without size reduction):
+  Ghostscript also turns screenshots with text into JPEG, recodes JPEGs a
+  second time, converts CMYK to RGB and uses a much lower quality.
+  `docs/pdfa-rewrite.md` lists what remains, with numbers.
 - **CI.** A GitHub Actions workflow runs `just pdfa-check` on every pull
   request and on pushes to main; a conversion that veraPDF rejects fails it.
 
@@ -79,8 +94,11 @@ PDF/A without Ghostscript, at every level (#3).
   PDF/A-4 mode and aborted with a range check error.
 - Ghostscript output did not pass validation: the app called it without an
   output intent, so veraPDF rejects its 1b/2b/3b files for device colours
-  (none of 45 test documents passed at any of the three levels). The
+  (none of 46 test documents passed at any of the three levels). The
   built-in converter is validated at every level.
+- Images stored with LZW and the TIFF predictor, or with a PNG predictor
+  below 8 bits per component, are decoded correctly (lopdf handles
+  neither; such an LZW image came out garbled).
 
 ## [1.3.2] — 2026-11-23
 

@@ -55,7 +55,7 @@ export function pdfaErrorText(e: unknown): string {
 
 /** Notes worth telling the user (the rest is routine). */
 const SHOWN_NOTES = [
-  "signatures_removed", "javascript_removed", "private_data_removed", "attachments_removed", "attachments_converted",
+  "signatures_removed", "javascript_removed", "private_data_removed", "images_recompressed", "attachments_removed", "attachments_converted",
   "pages_rendered", "pages_scaled", "annotations_removed", "layers_flattened", "xfa_removed", "postscript_removed",
 ];
 

@@ -132,6 +132,7 @@ pub fn corpus() -> Vec<Case> {
         Case { name: "edge_color", bytes: edge::edge_color(), expect: Expect::Ok },
         Case { name: "edge_attachments", bytes: edge::edge_attachments(), expect: Expect::Ok },
         Case { name: "many_pages", bytes: edge::many_pages(), expect: Expect::Ok },
+        Case { name: "images", bytes: images(), expect: Expect::Ok },
     ];
     for c in &mut v {
         if c.expect == Expect::Ok && !matches!(c.name, "attachments" | "edge_attachments") {
@@ -1044,6 +1045,161 @@ pub fn page_boxes() -> Vec<u8> {
         font_res(f),
         dictionary! { "MediaBox" => bx(-300.0, -400.0, 295.0, 442.0), "CropBox" => bx(-300.0, 0.0, 295.0, 1.5) },
     );
+    b.finish()
+}
+
+/// A synthetic photograph: soft shapes, a fine texture and a little
+/// noise in every channel (`comps` interleaved 8-bit channels).
+pub fn photo(w: usize, h: usize, comps: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(w * h * comps);
+    let mut seed = 0x2545_F491u32;
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..comps {
+                let (fx, fy, fc) = (x as f32, y as f32, c as f32);
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 24) as f32 / 255.0 * 4.0 - 2.0;
+                let v = 128.0 + 55.0 * (fx / 19.0 + fc).sin() + 45.0 * (fy / 13.0 + 2.0 * fc).cos() + 10.0 * ((fx + fy) / 5.0 + fc).sin() + noise;
+                out.push(v.clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    out
+}
+
+/// A synthetic screenshot: flat areas with sharp edges, three channels.
+pub fn drawing(w: usize, h: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let on = (x / 20 + y / 16) % 3 == 0 || (y % 16 == 3 && x % 5 < 3);
+            out.extend_from_slice(if on { &[20, 40, 160] } else { &[250, 250, 250] });
+        }
+    }
+    out
+}
+
+/// PNG predictor over rows of `row` bytes with `bpp` bytes per pixel; the
+/// filter type changes from row to row (None, Sub, Up, Average, Paeth).
+pub fn png_predict(data: &[u8], row: usize, bpp: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (y, line) in data.chunks(row).enumerate() {
+        let filter = (y % 5) as u8;
+        out.push(filter);
+        for i in 0..line.len() {
+            let a = if i >= bpp { line[i - bpp] as i32 } else { 0 };
+            let b = if y > 0 { data[(y - 1) * row + i] as i32 } else { 0 };
+            let c = if y > 0 && i >= bpp { data[(y - 1) * row + i - bpp] as i32 } else { 0 };
+            let predicted = match filter {
+                0 => 0,
+                1 => a,
+                2 => b,
+                3 => (a + b) / 2,
+                _ => {
+                    let p = a + b - c;
+                    let (pa, pb, pc) = ((p - a).abs(), (p - b).abs(), (p - c).abs());
+                    if pa <= pb && pa <= pc {
+                        a
+                    } else if pb <= pc {
+                        b
+                    } else {
+                        c
+                    }
+                }
+            };
+            out.push(line[i].wrapping_sub(predicted as u8));
+        }
+    }
+    out
+}
+
+fn zlib(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    e.write_all(data).unwrap();
+    e.finish().unwrap()
+}
+
+/// An image XObject whose stream is stored as given.
+pub fn image_stream(w: usize, h: usize, space: Object, extra: Dictionary, content: Vec<u8>) -> Stream {
+    let mut d = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => w as i64, "Height" => h as i64, "ColorSpace" => space, "BitsPerComponent" => 8 };
+    for (k, v) in extra.iter() {
+        d.set(k.clone(), v.clone());
+    }
+    let mut s = Stream::new(d, content);
+    s.allows_compression = false;
+    s
+}
+
+/// Photographs and drawings in the ways PDF writers store them without
+/// loss: Flate with a PNG predictor, LZW with the TIFF predictor, the
+/// 4-bit predictor Illustrator uses for CMYK, uncompressed, with a soft
+/// mask, indexed, with an inverting `Decode`.
+pub fn images() -> Vec<u8> {
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let mut b = B::new();
+    let f = helv(&mut b);
+    let (w, h) = (160usize, 120usize);
+    let rgb = photo(w, h, 3);
+    let rgb_png = b.doc.add_object(image_stream(
+        w,
+        h,
+        name("DeviceRGB"),
+        dictionary! { "Filter" => "FlateDecode", "DecodeParms" => dictionary! { "Predictor" => 15, "Colors" => 3, "Columns" => w as i64 } },
+        zlib(&png_predict(&rgb, w * 3, 3)),
+    ));
+    let gray = photo(w, h, 1);
+    let mut tiff = gray.clone();
+    for line in tiff.chunks_mut(w) {
+        for i in (1..line.len()).rev() {
+            line[i] = line[i].wrapping_sub(line[i - 1]);
+        }
+    }
+    let gray_lzw = b.doc.add_object(image_stream(
+        w,
+        h,
+        name("DeviceGray"),
+        dictionary! { "Filter" => vec![name("LZWDecode")], "DecodeParms" => vec![Object::Dictionary(dictionary! { "Predictor" => 2, "Columns" => w as i64 })] },
+        lzw_encode(&tiff),
+    ));
+    let cmyk = photo(w, h, 4);
+    let cmyk_half_rows = b.doc.add_object(image_stream(
+        w,
+        h,
+        name("DeviceCMYK"),
+        dictionary! { "Filter" => "FlateDecode", "DecodeParms" => dictionary! { "Predictor" => 15, "Colors" => 4, "BitsPerComponent" => 4, "Columns" => w as i64 } },
+        zlib(&png_predict(&cmyk, w * 2, 2)),
+    ));
+    let drawn = b.doc.add_object(image_stream(w, h, name("DeviceRGB"), Dictionary::new(), drawing(w, h)));
+    let mut alpha = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            alpha.push(if (x / 40 + y / 40) % 2 == 0 { 255 } else { 90 });
+        }
+    }
+    let mask = b.doc.add_object(image_stream(w, h, name("DeviceGray"), Dictionary::new(), alpha));
+    let masked = b.doc.add_object(image_stream(w, h, name("DeviceRGB"), dictionary! { "SMask" => mask }, rgb.clone()));
+    let mut palette = Vec::new();
+    for i in 0..=255u8 {
+        palette.extend_from_slice(&[i, 255 - i, i / 2]);
+    }
+    let indexed_space = Object::Array(vec![name("Indexed"), name("DeviceRGB"), 255.into(), Object::String(palette, StringFormat::Hexadecimal)]);
+    let indexed = b.doc.add_object(image_stream(w, h, indexed_space, Dictionary::new(), gray.clone()));
+    let negative = b.doc.add_object(image_stream(w, h, name("DeviceGray"), dictionary! { "Decode" => vec![1.into(), 0.into()] }, gray));
+    let res = dictionary! {
+        "Font" => dictionary! { "F1" => f },
+        "XObject" => dictionary! { "Im1" => rgb_png, "Im2" => gray_lzw, "Im3" => cmyk_half_rows, "Im4" => drawn, "Im5" => indexed, "Im6" => negative },
+    };
+    let mut c = TEXT.to_vec();
+    for (i, (x, y)) in [(72, 600), (300, 600), (72, 440), (300, 440), (72, 280), (300, 280)].iter().enumerate() {
+        c.extend_from_slice(format!("q 200 0 0 150 {x} {y} cm /Im{} Do Q\n", i + 1).as_bytes());
+    }
+    b.page(&c, res, Dictionary::new());
+    // The soft mask on a page of its own: PDF/A-1 has to render that page.
+    let f2 = helv(&mut b);
+    let mut c = TEXT.to_vec();
+    c.extend_from_slice(b"q 200 0 0 150 72 600 cm /Im1 Do Q\n");
+    b.page(&c, dictionary! { "Font" => dictionary! { "F1" => f2 }, "XObject" => dictionary! { "Im1" => masked } }, Dictionary::new());
     b.finish()
 }
 

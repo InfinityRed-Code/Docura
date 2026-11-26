@@ -294,6 +294,11 @@ async function togglePresentation() {
 const OK_COLOR = "var(--ok, #2c7a2c)";
 const BAD_COLOR = "var(--danger)";
 
+/** "Keep images lossless" (Settings › PDF/A export). */
+function pdfaImagesLosslessEl(): HTMLInputElement {
+  return document.getElementById("pdfaImagesLossless") as HTMLInputElement;
+}
+
 async function loadDefaultPdfa() {
   try {
     const e = await invoke<string>("get_pdfa_engine");
@@ -301,6 +306,9 @@ async function loadDefaultPdfa() {
       state.pdfaEngine = e;
       dom.pdfaEngineEl.value = e;
     }
+  } catch {}
+  try {
+    pdfaImagesLosslessEl().checked = await invoke<boolean>("get_pdfa_images_lossless");
   } catch {}
   try {
     const v = await invoke<string>("get_default_pdfa");
@@ -546,6 +554,10 @@ export function initChrome() {
   void loadDefaultPdfa();
   dom.pdfaLevelEl.addEventListener("change", () => {
     void invoke("set_default_pdfa", { level: dom.pdfaLevelEl.value }).catch(() => {});
+  });
+  pdfaImagesLosslessEl().addEventListener("change", () => {
+    const box = pdfaImagesLosslessEl();
+    void invoke("set_pdfa_images_lossless", { lossless: box.checked }).catch(() => { box.checked = !box.checked; });
   });
   dom.pdfaEngineEl.addEventListener("change", () => {
     const e = dom.pdfaEngineEl.value === "ghostscript" ? "ghostscript" : "builtin";

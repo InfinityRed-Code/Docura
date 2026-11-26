@@ -1,6 +1,7 @@
 //! PDF/A export: the built-in converter (`pdf_pdfa`, no Ghostscript) and
 //! the previous Ghostscript path, selectable in the settings.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pdf_core::{PdfEngine, RenderRequest};
@@ -40,6 +41,18 @@ pub fn engine() -> PdfaEngine {
 
 pub fn set_engine(e: PdfaEngine) {
     *ENGINE.lock().unwrap() = e;
+}
+
+/// "Keep images lossless" (Settings › PDF/A export). Off by default: the
+/// built-in converter then stores photographs as JPEG.
+static IMAGES_LOSSLESS: AtomicBool = AtomicBool::new(false);
+
+pub fn images_lossless() -> bool {
+    IMAGES_LOSSLESS.load(Ordering::Relaxed)
+}
+
+pub fn set_images_lossless(on: bool) {
+    IMAGES_LOSSLESS.store(on, Ordering::Relaxed);
 }
 
 /// Every level the settings accept ("off" = plain PDF).
@@ -130,6 +143,7 @@ pub fn convert_builtin(bytes: &[u8], level: &str, lang: Option<String>) -> Resul
     let lvl: Level = level.parse().map_err(|e: String| ui_error("level", e))?;
     let mut opts = Options::new(lvl);
     opts.lang = lang.filter(|l| !l.is_empty());
+    opts.recompress_images = !images_lossless();
     if let Some(r) = PdfiumRasterizer::new() {
         opts = opts.with_rasterizer(r);
     }
@@ -187,5 +201,55 @@ mod tests {
         assert!(saved.notes.iter().any(|n| n.code == "fonts_embedded"));
         assert!(convert_builtin(&bytes, "9x", None).unwrap_err().starts_with("PDFA_ERR:level:"));
         assert!(convert_builtin(b"not a pdf", "2b", None).unwrap_err().starts_with("PDFA_ERR:parse:"));
+        // (Same test function: PDFium is not safe to drive from parallel tests.)
+        images_lossless_setting_switches_recompression_off();
+    }
+
+    /// A page with one photograph (RGB, Flate).
+    fn photo_pdf() -> Vec<u8> {
+        let (w, h) = (200usize, 150usize);
+        let mut rgb = Vec::with_capacity(w * h * 3);
+        let mut seed = 1u32;
+        for y in 0..h {
+            for x in 0..w {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let v = 128.0 + 60.0 * (x as f32 / 17.0 + c as f32).sin() + 50.0 * (y as f32 / 11.0 + c as f32).cos() + (seed >> 30) as f32;
+                    rgb.push(v.clamp(0.0, 255.0) as u8);
+                }
+            }
+        }
+        let mut doc = lopdf::Document::with_version("1.4");
+        let pages = doc.new_object_id();
+        let mut image = lopdf::Stream::new(
+            dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => w as i64, "Height" => h as i64, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8 },
+            rgb,
+        );
+        image.compress().unwrap();
+        let image = doc.add_object(image);
+        let content = doc.add_object(lopdf::Stream::new(lopdf::Dictionary::new(), b"q 200 0 0 150 20 20 cm /Im1 Do Q".to_vec()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages, "MediaBox" => vec![0.into(), 0.into(), 240.into(), 190.into()],
+            "Contents" => content, "Resources" => dictionary! { "XObject" => dictionary! { "Im1" => image } },
+        });
+        doc.objects.insert(pages, lopdf::Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", cat);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn images_lossless_setting_switches_recompression_off() {
+        let bytes = photo_pdf();
+        assert!(!images_lossless(), "recompression is the default");
+        let (small, saved) = convert_builtin(&bytes, "2b", None).unwrap();
+        assert!(saved.notes.iter().any(|n| n.code == "images_recompressed"), "{:?}", saved.notes);
+        set_images_lossless(true);
+        let lossless = convert_builtin(&bytes, "2b", None);
+        set_images_lossless(false);
+        let (large, saved) = lossless.unwrap();
+        assert!(saved.notes.iter().all(|n| n.code != "images_recompressed"));
+        assert!(small.len() * 2 < large.len(), "{} of {}", small.len(), large.len());
     }
 }

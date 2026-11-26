@@ -503,6 +503,8 @@ export function buildHtml(): string {
             <label>${t("set.defaultPdfaLevel")}
               <select id="pdfaLevel">${levelOptionsHtml("off", true)}</select>
             </label>
+            <label class="settingsCheck"><input id="pdfaImagesLossless" type="checkbox" /> ${t("set.pdfaImagesLossless")}</label>
+            <div style="font-size:0.78rem;color:var(--text-3);margin-bottom:0.5rem;">${t("set.pdfaImagesLosslessHint")}</div>
             <div style="font-size:0.78rem;color:var(--text-3);">${t("set.pdfaHint")}</div>
             <div class="wmActions"><button id="pdfaSaveBtn" class="primaryBtn">${t("btn.savePdfaNow")}</button><button id="gsRecheckBtn">${t("btn.recheckGs")}</button></div>
           </section>

@@ -15,7 +15,10 @@
 //! ```
 //!
 //! For every input and level it measures conversion time and output size of
-//! both engines and validates both outputs with veraPDF. Ghostscript is
+//! both engines and validates both outputs with veraPDF. The built-in
+//! converter is timed with its defaults; two more conversions give the
+//! sizes without any size reduction ("vorher") and with images kept
+//! lossless. Ghostscript is
 //! called exactly as the app calls it. Results: a summary on stdout and
 //! `summary.md`, `files.md`, `gs-matrix.md` in the output directory.
 //! Nothing is written next to the inputs.
@@ -138,6 +141,10 @@ fn median(mut v: Vec<Duration>) -> Duration {
 struct Cell {
     time: Option<Duration>,
     size: Option<u64>,
+    /// Built-in only: output size without size reduction, and with the
+    /// lossless steps only (images not recompressed).
+    size_plain: Option<u64>,
+    size_lossless: Option<u64>,
     error: Option<String>,
     /// `Some(empty)` = veraPDF pass.
     failed: Option<Vec<String>>,
@@ -236,6 +243,12 @@ fn main() {
             }
             if cell.error.is_none() {
                 cell.time = Some(median(times));
+                for (reduce, slot) in [(false, &mut cell.size_plain), (true, &mut cell.size_lossless)] {
+                    let mut opts = Options::new(lvl).with_rasterizer(raster.clone());
+                    opts.reduce_size = reduce;
+                    opts.recompress_images = false;
+                    *slot = convert(&bytes, &opts).ok().map(|out| out.bytes.len() as u64);
+                }
             }
             cells.insert((level.clone(), "builtin", name.clone()), cell);
             // Ghostscript.
@@ -282,7 +295,11 @@ fn main() {
     // ---- summary per level
     let mut summary = String::from("| Stufe | Dateien | Konverter | konvertiert | veraPDF PASS | Zeit gesamt (ms) | Größe gesamt (KiB) |\n|---|---|---|---|---|---|---|\n");
     // Fair totals: only files both engines converted.
-    let mut fair = String::from("| Stufe | Dateien (beide konvertiert) | Zeit intern (ms) | Zeit Ghostscript (ms) | Faktor | Größe intern (KiB) | Größe Ghostscript (KiB) |\n|---|---|---|---|---|---|---|\n");
+    // "vorher": no size reduction; "Bilder verlustfrei": the lossless steps
+    // only; "jetzt": the defaults (photographs as JPEG).
+    let mut fair = String::from(
+        "| Stufe | Dateien (beide konvertiert) | Zeit intern (ms) | Zeit Ghostscript (ms) | Faktor | Größe intern vorher (KiB) | Größe intern, Bilder verlustfrei (KiB) | Größe intern jetzt (KiB) | Größe Ghostscript (KiB) |\n|---|---|---|---|---|---|---|---|---|\n",
+    );
     for level in &args.levels {
         for engine in ["builtin", "gs"] {
             let mine: Vec<&Cell> = inputs.iter().filter_map(|(n, _)| cells.get(&(level.clone(), engine, n.clone()))).collect();
@@ -311,14 +328,18 @@ fn main() {
             let ta: Duration = both.iter().filter_map(|(a, _)| a.time).sum();
             let tb: Duration = both.iter().filter_map(|(_, b)| b.time).sum();
             let sa: u64 = both.iter().filter_map(|(a, _)| a.size).sum();
+            let plain: u64 = both.iter().filter_map(|(a, _)| a.size_plain).sum();
+            let lossless: u64 = both.iter().filter_map(|(a, _)| a.size_lossless).sum();
             let sb: u64 = both.iter().filter_map(|(_, b)| b.size).sum();
             let factor = if ta.as_secs_f64() > 0.0 { format!("{:.1}×", tb.as_secs_f64() / ta.as_secs_f64()) } else { "–".into() };
-            fair.push_str(&format!("| {level} | {} | {} | {} | {factor} | {} | {} |\n", both.len(), ms(ta), ms(tb), kb(sa), kb(sb)));
+            fair.push_str(&format!("| {level} | {} | {} | {} | {factor} | {} | {} | {} | {} |\n", both.len(), ms(ta), ms(tb), kb(plain), kb(lossless), kb(sa), kb(sb)));
         }
     }
 
     // ---- per file
-    let mut detail = String::from("| Datei | Stufe | Eingabe (KiB) | intern ms | intern KiB | intern veraPDF | GS ms | GS KiB | GS veraPDF |\n|---|---|---|---|---|---|---|---|---|\n");
+    let mut detail = String::from(
+        "| Datei | Stufe | Eingabe (KiB) | intern ms | intern vorher KiB | intern verlustfrei KiB | intern jetzt KiB | intern veraPDF | GS ms | GS KiB | GS veraPDF |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
+    );
     let verdict = |c: Option<&Cell>| -> String {
         match c {
             None => "–".into(),
@@ -337,7 +358,9 @@ fn main() {
             let b = cells.get(&(level.clone(), "gs", name.clone()));
             let t = |c: Option<&Cell>| c.and_then(|c| c.time).map(ms).unwrap_or_else(|| "–".into());
             let s = |c: Option<&Cell>| c.and_then(|c| c.size).map(kb).unwrap_or_else(|| "–".into());
-            detail.push_str(&format!("| {name} | {level} | {} | {} | {} | {} | {} | {} | {} |\n", kb(insize), t(a), s(a), verdict(a), t(b), s(b), verdict(b)));
+            let extra = |v: Option<u64>| v.map(kb).unwrap_or_else(|| "–".into());
+            let (plain, lossless) = (extra(a.and_then(|c| c.size_plain)), extra(a.and_then(|c| c.size_lossless)));
+            detail.push_str(&format!("| {name} | {level} | {} | {} | {plain} | {lossless} | {} | {} | {} | {} | {} |\n", kb(insize), t(a), s(a), verdict(a), t(b), s(b), verdict(b)));
         }
     }
 

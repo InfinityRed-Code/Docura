@@ -247,7 +247,9 @@ pub fn flate_stream(mut dict: Dictionary, data: &[u8]) -> Stream {
 /// CCITT, JBIG2 stay encoded and are not needed decoded).
 ///
 /// Handles filter chains with per-filter parameters, the ASCIIHex and
-/// RunLength filters (lopdf decodes neither) and the identity Crypt filter.
+/// RunLength filters (lopdf decodes neither), the identity Crypt filter
+/// and the TIFF and PNG predictors (lopdf knows no TIFF predictor and
+/// assumes at least 8 bits per component for the PNG ones).
 pub fn stream_data(s: &Stream) -> Option<Vec<u8>> {
     let filters: Vec<Vec<u8>> = match s.dict.get(b"Filter") {
         Err(_) => return Some(s.content.clone()),
@@ -269,15 +271,112 @@ pub fn stream_data(s: &Stream) -> Option<Vec<u8>> {
             b"FlateDecode" | b"LZWDecode" | b"ASCII85Decode" => {
                 let mut d = Dictionary::new();
                 d.set("Filter", Object::Name(f.clone()));
+                let mut predictor = None;
                 if let Some(Some(p)) = parms.get(i) {
-                    d.set("DecodeParms", Object::Dictionary(p.clone()));
+                    let mut p = p.clone();
+                    predictor = take_predictor(&mut p);
+                    d.set("DecodeParms", Object::Dictionary(p));
                 }
-                Stream::new(d, data).decompressed_content().ok()?
+                let decoded = Stream::new(d, data).decompressed_content().ok()?;
+                match predictor {
+                    Some(p) => unpredict(&decoded, p)?,
+                    None => decoded,
+                }
             }
             _ => return None,
         };
     }
     Some(data)
+}
+
+/// A predictor of the Flate and LZW filters.
+pub struct Predictor {
+    /// 2: TIFF, 10–15: PNG.
+    pub kind: i64,
+    pub colors: usize,
+    pub bits: usize,
+    pub columns: usize,
+}
+
+/// Take the predictor out of filter parameters (`None`: there is none).
+pub fn take_predictor(p: &mut Dictionary) -> Option<Predictor> {
+    let kind = p.get(b"Predictor").ok()?.as_i64().ok()?;
+    p.remove(b"Predictor");
+    if kind <= 1 {
+        return None;
+    }
+    let mut values = [1i64, 8, 1];
+    for (slot, key) in values.iter_mut().zip([b"Colors".as_slice(), b"BitsPerComponent", b"Columns"]) {
+        if let Ok(Object::Integer(v)) = p.get(key) {
+            *slot = (*v).clamp(1, 1 << 20);
+        }
+    }
+    Some(Predictor { kind, colors: values[0] as usize, bits: values[1] as usize, columns: values[2] as usize })
+}
+
+/// Undo a TIFF (2) or PNG (10–15) predictor. `None` for a predictor this
+/// does not know (TIFF below 8 bits per component, an invalid PNG row).
+pub fn unpredict(data: &[u8], p: Predictor) -> Option<Vec<u8>> {
+    let bpp = (p.colors * p.bits).div_ceil(8);
+    let row = (p.colors * p.bits * p.columns).div_ceil(8);
+    match p.kind {
+        2 if p.bits == 8 => {
+            let mut out = data.to_vec();
+            for line in out.chunks_mut(row) {
+                for i in bpp..line.len() {
+                    line[i] = line[i].wrapping_add(line[i - bpp]);
+                }
+            }
+            Some(out)
+        }
+        2 if p.bits == 16 => {
+            let mut out = data.to_vec();
+            for line in out.chunks_mut(row) {
+                for i in (bpp..line.len().saturating_sub(1)).step_by(2) {
+                    let sum = u16::from_be_bytes([line[i], line[i + 1]]).wrapping_add(u16::from_be_bytes([line[i - bpp], line[i - bpp + 1]]));
+                    line[i..i + 2].copy_from_slice(&sum.to_be_bytes());
+                }
+            }
+            Some(out)
+        }
+        10..=15 => {
+            let mut out: Vec<u8> = Vec::with_capacity(data.len());
+            for line in data.chunks(row + 1) {
+                let start = out.len();
+                let filter = line[0];
+                for (i, &x) in line[1..].iter().enumerate() {
+                    let a = if i >= bpp { out[start + i - bpp] } else { 0 };
+                    let b = if start >= row { out[start + i - row] } else { 0 };
+                    let c = if i >= bpp && start >= row { out[start + i - row - bpp] } else { 0 };
+                    let predicted = match filter {
+                        0 => 0,
+                        1 => a,
+                        2 => b,
+                        3 => ((a as u16 + b as u16) / 2) as u8,
+                        4 => paeth(a, b, c),
+                        _ => return None,
+                    };
+                    out.push(x.wrapping_add(predicted));
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// The Paeth predictor of PNG: of left, above and upper left the value
+/// closest to left + above − upper left.
+pub fn paeth(a: u8, b: u8, c: u8) -> u8 {
+    let p = a as i32 + b as i32 - c as i32;
+    let (pa, pb, pc) = ((p - a as i32).abs(), (p - b as i32).abs(), (p - c as i32).abs());
+    if pa <= pb && pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    }
 }
 
 /// ASCIIHexDecode: pairs of hex digits, white space ignored, `>` ends the
@@ -458,8 +557,8 @@ pub fn civil(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d, h, mi, s)
 }
 
-/// Remove every object not reachable from the trailer.
-pub fn prune_unreachable(doc: &mut Document) {
+/// Every object reachable from the trailer.
+pub fn reachable(doc: &Document) -> BTreeSet<ObjectId> {
     let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
     let mut stack: Vec<ObjectId> = Vec::new();
     fn refs(o: &Object, out: &mut Vec<ObjectId>) {
@@ -482,6 +581,12 @@ pub fn prune_unreachable(doc: &mut Document) {
             refs(o, &mut stack);
         }
     }
+    seen
+}
+
+/// Remove every object not reachable from the trailer.
+pub fn prune_unreachable(doc: &mut Document) {
+    let seen = reachable(doc);
     doc.objects.retain(|id, _| seen.contains(id));
 }
 
@@ -511,5 +616,65 @@ mod tests {
         let leaves = name_tree_leaves(&doc, &Object::Dictionary(root));
         assert_eq!(leaves.len(), 2);
         assert_eq!(leaves[0].0, b"a");
+    }
+
+    #[test]
+    fn predictors_are_undone() {
+        use crate::common;
+        use lopdf::dictionary;
+        let (w, h) = (40usize, 15usize);
+        let rgb = common::photo(w, h, 3);
+        let stream = |filter: &str, parms: Dictionary, content: Vec<u8>| Stream::new(dictionary! { "Filter" => filter, "DecodeParms" => parms }, content);
+        // PNG, every row filter.
+        let png = stream("FlateDecode", dictionary! { "Predictor" => 15, "Colors" => 3, "Columns" => w as i64 }, flate(&common::png_predict(&rgb, w * 3, 3)));
+        assert_eq!(stream_data(&png).unwrap(), rgb);
+        // PNG over half rows of 4-bit components, as Illustrator writes CMYK.
+        let cmyk = common::photo(w, h, 4);
+        let half = stream("FlateDecode", dictionary! { "Predictor" => 12, "Colors" => 4, "BitsPerComponent" => 4, "Columns" => w as i64 }, flate(&common::png_predict(&cmyk, w * 2, 2)));
+        assert_eq!(stream_data(&half).unwrap(), cmyk);
+        // TIFF, 8 and 16 bits, behind LZW.
+        let mut tiff = rgb.clone();
+        for line in tiff.chunks_mut(w * 3) {
+            for i in (3..line.len()).rev() {
+                line[i] = line[i].wrapping_sub(line[i - 3]);
+            }
+        }
+        let lzw = stream("LZWDecode", dictionary! { "Predictor" => 2, "Colors" => 3, "Columns" => w as i64 }, common::lzw_encode(&tiff));
+        assert_eq!(stream_data(&lzw).unwrap(), rgb);
+        let wide: Vec<u8> = common::photo(w, h, 2);
+        let mut tiff16 = wide.clone();
+        for line in tiff16.chunks_mut(w * 2) {
+            for i in (2..line.len()).step_by(2).rev() {
+                let d = u16::from_be_bytes([line[i], line[i + 1]]).wrapping_sub(u16::from_be_bytes([line[i - 2], line[i - 1]]));
+                line[i..i + 2].copy_from_slice(&d.to_be_bytes());
+            }
+        }
+        let deep = stream("FlateDecode", dictionary! { "Predictor" => 2, "BitsPerComponent" => 16, "Columns" => w as i64 }, flate(&tiff16));
+        assert_eq!(stream_data(&deep).unwrap(), wide);
+        // No predictor, and what cannot be undone.
+        let none = stream("FlateDecode", dictionary! { "Predictor" => 1, "Columns" => 7 }, flate(&rgb));
+        assert_eq!(stream_data(&none).unwrap(), rgb);
+        let bits = stream("FlateDecode", dictionary! { "Predictor" => 2, "BitsPerComponent" => 4, "Columns" => w as i64 }, flate(&rgb));
+        assert!(stream_data(&bits).is_none());
+        let unknown = stream("FlateDecode", dictionary! { "Predictor" => 7 }, flate(&rgb));
+        assert!(stream_data(&unknown).is_none());
+        let bad_row = stream("FlateDecode", dictionary! { "Predictor" => 15, "Columns" => 2 }, flate(&[9, 1, 2]));
+        assert!(stream_data(&bad_row).is_none());
+        assert!(take_predictor(&mut Dictionary::new()).is_none());
+        assert_eq!((paeth(10, 20, 30), paeth(30, 10, 20), paeth(10, 30, 20)), (10, 20, 20));
+        assert_eq!(paeth(50, 60, 10), 60);
+        assert_eq!(paeth(60, 50, 55), 55);
+    }
+
+    #[test]
+    fn unreachable_objects() {
+        let mut doc = Document::with_version("1.7");
+        let leaf = doc.add_object(Object::Integer(1));
+        let lost = doc.add_object(Object::Integer(2));
+        let root = doc.add_object(Object::Array(vec![leaf.into()]));
+        doc.trailer.set("Root", root);
+        assert_eq!(reachable(&doc), BTreeSet::from([leaf, root]));
+        prune_unreachable(&mut doc);
+        assert!(!doc.objects.contains_key(&lost) && doc.objects.len() == 2);
     }
 }
