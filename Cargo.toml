@@ -10,6 +10,7 @@ members = [
     "crates/pdf_sign",
     "crates/pdf_export",
     "crates/pdf_fonts",
+    "crates/pdf_3d",
     "crates/pdf_pdfa",
     "apps/desktop-tauri/src-tauri",
 ]
@@ -42,6 +43,7 @@ pdf_mutate = { path = "crates/pdf_mutate" }
 pdf_sign = { path = "crates/pdf_sign" }
 pdf_export = { path = "crates/pdf_export" }
 pdf_fonts = { path = "crates/pdf_fonts" }
+pdf_3d = { path = "crates/pdf_3d" }
 pdf_pdfa = { path = "crates/pdf_pdfa" }
 
 [profile.release]
@@ -59,4 +61,8 @@ opt-level = 3
 # scans) is pure per-byte loops: unoptimised it is ~10× slower, which makes
 # opening scanned plans in `tauri dev` painfully slow.
 [profile.dev.package.pdf_pdfium]
+opt-level = 3
+
+# Same for the U3D decoder: arithmetic decoding of large CAD models.
+[profile.dev.package.pdf_3d]
 opt-level = 3

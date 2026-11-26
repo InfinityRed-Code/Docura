@@ -37,6 +37,7 @@ pdf_export = { workspace = true }
 pdf_sign = { workspace = true }
 pdf_types = { workspace = true }
 pdf_fonts = { workspace = true }
+pdf_3d = { workspace = true }
 pdf_pdfa = { workspace = true }
 mozjpeg = "0.10"
 base64 = "0.22"

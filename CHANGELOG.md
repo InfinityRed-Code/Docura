@@ -11,7 +11,8 @@ scope each tag landed.
 
 ## [Unreleased]
 
-PDF/A without Ghostscript, at every level (#3).
+PDF/A without Ghostscript, at every level (#3), and 3D PDFs: U3D models are
+shown and 3D models can be inserted (part of #1).
 
 ### Added
 - **Built-in PDF/A converter (#3).** The new crate `pdf_pdfa` turns any PDF
@@ -91,6 +92,28 @@ PDF/A without Ghostscript, at every level (#3).
   `docs/pdfa-rewrite.md` lists what remains, with numbers.
 - **CI.** A GitHub Actions workflow runs `just pdfa-check` on every pull
   request and on pushes to main; a conversion that veraPDF rejects fails it.
+- **3D PDFs: show U3D models and insert 3D models (part of #1).** A 3D
+  annotation with a U3D model now opens in the page: a "3D" badge marks it,
+  a click (or the file's own activation on page open) replaces the poster
+  with an interactive view. Orbit, pan and zoom with the mouse; a toolbar
+  offers the file's saved views, render modes (solid, wireframe,
+  transparent, illustration and others), the lighting schemes, perspective /
+  orthographic projection, the model tree with visibility per part or
+  group, a section plane, fullscreen and the export of the model data.
+  Files without a poster (common for LaTeX and tool exports, which showed
+  an empty area before) get a rendered preview. RichMedia annotations with
+  a U3D asset are treated the same way.
+- **Insert a 3D model.** Edit → "3D model": pick a glTF/GLB, OBJ (+MTL),
+  STL, PLY or 3MF file, check it in a preview (up axis, units) and drag a
+  rectangle on the page. The model is written as U3D with seven preset
+  views (isometric, front, back, left, right, top, bottom) and a poster, so
+  other viewers show it too. The poster stays upright on rotated pages.
+- 3D models appear in the comment list as "3D model" (with their own
+  filter entry) and can be removed with the eraser; extracting, inserting
+  and rotating pages keep the model, redaction removes it.
+- New crate `pdf_3d`: U3D (ECMA-363) decoder with arithmetic decoding,
+  scene graph, materials, textures and progressive meshes, hardened against
+  damaged files, and a U3D writer.
 
 ### Changed
 - "Save as PDF/A", the batch conversion and the virtual printer use the
@@ -118,6 +141,49 @@ PDF/A without Ghostscript, at every level (#3).
   (shown even with Ghostscript installed), the "Type" and "Import" sections
   of the signature dialog and the Windows certificate section of the digital
   signature dialog (all shown at once instead of only the active tab).
+
+### Known limits
+- PRC models are not shown interactively: poster or nothing, a hint, and
+  the export of the raw data.
+- Inserted models carry one colour per part; textures and vertex colours of
+  the source file are not written.
+- U3D line and point sets, animations and bones are not shown; section
+  planes are not capped.
+- Texture layers with generated coordinates (planar, cylindrical,
+  spherical, reflection mapping) are not drawn and a layer's intensity is
+  not applied; the 3D view's tooltip names such layers.
+- A model without any view in the PDF is lit by its own lights, or by the
+  "CAD" scheme when it has none. Acrobat shows it unlit there (only what
+  the materials emit, so most such models appear black); camera and
+  background are the same as in Acrobat.
+- Shading is measured against Acrobat for the "CAD" scheme (mean
+  deviation 0.01 of the display range) and spot-checked for "Day" and
+  "Red" (0.02); the other schemes use the same model with unverified light
+  tables.
+
+### Verified
+- Files written by Docura (the inserter and the sample generator) were
+  checked in Adobe Acrobat Reader 26.003 and Foxit PDF Reader 2026.1:
+  camera convention, the preset views, colours, model tree and poster
+  match what Docura shows. The shading follows Acrobat's lighting model
+  (lights fixed to the model, headlamp at the camera, highlight exponent
+  4), measured on a sphere in all seven preset views.
+- U3D files from other tools without a view in the PDF open with Acrobat's
+  default camera (azimuth 202.5, elevation 11.25 degrees, fitted to the
+  bounding box) and its dark grey background. All texture layers of a
+  material are drawn with the blend function the shader declares
+  (replace, add, multiply, blend by alpha or by a constant); Intel's
+  textured test scenes match Acrobat's picture pixel for pixel when unlit.
+- `pnpm test:browser` (apps/desktop-tauri/ui) runs the 3D viewer in a
+  headless Edge or Chrome and compares its picture with reference crops
+  taken from Acrobat Reader.
+
+### Third-party
+- three.js 0.187.0 (MIT, with fflate, MIT) for the 3D view and the model
+  import, loaded only when a document has 3D content or a model is
+  inserted. The progressive mesh decoder is a Rust port of the decoder in
+  Intel's Universal 3D Sample Software (Apache-2.0). Notices and license
+  texts: `crates/pdf_3d/licenses/`, installed under `licenses/3d/`.
 
 ## [1.3.2] — 2026-11-23
 

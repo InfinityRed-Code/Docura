@@ -7,6 +7,7 @@ use base64::Engine;
 use parking_lot::Mutex;
 
 mod ocr;
+mod threed;
 mod pdfa;
 mod update;
 mod vprinter;
@@ -3966,6 +3967,11 @@ pub fn run() {
             set_form_field,
             reset_form,
             list_annotations,
+            threed::list_3d,
+            threed::load_3d_scene,
+            threed::export_3d_model,
+            threed::insert_3d_model,
+            threed::read_3d_file,
             export_annotations_xfdf,
             import_annotations_xfdf,
             check_ghostscript,

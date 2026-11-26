@@ -22,6 +22,7 @@ mod overlay;
 mod read;
 mod truetype;
 mod redact;
+mod threed;
 mod xfdf;
 
 pub use annotations::{
@@ -30,6 +31,7 @@ pub use annotations::{
 };
 pub use encryption::{encrypt_pdf, is_encrypted_pdf, probably_encrypted, PermissionOptions};
 pub use images::images_to_pdf;
+pub use threed::{c2w_look_at, ThreeDAnnotation};
 pub use ocr::OcrWord;
 pub use overlay::{HeaderFooterOptions, ImageAnchor, ImageWatermarkOptions, WatermarkOptions};
 
@@ -778,6 +780,21 @@ impl MutableDoc {
     /// convention.
     pub fn list_annotations(&self) -> Vec<pdf_types::AnnotationInfo> {
         read::list_annotations(&self.inner)
+    }
+
+    /// Every 3D annotation (incl. RichMedia with a 3D asset) with its views.
+    pub fn list_3d(&self) -> Vec<pdf_types::ThreeDAnnot> {
+        threed::list_3d(&self.inner)
+    }
+
+    /// Decoded model data (format, bytes) of a 3D annotation.
+    pub fn model_3d(&self, page_index: u32, id: &str) -> MutateResult<(String, Vec<u8>)> {
+        threed::model_3d(&self.inner, page_index, id)
+    }
+
+    /// Adds a 3D annotation with a U3D model, preset views and a poster.
+    pub fn add_3d_annotation(&mut self, page_index: u32, annot: &ThreeDAnnotation) -> MutateResult<()> {
+        threed::add_3d_annotation(&mut self.inner, page_index, annot).map(|_| ())
     }
 
     /// Remove the annotation with the given id (as reported by

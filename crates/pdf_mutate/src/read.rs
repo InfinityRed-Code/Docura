@@ -6,7 +6,7 @@ use lopdf::{Document, Object, ObjectId};
 use pdf_types::{AnnotationInfo, FreeTextStyle, RectPt};
 
 
-fn resolve_obj<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Object> {
+pub(crate) fn resolve_obj<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Object> {
     match obj {
         Object::Reference(r) => doc.get_object(*r).ok(),
         other => Some(other),
@@ -49,7 +49,7 @@ pub(crate) fn decode_pdf_string(bytes: &[u8]) -> String {
     }
 }
 
-fn read_string_field(doc: &Document, dict: &lopdf::Dictionary, key: &[u8]) -> Option<String> {
+pub(crate) fn read_string_field(doc: &Document, dict: &lopdf::Dictionary, key: &[u8]) -> Option<String> {
     let obj = dict.get(key).ok()?;
     let resolved = resolve_obj(doc, obj)?;
     if let Ok(s) = resolved.as_str() {
@@ -111,7 +111,7 @@ fn pdf_to_view(px: f32, py: f32, vb: [f32; 4], rot: i32) -> (f32, f32) {
     }
 }
 
-fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4], rot: i32) -> Option<RectPt> {
+pub(crate) fn read_rect_top(doc: &Document, dict: &lopdf::Dictionary, vb: [f32; 4], rot: i32) -> Option<RectPt> {
     let obj = dict.get(b"Rect").ok()?;
     let arr = obj_as_array(doc, obj)?;
     if arr.len() != 4 {
