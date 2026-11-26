@@ -116,21 +116,13 @@ fn a_page_size_image_is_never_held_as_a_whole() {
 
     // Packed, and every sample as it was.
     assert!(out.bytes.len() < input.len(), "{} bytes became {}", input.len(), out.bytes.len());
-    let doc = Document::load_mem(&out.bytes).unwrap();
-    let mut images = 0;
-    for o in doc.objects.values() {
-        let Object::Stream(s) = o else { continue };
-        if !matches!(s.dict.get(b"Subtype"), Ok(Object::Name(n)) if n == b"Image") {
-            continue;
-        }
-        images += 1;
-        let data = s.decompressed_content().unwrap();
-        assert_eq!(data.len(), samples);
-        for (y, line) in data.chunks(W).enumerate() {
-            assert!(line == row(y), "row {y} differs");
-        }
+    let banded = the_image(&out.bytes);
+    let data = banded.decompressed_content().unwrap();
+    assert_eq!(data.len(), samples);
+    for (y, line) in data.chunks(W).enumerate() {
+        assert!(line == row(y), "row {y} differs");
     }
-    assert_eq!(images, 1);
+    drop(data);
 
     // With the default limit the same image is worked on in memory: the
     // counter does see the difference.
@@ -138,5 +130,25 @@ fn a_page_size_image_is_never_held_as_a_whole() {
     PEAK.store(before, Ordering::Relaxed);
     let in_memory = convert(&input, &Options::new("2b".parse().unwrap())).unwrap();
     assert!(PEAK.load(Ordering::Relaxed) - before > samples, "the counting allocator is not counting");
-    assert_eq!(in_memory.bytes.len(), out.bytes.len());
+
+    // Both ways store the image as the same stream, byte for byte. The
+    // files as a whole are not compared: each conversion writes its own
+    // dates and document ID, which sit in the compressed object and
+    // cross-reference streams, so the file sizes may differ by a few bytes.
+    let whole = the_image(&in_memory.bytes);
+    assert_eq!(whole.dict.get(b"Filter").ok(), banded.dict.get(b"Filter").ok());
+    assert_eq!(whole.dict.get(b"DecodeParms").ok(), banded.dict.get(b"DecodeParms").ok());
+    assert!(whole.content == banded.content, "the stored image differs: {} bytes in memory, {} bytes in bands", whole.content.len(), banded.content.len());
+}
+
+/// The one image of a converted file.
+fn the_image(pdf: &[u8]) -> lopdf::Stream {
+    let doc = Document::load_mem(pdf).unwrap();
+    let mut images = doc.objects.into_values().filter_map(|o| match o {
+        Object::Stream(s) if matches!(s.dict.get(b"Subtype"), Ok(Object::Name(n)) if n == b"Image") => Some(s),
+        _ => None,
+    });
+    let image = images.next().expect("an image");
+    assert!(images.next().is_none(), "more than one image");
+    image
 }
