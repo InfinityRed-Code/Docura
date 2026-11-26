@@ -10,7 +10,7 @@ pub const PRINTER_NAME: &str = "Docura PDF";
 static PDFA_LEVEL: Mutex<Option<String>> = Mutex::new(None);
 
 /// Set the default PDF/A level applied to virtual-printer output.
-/// `level` is one of `"1b" | "2b" | "3b" | "4"`. `None` disables PDF/A.
+/// `level` is one of `pdfa::LEVEL_IDS` (except "off"). `None` disables PDF/A.
 pub fn set_pdfa_default(level: Option<String>) {
     *PDFA_LEVEL.lock().unwrap() = level;
 }
@@ -169,9 +169,12 @@ fn process_one(app: &AppHandle, ps: &Path) {
         }
     };
 
+    // PostScript → PDF needs Ghostscript; PDF/A happens there only with the
+    // Ghostscript engine, otherwise the built-in converter runs afterwards.
+    let builtin = crate::pdfa::engine() == crate::pdfa::PdfaEngine::Builtin;
     let mut cmd = std::process::Command::new(&gs);
     cmd.args(["-dBATCH", "-dNOPAUSE", "-dQUIET", "-sDEVICE=pdfwrite"]);
-    if let Some(level) = pdfa_default() {
+    if let Some(level) = pdfa_default().filter(|_| !builtin) {
         if let Ok((val, _)) = crate::pdfa_flags_for(&level) {
             cmd.arg(format!("-dPDFA={val}"));
             cmd.arg("-dPDFACompatibilityPolicy=1");
@@ -185,6 +188,16 @@ fn process_one(app: &AppHandle, ps: &Path) {
     match status {
         Ok(s) if s.success() => {
             let _ = std::fs::remove_file(&work);
+            if let (true, Some(level)) = (builtin, pdfa_default()) {
+                let converted = std::fs::read(&out_pdf)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| crate::pdfa::convert_builtin(&bytes, &level, None))
+                    .and_then(|(bytes, _)| std::fs::write(&out_pdf, bytes).map_err(|e| e.to_string()));
+                if let Err(e) = converted {
+                    // The plain PDF is still delivered.
+                    tracing::warn!("vprinter: PDF/A-{level} conversion failed: {e}");
+                }
+            }
             tracing::info!("vprinter: job → {}", out_pdf.display());
             let _ = app.emit(
                 "print-job-ready",

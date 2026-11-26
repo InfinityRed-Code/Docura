@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import { levelOptionsHtml } from "./pdfa";
 import appIcon from "./assets/logo.svg";
 import logoText from "./assets/logo-text.svg";
 
@@ -368,12 +369,7 @@ export function buildHtml(): string {
       <div class="mergeHeader">
         <strong>${t("convert.title")}</strong>
         <button id="convertAddBtn" title="${t("tip.pickPdfs")}"><i data-lucide="plus"></i><span>${t("btn.addFiles")}</span></button>
-        <select id="convertLevel" title="${t("tip.pdfaLevel")}">
-          <option value="1b">PDF/A-1b</option>
-          <option value="2b" selected>PDF/A-2b</option>
-          <option value="3b">PDF/A-3b</option>
-          <option value="4">PDF/A-4</option>
-        </select>
+        <select id="convertLevel" title="${t("tip.pdfaLevel")}">${levelOptionsHtml("2b", false)}</select>
         <button id="convertOutBtn" title="${t("tip.pickOutFolder")}"><i data-lucide="folder-open"></i><span>${t("btn.outFolder")}</span></button>
         <span id="convertOutLabel" class="mergeHint">${t("convert.output")}</span>
         <button id="convertCancelBtn" title="${t("tip.cancel")}">${t("tip.cancel")}</button>
@@ -498,15 +494,17 @@ export function buildHtml(): string {
               ${t("set.gsNotFound")}
               <a id="gsLink" href="https://ghostscript.com/releases/gsdnld.html" style="color:var(--accent);">ghostscript.com</a>.
             </div>
-            <label>${t("set.defaultPdfaLevel")}
-              <select id="pdfaLevel">
-                <option value="off" selected>${t("pdfa.off")}</option>
-                <option value="1b">PDF/A-1b (ISO 19005-1)</option>
-                <option value="2b">PDF/A-2b (ISO 19005-2)</option>
-                <option value="3b">PDF/A-3b (ISO 19005-3)</option>
-                <option value="4">PDF/A-4 (ISO 19005-4)</option>
+            <label>${t("set.pdfaEngine")}
+              <select id="pdfaEngine">
+                <option value="builtin" selected>${t("pdfa.engine.builtin")}</option>
+                <option value="ghostscript">${t("pdfa.engine.ghostscript")}</option>
               </select>
             </label>
+            <label>${t("set.defaultPdfaLevel")}
+              <select id="pdfaLevel">${levelOptionsHtml("off", true)}</select>
+            </label>
+            <label class="settingsCheck"><input id="pdfaImagesLossless" type="checkbox" /> ${t("set.pdfaImagesLossless")}</label>
+            <div style="font-size:0.78rem;color:var(--text-3);margin-bottom:0.5rem;">${t("set.pdfaImagesLosslessHint")}</div>
             <div style="font-size:0.78rem;color:var(--text-3);">${t("set.pdfaHint")}</div>
             <div class="wmActions"><button id="pdfaSaveBtn" class="primaryBtn">${t("btn.savePdfaNow")}</button><button id="gsRecheckBtn">${t("btn.recheckGs")}</button></div>
           </section>

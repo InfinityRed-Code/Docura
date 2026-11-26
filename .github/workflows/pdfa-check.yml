@@ -1,0 +1,63 @@
+# PDF/A conformance gate: unit tests of pdf_pdfa and the veraPDF matrix
+# (every corpus file x every PDF/A level). Fails on the first output that
+# veraPDF rejects, and when veraPDF itself is missing.
+#
+# Only this recipe runs here. `just ci` (fmt, clippy, all tests) is not
+# clean on main yet.
+name: PDF/A conformance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: pdfa-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pdfa-check:
+    name: just pdfa-check
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain comes from rust-toolchain.toml.
+      - name: Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      # veraPDF and its Java runtime (scripts/fetch-verapdf.ps1 downloads
+      # them when the cache is empty).
+      - uses: actions/cache@v4
+        with:
+          path: vendor/verapdf
+          key: verapdf-${{ runner.os }}-${{ hashFiles('scripts/fetch-verapdf.ps1') }}
+
+      - name: Unit tests and veraPDF matrix
+        run: just pdfa-check
+
+      - name: Matrix result
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path target/pdfa-matrix/matrix.md) {
+            "## veraPDF matrix" >> $env:GITHUB_STEP_SUMMARY
+            Get-Content target/pdfa-matrix/matrix.md -Encoding UTF8 >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pdfa-matrix
+          path: target/pdfa-matrix
+          retention-days: 7

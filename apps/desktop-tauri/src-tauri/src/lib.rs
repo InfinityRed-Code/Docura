@@ -7,6 +7,7 @@ use base64::Engine;
 use parking_lot::Mutex;
 
 mod ocr;
+mod pdfa;
 mod update;
 mod vprinter;
 
@@ -2822,22 +2823,38 @@ async fn check_ghostscript() -> GhostscriptInfo {
 #[derive(Deserialize)]
 struct PdfaArgs {
     path: String,
-    level: String, // "1b" | "2b" | "3b" | "4"
+    /// "1a" … "4f" (see `pdfa::LEVEL_IDS`).
+    level: String,
+    /// Document language for level a (e.g. "de-DE"), from the UI language.
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 pub(crate) fn pdfa_flags_for(level: &str) -> Result<(&'static str, &'static str), String> {
     pdfa_flags(level)
 }
 
+/// Ghostscript's `-dPDFA` value for a level. Ghostscript only knows the b
+/// levels of parts 1–3; everything else needs the built-in engine.
 fn pdfa_flags(level: &str) -> Result<(&'static str, &'static str), String> {
     // (PDFA value, compat label)
     match level {
         "1b" | "1B" | "1" => Ok(("1", "PDF/A-1b")),
         "2b" | "2B" | "2" => Ok(("2", "PDF/A-2b")),
         "3b" | "3B" | "3" => Ok(("3", "PDF/A-3b")),
-        "4"              => Ok(("4", "PDF/A-4")),
-        other => Err(format!("unsupported PDF/A level: {other}")),
+        other => Err(pdfa::ui_error("gs_level", other)),
     }
+}
+
+/// Plain bytes of an open document for conversion: protected documents
+/// (opened with their password) are exported without security first.
+fn plain_document_bytes(engine: &Arc<dyn PdfEngine>, document: DocumentId) -> Result<Vec<u8>, String> {
+    if engine.is_protected(document).unwrap_or(false) {
+        if let Ok(b) = engine.save_copy_bytes(document) {
+            return Ok(b);
+        }
+    }
+    engine.document_bytes(document).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2845,7 +2862,21 @@ async fn save_as_pdfa(
     state: tauri::State<'_, AppState>,
     document: DocumentId,
     args: PdfaArgs,
-) -> Result<String, String> {
+) -> Result<pdfa::PdfaSaved, String> {
+    if pdfa::engine() == pdfa::PdfaEngine::Builtin {
+        let engine = state.engine.clone();
+        let bytes = tokio::task::spawn_blocking(move || plain_document_bytes(&engine, document))
+            .await
+            .map_err(|e| e.to_string())??;
+        let (level, lang, path) = (args.level.clone(), args.lang.clone(), args.path.clone());
+        return tokio::task::spawn_blocking(move || -> Result<pdfa::PdfaSaved, String> {
+            let (out, saved) = pdfa::convert_builtin(&bytes, &level, lang)?;
+            std::fs::write(&path, out).map_err(|e| pdfa::ui_error("write", format!("{path}: {e}")))?;
+            Ok(saved)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     let (pdfa_val, compat_label) = pdfa_flags(&args.level)?;
     let info = check_ghostscript().await;
     let gs_path = info.path.ok_or_else(|| {
@@ -2860,7 +2891,7 @@ async fn save_as_pdfa(
     .map_err(|e| e.to_string())??;
 
     let out_path = args.path.clone();
-    tokio::task::spawn_blocking(move || -> Result<String, String> {
+    tokio::task::spawn_blocking(move || -> Result<pdfa::PdfaSaved, String> {
         use std::io::Write;
         let t = std::time::Instant::now();
         let ts = SystemTime::now()
@@ -2900,7 +2931,7 @@ async fn save_as_pdfa(
             return Err(format!("gs failed: {}", stderr.trim()));
         }
         tracing::info!("save_as_pdfa level={compat_label} in {:?}", t.elapsed());
-        Ok(compat_label.to_string())
+        Ok(pdfa::PdfaSaved { label: compat_label.to_string(), engine: pdfa::PdfaEngine::Ghostscript.id().into(), notes: Vec::new() })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2910,6 +2941,8 @@ async fn save_as_pdfa(
 struct ConvertResult {
     files: Vec<String>,
     failed: Vec<String>,
+    /// One message per failed file (same order as `failed`).
+    errors: Vec<String>,
 }
 
 #[tauri::command]
@@ -2917,9 +2950,45 @@ async fn convert_files_to_pdfa(
     paths: Vec<String>,
     out_dir: String,
     level: String,
+    lang: Option<String>,
 ) -> Result<ConvertResult, String> {
     if paths.is_empty() {
         return Err("convert_files_to_pdfa: no input files".into());
+    }
+    if pdfa::engine() == pdfa::PdfaEngine::Builtin {
+        let dir_str = out_dir.clone();
+        return tokio::task::spawn_blocking(move || -> Result<ConvertResult, String> {
+            let t = std::time::Instant::now();
+            let dir = PathBuf::from(&dir_str);
+            std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {dir_str}: {e}"))?;
+            let mut res = ConvertResult { files: Vec::new(), failed: Vec::new(), errors: Vec::new() };
+            for p in paths {
+                let src = PathBuf::from(&p);
+                let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("converted");
+                let out = dir.join(format!("{stem}_pdfa-{level}.pdf"));
+                let r = std::fs::read(&src)
+                    .map_err(|e| pdfa::ui_error("read", format!("{p}: {e}")))
+                    .and_then(|bytes| pdfa::convert_builtin(&bytes, &level, lang.clone()))
+                    .and_then(|(bytes, _)| std::fs::write(&out, bytes).map_err(|e| pdfa::ui_error("write", e)));
+                match r {
+                    Ok(()) => res.files.push(out.to_string_lossy().to_string()),
+                    Err(e) => {
+                        tracing::warn!("convert_files_to_pdfa: {p}: {e}");
+                        res.failed.push(p);
+                        res.errors.push(e);
+                    }
+                }
+            }
+            tracing::info!(
+                "convert_files_to_pdfa (builtin): {} ok / {} failed in {:?}",
+                res.files.len(),
+                res.failed.len(),
+                t.elapsed()
+            );
+            Ok(res)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     }
     let (pdfa_val, compat_label) = pdfa_flags(&level)?;
     let info = check_ghostscript().await;
@@ -2934,6 +3003,7 @@ async fn convert_files_to_pdfa(
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {dir_str}: {e}"))?;
         let mut written: Vec<String> = Vec::new();
         let mut failed: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
         for p in paths {
             let src = PathBuf::from(&p);
             let stem = src
@@ -2959,16 +3029,15 @@ async fn convert_files_to_pdfa(
                     written.push(out.to_string_lossy().to_string());
                 }
                 Ok(o) => {
-                    tracing::warn!(
-                        "convert_files_to_pdfa: {} failed: {}",
-                        p,
-                        String::from_utf8_lossy(&o.stderr).trim()
-                    );
+                    let msg = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                    tracing::warn!("convert_files_to_pdfa: {} failed: {}", p, msg);
                     failed.push(p);
+                    errors.push(msg);
                 }
                 Err(e) => {
                     tracing::warn!("convert_files_to_pdfa: spawn {p}: {e}");
                     failed.push(p);
+                    errors.push(e.to_string());
                 }
             }
         }
@@ -2980,7 +3049,7 @@ async fn convert_files_to_pdfa(
             compat_label,
             t.elapsed()
         );
-        Ok(ConvertResult { files: written, failed })
+        Ok(ConvertResult { files: written, failed, errors })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3485,9 +3554,16 @@ const DEFAULT_CACHE_MB: u64 = 256;
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedSettings {
     recent_files: VecDeque<RecentFile>,
-    /// `"off" | "1b" | "2b" | "3b" | "4"`. Defaults to `"off"` (plain PDF).
+    /// `"off"` or a level from `pdfa::LEVEL_IDS`. Defaults to `"off"` (plain PDF).
     #[serde(default)]
     default_pdfa_level: Option<String>,
+    /// `"builtin"` (default) or `"ghostscript"` (previous converter).
+    #[serde(default)]
+    pdfa_engine: Option<String>,
+    /// "Keep images lossless": the built-in converter leaves photographs as
+    /// they are instead of storing them as JPEG. Off by default.
+    #[serde(default)]
+    pdfa_images_lossless: bool,
     /// Tesseract language code(s) for OCR, e.g. `"deu"` or `"deu+eng"`.
     #[serde(default)]
     ocr_language: Option<String>,
@@ -3543,8 +3619,7 @@ fn get_default_pdfa(state: tauri::State<'_, AppState>) -> String {
 
 #[tauri::command]
 fn set_default_pdfa(state: tauri::State<'_, AppState>, level: String) -> Result<(), String> {
-    let allowed = ["off", "1b", "2b", "3b", "4"];
-    if !allowed.contains(&level.as_str()) {
+    if !pdfa::LEVEL_IDS.contains(&level.as_str()) {
         return Err(format!("invalid pdfa level: {level}"));
     }
     let guard = state.settings_path.lock();
@@ -3555,6 +3630,47 @@ fn set_default_pdfa(state: tauri::State<'_, AppState>, level: String) -> Result<
     s.default_pdfa_level = Some(level.clone());
     save_settings(cfg, &s).map_err(|e| e.to_string())?;
     vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
+    Ok(())
+}
+
+fn pdfa_engine_from_settings(s: &PersistedSettings) -> pdfa::PdfaEngine {
+    s.pdfa_engine.as_deref().and_then(pdfa::PdfaEngine::parse).unwrap_or(pdfa::PdfaEngine::Builtin)
+}
+
+#[tauri::command]
+fn get_pdfa_engine() -> String {
+    pdfa::engine().id().to_string()
+}
+
+#[tauri::command]
+fn set_pdfa_engine(state: tauri::State<'_, AppState>, engine: String) -> Result<(), String> {
+    let e = pdfa::PdfaEngine::parse(&engine).ok_or_else(|| format!("invalid pdfa engine: {engine}"))?;
+    let guard = state.settings_path.lock();
+    let Some(cfg) = guard.as_ref() else {
+        return Err("settings path unavailable".into());
+    };
+    let mut s = load_settings(cfg);
+    s.pdfa_engine = Some(e.id().to_string());
+    save_settings(cfg, &s).map_err(|e| e.to_string())?;
+    pdfa::set_engine(e);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_pdfa_images_lossless() -> bool {
+    pdfa::images_lossless()
+}
+
+#[tauri::command]
+fn set_pdfa_images_lossless(state: tauri::State<'_, AppState>, lossless: bool) -> Result<(), String> {
+    let guard = state.settings_path.lock();
+    let Some(cfg) = guard.as_ref() else {
+        return Err("settings path unavailable".into());
+    };
+    let mut s = load_settings(cfg);
+    s.pdfa_images_lossless = lossless;
+    save_settings(cfg, &s).map_err(|e| e.to_string())?;
+    pdfa::set_images_lossless(lossless);
     Ok(())
 }
 
@@ -3740,6 +3856,8 @@ pub fn run() {
                 migrate_legacy_config(path);
                 let s = load_settings(path);
                 vprinter::set_pdfa_default(pdfa_pref_from_settings(&s));
+                pdfa::set_engine(pdfa_engine_from_settings(&s));
+                pdfa::set_images_lossless(s.pdfa_images_lossless);
                 // Apply the persisted render-cache budget over the default.
                 state
                     .cache
@@ -3871,6 +3989,10 @@ pub fn run() {
             recent_files,
             push_recent,
             get_default_pdfa,
+            get_pdfa_engine,
+            set_pdfa_engine,
+            get_pdfa_images_lossless,
+            set_pdfa_images_lossless,
             set_default_pdfa,
             get_cache_mb,
             set_cache_mb,

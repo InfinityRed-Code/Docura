@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isBuiltin, pdfaErrorText, pdfaLang, pdfaNotesText, type PdfaSaved } from "./pdfa";
 import { open, save, message, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import type {
   AttachmentInfo, DocMetadata, DocPermissions, DocSnapshot,
@@ -161,7 +162,8 @@ export async function saveDocumentAs(): Promise<boolean> {
   });
   if (!dest || typeof dest !== "string") return false;
   const level = dom.pdfaLevelEl?.value ?? "off";
-  if (level !== "off" && hasInteractiveFormFields()) {
+  // Ghostscript flattens forms; the built-in converter keeps them fillable.
+  if (level !== "off" && !isBuiltin() && hasInteractiveFormFields()) {
     const ok = await writePlain(dest);
     if (ok) {
       setStatus(t("st.pdfaSkipped", { path: dest }));
@@ -172,10 +174,12 @@ export async function saveDocumentAs(): Promise<boolean> {
   if (level !== "off") {
     setStatus(t("st.savingPdfa", { level }));
     try {
-      const label = await invoke<string>("save_as_pdfa", {
+      const res = await invoke<PdfaSaved>("save_as_pdfa", {
         document: state.currentDoc,
-        args: { path: dest, level },
+        args: { path: dest, level, lang: pdfaLang() },
       });
+      const label = res.label;
+      const notes = pdfaNotesText(res.notes);
       // PDF/A forbids encryption — flag the dropped protection.
       let suffix = "";
       try {
@@ -184,13 +188,14 @@ export async function saveDocumentAs(): Promise<boolean> {
         });
         if (sec.protected) suffix = ` · ${t("st.pdfaNoProtection")}`;
       } catch {}
+      if (notes) suffix += ` · ${notes}`;
       setStatus(t("st.savedPdfa", { label, path: dest }) + suffix);
       // The PDF/A copy differs from the working document, so the working
       // document keeps its own path; the changes count as saved though.
       markClean();
       return true;
     } catch (e) {
-      setStatus(t("st.pdfaError", { e: String(e) }));
+      setStatus(t("st.pdfaError", { e: pdfaErrorText(e) }));
       return false;
     }
   }
