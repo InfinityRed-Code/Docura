@@ -152,6 +152,8 @@ export function makeSlot(pageIdx: number): Slot {
   const formLayer = document.createElement("div");
   formLayer.className = "formLayer";
   formLayer.dataset.page = String(pageIdx);
+  const threeDLayer = document.createElement("div");
+  threeDLayer.className = "threeDLayer";
   const placeholder = document.createElement("div");
   placeholder.className = "placeholder";
   placeholder.textContent = `${pageIdx + 1}`;
@@ -164,8 +166,9 @@ export function makeSlot(pageIdx: number): Slot {
   wrap.appendChild(redactLayer);
   wrap.appendChild(drawLayer);
   wrap.appendChild(formLayer);
+  wrap.appendChild(threeDLayer);
   return {
-    wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, redactLayer, drawLayer, formLayer, placeholder,
+    wrap, img, selectLayer, highlightLayer, linkLayer, noteLayer, redactLayer, drawLayer, formLayer, threeDLayer, placeholder,
     loaded: false, renderingZoom: null, lastZoom: null,
     baseZoom: null, baseRot: null, baseGen: -1, detail: null, detailKey: null,
     textKey: null, textW: 0, textH: 0,
@@ -236,6 +239,7 @@ export function evictSlot(idx: number) {
   slot.textKey = null;
   slot.highlightLayer.innerHTML = "";
   slot.linkLayer.innerHTML = "";
+  callbacks.evict3dFor(idx);
   slot.loaded = false;
   slot.lastZoom = null;
   state.renderQueue.delete(idx);
@@ -427,6 +431,7 @@ async function refreshLayers(idx: number) {
   callbacks.renderRedactsFor(idx);
   callbacks.renderFormFor(idx);
   callbacks.renderTextEditFor(idx);
+  callbacks.render3dFor(idx);
 }
 
 // ---------- Sharp detail window (deep zoom / huge scans) ----------

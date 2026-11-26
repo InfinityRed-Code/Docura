@@ -413,7 +413,7 @@ function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
     if (fill) el.setAttribute("fill-opacity", "0.6");
     return el;
   };
-  if (kind === "freetext" || kind === "stamp" || kind === "region" || kind === "redact") {
+  if (kind === "freetext" || kind === "stamp" || kind === "model3d" || kind === "region" || kind === "redact") {
     const el = document.createElementNS(ns, "rect");
     el.setAttribute("fill", kind === "region" ? "rgba(74,140,255,0.12)" : kind === "redact" ? "rgba(0,0,0,0.55)" : "none");
     el.setAttribute("stroke", kind === "region" ? "#4a8cff" : kind === "redact" ? "#d23b3b" : color);
@@ -456,7 +456,7 @@ function makePreviewElement(kind: ShapeKindUi, color: string): SVGElement {
 }
 
 function updatePreview(kind: ShapeKindUi, el: SVGElement, s: { x: number; y: number }, c: { x: number; y: number }) {
-  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "region" || kind === "redact") {
+  if (kind === "rect" || kind === "freetext" || kind === "stamp" || kind === "model3d" || kind === "region" || kind === "redact") {
     const r = el as SVGRectElement;
     const x = Math.min(s.x, c.x), y = Math.min(s.y, c.y);
     const w = Math.abs(c.x - s.x), h = Math.abs(c.y - s.y);
@@ -519,7 +519,7 @@ export function imagePxToPagePt(slot: Slot, pageIdx: number, x: number, y: numbe
 
 const TOOL_KIND: Record<string, string> = {
   highlight: "Highlight", underline: "Underline", strikeout: "StrikeOut", squiggly: "Squiggly",
-  freetext: "FreeText", note: "Text", ink: "Ink", stamp: "Stamp",
+  freetext: "FreeText", note: "Text", ink: "Ink", stamp: "Stamp", model3d: "3D",
   rect: "Square", circle: "Circle", line: "Line",
 };
 
@@ -535,7 +535,7 @@ function toolNoun(tool: string | null): string {
  * that must receive their own clicks instead of the active page tool. */
 export function isOverlayControl(target: EventTarget | null): boolean {
   return !!(target as Element | null)?.closest?.(
-    "textarea, input, select, button, .stickyNote, .formField, .redactMark, .noteHotspot, .textEd, .textEdBar",
+    "textarea, input, select, button, .stickyNote, .formField, .redactMark, .noteHotspot, .textEd, .textEdBar, .threeDBox.active",
   );
 }
 
@@ -738,6 +738,8 @@ const SUBTYPE_ICON: Record<string, string> = {
   FreeText: "type",
   Stamp: "stamp",
   Text: "sticky-note",
+  "3D": "rotate-3d",
+  RichMedia: "rotate-3d",
 };
 
 function formatPdfDate(s: string | null): string {
@@ -1305,6 +1307,9 @@ export function initAnnot() {
         setShapeTool(null);
         return;
       }
+      if (k === "model3d") {
+        if (!(await callbacks.pick3dModel())) return;
+      }
       if (k === "stamp") {
         const picked = await open({
           multiple: false,
@@ -1527,6 +1532,18 @@ export function initAnnot() {
       } catch (e) {
         setStatus(t("st.saveError", { e: String(e) }));
       }
+      return;
+    }
+
+    if (tool === "model3d") {
+      const rect: RectPt = {
+        x0: Math.min(start.x, end.x),
+        y0: Math.min(start.y, end.y),
+        x1: Math.max(start.x, end.x),
+        y1: Math.max(start.y, end.y),
+      };
+      await callbacks.insert3dAt(ds.pageIdx, rect);
+      setShapeTool(null);
       return;
     }
 

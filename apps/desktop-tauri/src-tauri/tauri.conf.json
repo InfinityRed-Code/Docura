@@ -38,6 +38,10 @@
     ],
     "resources": {
       "resources/pdfium.dll": "resources/pdfium.dll",
+      "../../../crates/pdf_3d/licenses/README.md": "licenses/3d/README.md",
+      "../../../crates/pdf_3d/licenses/Apache-2.0.txt": "licenses/3d/Apache-2.0.txt",
+      "../../../crates/pdf_3d/licenses/three.js-LICENSE.txt": "licenses/3d/three.js-LICENSE.txt",
+      "../../../crates/pdf_3d/licenses/fflate-LICENSE.txt": "licenses/3d/fflate-LICENSE.txt",
       "../../../crates/pdf_fonts/fonts/README.md": "licenses/fonts/README.md",
       "../../../crates/pdf_fonts/fonts/roboto/OFL.txt": "licenses/fonts/Roboto-OFL.txt",
       "../../../crates/pdf_fonts/fonts/opensans/OFL.txt": "licenses/fonts/OpenSans-OFL.txt",

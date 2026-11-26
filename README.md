@@ -74,6 +74,13 @@ full inventory lives in [`docs/roadmap.md`](docs/roadmap.md).
   the reader automatically, as PDF/A when a default level is set. Optional
   system-tray / autostart mode keeps the
   spool watcher running in the background without an open window.
+- **3D PDFs.** 3D annotations with a U3D model (as written by Tekla, Allplan,
+  MeshLab, LaTeX media9 and others) open in the page as an interactive view:
+  orbit / pan / zoom, the file's saved views, render modes, lighting schemes,
+  model tree with visibility, a section plane, fullscreen. Files without a
+  poster get a rendered preview. Insert a 3D model from glTF/GLB, OBJ (+MTL),
+  STL, PLY or 3MF: it is written as U3D with seven preset views and a poster.
+  PRC models show their poster with a hint and can be exported as raw data.
 - **Performance.** Bounded, viewport-prioritised render pool (pages encode while
   the next rasterises; no UI freeze on large pages), byte-budgeted LRU page
   cache keyed by zoom, lazy thumbnails, eviction of far-from-viewport slots.
@@ -99,6 +106,7 @@ crates/
                      # annotations, forms, XFDF, encryption, redaction, OCR layer)
   pdf_sign           # PAdES digital signatures (pure RustCrypto)
   pdf_export         # PDF → Word/Excel/text/HTML export
+  pdf_3d             # U3D (ECMA-363) decoder and writer for 3D annotations
   pdf_pdfa           # PDF → PDF/A (parts 1–4, all levels) without Ghostscript
 
 vendor/pdfium/       # Bundled PDFium binaries (per-target)
@@ -107,7 +115,7 @@ docs/                # Architecture and roadmap
 
 UI is split into cohesive modules under `apps/desktop-tauri/ui/src/`
 (`types`, `state`, `dom`, `template`, `viewer`, `doc`, `edit`, `annot`,
-`chrome`, `sign`, `protect`, `export`, `ocr`, `i18n`, `main`). State is a single
+`chrome`, `sign`, `protect`, `export`, `ocr`, `threed*`, `i18n`, `main`). State is a single
 shared object; cross-module hooks go through a small callback registry to keep
 the import graph acyclic. The interface is localised (German default + English).
 
@@ -306,6 +314,13 @@ compatible with the above: PDFium is Apache-2.0 / BSD-3-Clause; lopdf,
 pdfium-render, image, lru and the other workspace crates are MIT / Apache-2.0.
 These permissive upstream licenses impose no restriction on the project's own
 noncommercial/commercial dual-licensing.
+
+The 3D support uses three.js (MIT, with the bundled fflate, MIT) for the view
+and the model import, and its progressive mesh decoder
+(`crates/pdf_3d/src/u3d/clod.rs`) is a Rust port of the decoder in Intel's
+Universal 3D Sample Software (Apache-2.0). Notices and license texts are in
+[`crates/pdf_3d/licenses/`](crates/pdf_3d/licenses/README.md) and ship with
+the installer under `licenses/3d/`.
 
 The Windows installer also ships Tesseract OCR in `<install dir>\tesseract`
 as a separate program the app only starts; it is not covered by the

@@ -358,7 +358,9 @@ Reihenfolge nach Nutzerbedarf sortieren, nicht streng umsetzen.
 - [ ] Dateigrößenoptimierung (Bilder rekomprimieren, Metadaten strippen) [X: lopdf + image]
 - [ ] Optional Content Groups (Layer ein/aus) [E][U]
 - [ ] JavaScript-Actions in Formularen sicher ausführen [X: sandboxed JS]
-- [ ] 3D-Annotationen (U3D/PRC) — nur Anzeige [X: optional]
+- [x] 3D-Annotationen: U3D anzeigen (interaktive Ansicht in der Seite: Orbit/Zoom, Ansichten, Render-Modi, Beleuchtung, Modellbaum, Schnitt, Vollbild; Vorschau für Dateien ohne Poster) und 3D-Modell einfügen (glTF/GLB, OBJ, STL, PLY, 3MF → U3D mit Standardansichten und Poster) [X: `pdf_3d`, three.js] (#1)
+- [ ] 3D: PRC interaktiv anzeigen (heute: Poster + Hinweis + Rohdaten-Export) [X] (#1)
+- [ ] 3D: Texturen und Vertex-Farben beim Einfügen übernehmen, Schnittflächen deckeln, U3D-Linien/-Punkte, Animation [X]
 - [ ] PDF/A-Validierung (veraPDF-CLI Bindung) [X]
 - [ ] PDF/X für Print-Workflows
 - [ ] Linearisierung (Fast Web View) beim Speichern [X: lopdf/qpdf-Bindung]

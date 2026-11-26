@@ -114,6 +114,12 @@ import {
   Spline,
   Star,
   Triangle,
+  Box,
+  Download,
+  FlipHorizontal2,
+  House,
+  Maximize2,
+  Rotate3d,
 } from "lucide";
 
 const icons = {
@@ -227,6 +233,12 @@ const icons = {
   Spline,
   Star,
   Triangle,
+  Box,
+  Download,
+  FlipHorizontal2,
+  House,
+  Maximize2,
+  Rotate3d,
 };
 
 /** Replace all `data-lucide` placeholders in the document with SVGs.

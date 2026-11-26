@@ -324,3 +324,113 @@ pub struct DocPermissions {
     pub can_fill_forms: bool,
     pub can_assemble: bool,
 }
+
+/// A 3D annotation (`/Subtype /3D`, or a RichMedia annotation with a 3D
+/// asset) on a page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreeDAnnot {
+    /// Same id as `AnnotationInfo::id` (`/NM`, else the object id).
+    pub id: String,
+    pub page: u32,
+    /// Annotation rectangle, top-origin view space like `AnnotationInfo`.
+    pub rect_pt: RectPt,
+    /// "3D" or "RichMedia".
+    pub subtype: String,
+    /// Model format: "U3D", "PRC" or what the file declares.
+    pub format: String,
+    /// Size of the decoded model data in bytes.
+    pub model_size: usize,
+    /// The annotation has a normal appearance (poster image) to show while
+    /// inactive.
+    pub has_poster: bool,
+    /// `/3DA /A`: "PO" (page opened), "PV" (page visible), "XA" (explicit).
+    pub activation: String,
+    /// `/3DA /TB`: show a toolbar when active.
+    pub toolbar: bool,
+    /// `/3DA /NP`: show the model tree when active.
+    pub model_tree: bool,
+    /// Preset views (`/VA`), plus a view given only in `/3DV`.
+    pub views: Vec<ThreeDView>,
+    /// Index into `views` of the initial view; `None` = the model's own.
+    pub default_view: Option<u32>,
+    /// `/Contents`, if any.
+    pub contents: Option<String>,
+}
+
+/// A 3D view dictionary (ISO 32000 13.6.4).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThreeDView {
+    /// `/XN`: name shown to the user.
+    pub name: String,
+    /// `/IN`.
+    #[serde(default)]
+    pub internal_name: Option<String>,
+    /// `/C2W` (with `/MS /M`): camera-to-world matrix, columns x (left of
+    /// the screen), y (up), z (view direction) and position.
+    #[serde(default)]
+    pub c2w: Option<[f32; 12]>,
+    /// `/U3DPath` (with `/MS /U3D`): view node names in the U3D model.
+    #[serde(default)]
+    pub u3d_path: Vec<String>,
+    /// `/CO`: distance along the view direction to the center of orbit.
+    #[serde(default)]
+    pub center_of_orbit: Option<f32>,
+    /// `/P /Subtype /O`.
+    #[serde(default)]
+    pub orthographic: bool,
+    /// `/P /FOV` in degrees (perspective).
+    #[serde(default)]
+    pub fov: Option<f32>,
+    /// `/P /PS`: what the FOV circle spans: "W", "H", "Min", "Max" or a
+    /// diameter in points.
+    #[serde(default)]
+    pub fov_span: Option<String>,
+    /// `/P /OS` (orthographic scale).
+    #[serde(default)]
+    pub ortho_scale: Option<f32>,
+    /// `/P /OB` (orthographic binding): "W", "H", "Min", "Max", "Absolute".
+    #[serde(default)]
+    pub ortho_binding: Option<String>,
+    /// `/BG /C`.
+    #[serde(default)]
+    pub background: Option<[f32; 3]>,
+    /// `/RM /Subtype` ("Solid", "Wireframe", "Transparent", …).
+    #[serde(default)]
+    pub render_mode: Option<String>,
+    /// `/RM /AC` (edge color).
+    #[serde(default)]
+    pub render_aux_color: Option<[f32; 3]>,
+    /// `/LS /Subtype` ("Artwork", "White", "CAD", "Headlamp", …).
+    #[serde(default)]
+    pub lighting: Option<String>,
+    /// `/SA`.
+    #[serde(default)]
+    pub cross_sections: Vec<ThreeDCrossSection>,
+    /// `/NA` (node states).
+    #[serde(default)]
+    pub nodes: Vec<ThreeDNodeState>,
+}
+
+/// `/SA` entry: a cutting plane.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThreeDCrossSection {
+    pub center: [f32; 3],
+    /// Rotations about x, y, z in degrees; exactly one is `None` (the
+    /// axis the plane starts perpendicular to).
+    pub orientation: [Option<f32>; 3],
+    pub plane_opacity: f32,
+    pub plane_color: [f32; 3],
+    pub plane_visible: bool,
+    pub intersection_visible: bool,
+    pub intersection_color: [f32; 3],
+}
+
+/// `/NA` entry: state of one node in a view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThreeDNodeState {
+    pub name: String,
+    pub visible: Option<bool>,
+    pub opacity: Option<f32>,
+    /// 3x4 transform (same layout as `ThreeDView::c2w`).
+    pub matrix: Option<[f32; 12]>,
+}
