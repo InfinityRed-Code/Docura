@@ -199,8 +199,8 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
   DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
   ihnen der Anhang) die Prüfung: 170 von 170.
 - **Abdeckung** (`just pdfa-coverage`, Unit-Tests, Matrix und
-  Wiedergabetest): 100 % der Funktionen (1215 von 1215, Closures und
-  Testcode mitgezählt), 94,5 % der Zeilen (10 560, davon 576 nicht
+  Wiedergabetest): 100 % der Funktionen (1243 von 1243, Closures und
+  Testcode mitgezählt), 94,7 % der Zeilen (10 894, davon 581 nicht
   ausgeführt). Von der Messung ausgenommen sind nur die Beispielprogramme
   und der Test-Korpus, wie bisher.
 - **Wiedergabetest** (`cargo test -p pdf_pdfa --test fidelity`): Jede
@@ -231,12 +231,12 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
 
   | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern vorher | Größe intern, Bilder verlustfrei | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
   |---|---|---|---|---|---|---|---|---|---|---|
-  | Korpus (30) | 1b | 1,61 s | 16,05 s | 10,0× | 4316 KiB | 3931 KiB | 3866 KiB | 1681 KiB | 30/30 | 0/30 |
-  | Korpus (30) | 2b | 0,38 s | 5,47 s | 14,3× | 1943 KiB | 1446 KiB | 1381 KiB | 280 KiB | 30/30 | 0/30 |
-  | Korpus (30) | 3b | 0,38 s | 5,48 s | 14,3× | 1931 KiB | 1434 KiB | 1370 KiB | 280 KiB | 30/30 | 0/30 |
-  | Ghostscript-Dokumente (17) | 1b | 1,17 s | 13,40 s | 11,4× | 19,22 MiB | 11,78 MiB | 9,21 MiB | 6,16 MiB | 17/17 | 0/17 |
-  | Ghostscript-Dokumente (17) | 2b | 0,75 s | 7,84 s | 10,4× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
-  | Ghostscript-Dokumente (17) | 3b | 0,75 s | 7,84 s | 10,5× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
+  | Korpus (30) | 1b | 1,60 s | 16,06 s | 10,0× | 4316 KiB | 3931 KiB | 3866 KiB | 1681 KiB | 30/30 | 0/30 |
+  | Korpus (30) | 2b | 0,38 s | 5,48 s | 14,3× | 1943 KiB | 1446 KiB | 1381 KiB | 280 KiB | 30/30 | 0/30 |
+  | Korpus (30) | 3b | 0,38 s | 5,52 s | 14,5× | 1931 KiB | 1434 KiB | 1369 KiB | 280 KiB | 30/30 | 0/30 |
+  | Ghostscript-Dokumente (17) | 1b | 1,10 s | 13,39 s | 12,2× | 19,22 MiB | 11,78 MiB | 9,21 MiB | 6,16 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 2b | 0,69 s | 7,82 s | 11,3× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
+  | Ghostscript-Dokumente (17) | 3b | 0,69 s | 7,81 s | 11,3× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
 
   „Vorher“ ist die Ausgabe ohne jede Größenreduktion, „Bilder verlustfrei“
   die mit der Einstellung „Bilder verlustfrei lassen“, „jetzt“ der Standard.
@@ -245,33 +245,69 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
 - **Pläne (lokal):** fünf Baupläne des Owners, 28,7 MiB, nicht im Repository
   (`just pdfa-bench <Ordner>`, Median aus 3 Läufen):
 
-  | Dateien | Stufe | intern | intern, Bilder verlustfrei | Ghostscript | Größe intern vorher | Größe intern, Bilder verlustfrei | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
+  | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern vorher | Größe intern, Bilder verlustfrei | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
   |---|---|---|---|---|---|---|---|---|---|---|
-  | Pläne (5) | 1b | 65,5 s | 53,6 s | 60,1 s | 28,62 MiB | 15,54 MiB | 15,54 MiB | 27,56 MiB | 5/5 | 0/5 |
-  | Pläne (5) | 2b | 65,6 s | 53,5 s | 60,1 s | 28,59 MiB | 15,51 MiB | 15,51 MiB | 27,54 MiB | 5/5 | 0/5 |
-  | Pläne (5) | 3b | 65,5 s | wie 2b | 60,0 s | 28,59 MiB | 15,51 MiB | 15,51 MiB | 27,54 MiB | 5/5 | 0/5 |
+  | Pläne (5) | 1b | 6,75 s | 59,9 s | 8,9× | 28,62 MiB | 15,56 MiB | 15,56 MiB | 27,56 MiB | 5/5 | 0/5 |
+  | Pläne (5) | 2b | 6,72 s | 59,8 s | 8,9× | 28,59 MiB | 15,52 MiB | 15,52 MiB | 27,54 MiB | 5/5 | 0/5 |
+  | Pläne (5) | 3b | 6,72 s | 59,8 s | 8,9× | 28,59 MiB | 15,52 MiB | 15,52 MiB | 27,54 MiB | 5/5 | 0/5 |
 
   - Drei der fünf Pläne bestehen aus einem einzigen seitengroßen Bild
-    (33 704 × 23 839 und 42 520 × 23 839 Pixel, 2,4 bis 3,0 GB Rohdaten). Das
-    verlustfreie Neupacken halbiert sie fast (27,36 → 15,02 MiB) und kostet
-    je Plan 16 bis 21 s; mit Bildkompression (Standard) kommen weitere 4 bis
-    5 s dazu, weil jedes Bild erst untersucht wird. Ghostscript braucht 18
-    bis 23 s und spart nichts. Auf diesen Plänen ist der interne Konverter
-    deshalb nicht schneller als Ghostscript; die
-    beiden Vektorpläne brauchen 0,02 bis 0,05 s gegen 0,24 bis 0,37 s.
-    („Bilder verlustfrei“: ein Lauf statt Median.)
-  - Arbeitsspeicher: eine solche Konvertierung braucht in der Spitze 4,6 bis
-    5,7 GiB.
-  - Kein Bild wurde verlustbehaftet neu kodiert: die großen Bilder gelten als
-    Zeichnung, alle übrigen sind schon JPEG und bleiben Byte für Byte. Die
-    dekodierten Bilddaten von Quelle und Ausgabe sind gleich (SHA-256 über
-    alle Samples), und jede geprüfte Seite rendert in PDFium pixelgleich zur
-    Quelle (SSIM 1, lange Seite 6000 Pixel; sieben Seiten, 1b und 2b, mit und
-    ohne Bildkompression). Ausnahme ist der Plan im nächsten Punkt in 1b.
+    (33 704 × 23 839 und 42 520 × 23 839 Pixel, 2,4 bis 3,0 GB Rohdaten). Sie
+    werden zeilenweise dekodiert und in Bändern auf allen Kernen neu gepackt
+    (siehe „Große Bilder“): 2,0 bis 2,6 s je Plan, Ghostscript 18 bis 23 s.
+    Die Zeit ist mit und ohne Bildkompression dieselbe. Die beiden
+    Vektorpläne brauchen 0,02 bis 0,05 s gegen 0,24 bis 0,37 s.
+  - Arbeitsspeicher: in der Spitze 64 bis 76 MiB je Konvertierung (Prozess
+    des Beispielprogramms `pdfa_convert`, Release-Build).
+  - Vor dieser Änderung: 65,5 s für die fünf Pläne (Ghostscript 60,1 s) und
+    4,6 bis 5,7 GiB in der Spitze. Das Bild lag damals bis zu zweimal ganz
+    im Speicher. Von den 20 s eines Plans entfielen 1,0 s auf das Entpacken,
+    4,9 s auf das Zurückrechnen des Prädiktors, 3,8 s auf die Prüfung, ob es
+    ein Foto ist, 5,0 s auf die Wahl der Zeilenfilter und 5,4 s auf Flate.
+  - Kein Bild wurde verlustbehaftet neu kodiert: die großen Bilder werden
+    verlustfrei gepackt, alle übrigen sind schon JPEG und bleiben Byte für
+    Byte. Die dekodierten Bilddaten von Quelle und Ausgabe sind gleich
+    (SHA-256 über alle Samples), und jede geprüfte Seite rendert in PDFium
+    pixelgleich zur Quelle (SSIM 1, lange Seite 6000 Pixel; sieben Seiten, 1b
+    und 2b, mit und ohne Bildkompression). Ausnahme ist der Plan im nächsten
+    Punkt in 1b.
   - Einzige messbare Änderung: Ein Vektorplan hat Koordinaten über 32767,
     die in PDF/A-1 gerundet werden (siehe „Zahlengrenzen“). Gegen die Quelle
-    gemessen bei 12 000 Pixeln Breite: SSIM 0,99999, PSNR 60,0 dB, 0,018 % der
-    Pixel verschieden. Ab Teil 2 ist auch dieser Plan pixelgleich.
+    gemessen: SSIM 0,99999, PSNR 60,0 dB bei 12 000 Pixeln Breite (0,018 % der
+    Pixel verschieden), PSNR 63,1 dB bei 6000. Ab Teil 2 ist auch dieser Plan
+    pixelgleich.
+
+### Große Bilder
+
+Ein gescannter oder gerenderter Plan ist oft ein einziges Bild je Seite:
+wenige Megabyte in der Datei, Gigabytes an Samples. Ein solches Bild wird
+nie als Ganzes im Speicher gehalten.
+
+- **Grenze:** `Options::max_image_bytes`, Standard 512 MiB Samples (eine
+  A0-Seite, in Farbe mit 300 dpi gescannt).
+- **Darüber** wird das Bild Zeile für Zeile aus dem Flate-Strom gelesen
+  (Prädiktor zeilenweise zurückgerechnet) und in Bändern von 4 MiB neu
+  gepackt. Jedes Band wird auf einem eigenen Kern gefiltert und komprimiert
+  und endet auf einer Bytegrenze (Sync-Flush); die Bänder hintereinander
+  sind ein gültiger Flate-Strom, die Adler-32-Prüfsumme wird aus denen der
+  Bänder zusammengesetzt. Gehalten wird höchstens ein Band je Kern. Der
+  Strom wird dadurch 0,08 % größer als in einem Stück.
+- **Kein JPEG über der Grenze.** Um ein JPEG zu messen, müssen Original und
+  dekodiertes Ergebnis nebeneinander im Speicher liegen. Ein Foto mit mehr
+  als 512 MiB Samples bleibt deshalb verlustfrei (neu gepackt). Lesbar Zeile
+  für Zeile sind unkomprimierte und Flate-Bilder mit und ohne Prädiktor;
+  ein so großes Bild in LZW oder RunLength bleibt, wie es ist.
+- **Darunter** arbeitet der Konverter wie bisher im Speicher, mehrere Bilder
+  zugleich. Neu ist ein gemeinsames Budget von viermal der Grenze: ein Bild
+  reserviert das Vierfache seiner Samples und wartet, bis so viel frei ist.
+  Das größte Bild läuft also allein. Ob ein Bild flächig ist, steht jetzt
+  fest, sobald die Hälfte der Pixel flächig ist; der Rest wird nicht mehr
+  gezählt (gleiches Ergebnis).
+- **Test:** `tests/large_image.rs` konvertiert ein Bild mit 96 MB Samples
+  (12 000 × 8 000 Pixel, Grenze für den Test 8 MiB) unter einem zählenden
+  Allokator. Die Konvertierung darf höchstens die Hälfte der Samples halten
+  (gemessen: 28 bis 32 MB), und jedes Sample muss gleich bleiben. Der Test
+  läuft in `just pdfa-check` und damit in der CI, rund 7 s.
 
 ### Größe: was getan ist und was bleibt
 

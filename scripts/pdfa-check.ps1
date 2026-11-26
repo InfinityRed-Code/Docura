@@ -2,8 +2,9 @@
 #
 # Stages veraPDF if it is missing, runs the unit tests of `pdf_pdfa`, the
 # conformance matrix (every corpus file x every PDF/A level, validated with
-# veraPDF) and the fidelity test (size reduction changes neither text nor
-# rendering). Fails on the first non-conformant or changed output. A missing veraPDF
+# veraPDF), the fidelity test (size reduction changes neither text nor
+# rendering) and the memory test for page-size images. Fails on the first
+# non-conformant or changed output. A missing veraPDF
 # is an error here (PDFA_REQUIRE_VERAPDF=1), unlike in plain `cargo test`.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pdfa-check.ps1
@@ -40,6 +41,10 @@ $code = $LASTEXITCODE
 # Size reduction must not change text or rendering (corpus; plus the PDFs of
 # a local Ghostscript installation or PDFA_FIDELITY_DIRS).
 cargo test -p pdf_pdfa --test fidelity -- --nocapture
+if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+# A page-size image is converted without holding it in memory as a whole.
+cargo test -p pdf_pdfa --test large_image -- --nocapture
 if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
 $matrix = "target/pdfa-matrix/matrix.md"

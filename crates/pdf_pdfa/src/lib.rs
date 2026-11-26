@@ -106,6 +106,12 @@ pub struct Options {
     /// lower bound on the quality; line art, text-like, small and masked
     /// images are never touched. Off keeps every image lossless.
     pub recompress_images: bool,
+    /// Images with more bytes of samples than this are never held in
+    /// memory as a whole (default: 512 MiB, an A0 page scanned in colour at
+    /// 300 dpi). They are still packed without loss, row by row, but not
+    /// stored as JPEG. Smaller images are worked on together as long as
+    /// they fit four times this value.
+    pub max_image_bytes: usize,
     /// Nesting depth for embedded PDFs converted along the way.
     pub(crate) depth: u8,
 }
@@ -121,6 +127,7 @@ impl Options {
             font_dirs: Vec::new(),
             reduce_size: true,
             recompress_images: true,
+            max_image_bytes: images::LARGE,
             depth: 0,
         }
     }

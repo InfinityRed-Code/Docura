@@ -21,13 +21,25 @@
 //! Images that are JPEG, JPEG 2000, CCITT or JBIG2 already are never
 //! decoded: a second lossy pass would cost quality for little gain.
 //!
+//! **Memory.** A scanned or rendered plan can be one image of several
+//! gigabytes of samples in a file of a few megabytes. Such an image is
+//! never held as a whole: above [`Options::max_image_bytes`] of samples it
+//! is decoded row by row and packed in bands on all cores, and it is not
+//! considered for JPEG (measuring a JPEG needs the original and the decoded
+//! result side by side). Smaller images are worked on in memory, several at
+//! a time, as long as their samples together fit a budget of four times
+//! that limit.
+//!
 //! [`Options::recompress_images`]: crate::Options::recompress_images
 //! [`Options::reduce_size`]: crate::Options::reduce_size
+//! [`Options::max_image_bytes`]: crate::Options::max_image_bytes
 
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 
+use flate2::{Compress, Compression, FlushCompress, Status};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
@@ -66,7 +78,52 @@ const FLAT_SHARE: f64 = 0.5;
 const PALETTE_COLOURS: usize = 256;
 const PALETTE_GREYS: usize = 64;
 
+/// Default of [`Options::max_image_bytes`](crate::Options::max_image_bytes):
+/// 512 MiB of samples, an A0 page scanned in colour at 300 dpi.
+pub(crate) const LARGE: usize = 512 << 20;
+/// Sample bytes packed as one piece: rows are filtered and compressed in
+/// bands of about this size, each on its own core.
+const BAND: usize = 4 << 20;
+
 const LOSSLESS_FILTERS: [&[u8]; 5] = [b"FlateDecode", b"LZWDecode", b"RunLengthDecode", b"ASCIIHexDecode", b"ASCII85Decode"];
+
+/// The memory the image work may hold at one time, shared by its threads.
+struct Memory {
+    /// Images with more sample bytes are worked on row by row.
+    limit: usize,
+    total: usize,
+    free: Mutex<usize>,
+    freed: Condvar,
+}
+
+impl Memory {
+    fn new(limit: usize) -> Memory {
+        let total = limit.saturating_mul(4);
+        Memory { limit, total, free: Mutex::new(total), freed: Condvar::new() }
+    }
+
+    /// Wait until `bytes` are free and take them (at most everything, so
+    /// the largest image runs alone). Returns what has to be given back.
+    fn take(&self, bytes: usize) -> usize {
+        let bytes = bytes.min(self.total);
+        let Ok(mut free) = self.free.lock() else { return 0 };
+        while *free < bytes {
+            free = match self.freed.wait(free) {
+                Ok(f) => f,
+                Err(_) => return 0,
+            };
+        }
+        *free -= bytes;
+        bytes
+    }
+
+    fn give(&self, bytes: usize) {
+        if let Ok(mut free) = self.free.lock() {
+            *free += bytes;
+        }
+        self.freed.notify_all();
+    }
+}
 
 /// Decoded samples of an image, 8 bits per component.
 struct Raw {
@@ -99,7 +156,7 @@ pub fn run(ctx: &mut Ctx) {
             }
         }
     }
-    let results = convert_all(&ctx.doc, &jobs, &masks, lossy, lossless);
+    let results = convert_all(&ctx.doc, &jobs, &masks, lossy, lossless, ctx.opts.max_image_bytes);
     let (mut count, mut saved) = (0usize, 0usize);
     let mut worst = Similarity { ssim: 1.0, psnr: f64::INFINITY };
     for (id, old_len, outcome) in results {
@@ -140,7 +197,9 @@ fn mask_streams(doc: &Document) -> BTreeSet<ObjectId> {
 }
 
 /// Work through `jobs` on all cores; results in the order of `jobs`.
-fn convert_all(doc: &Document, jobs: &[ObjectId], masks: &BTreeSet<ObjectId>, lossy: bool, lossless: bool) -> Vec<(ObjectId, usize, Outcome)> {
+/// `limit`: see [`Options::max_image_bytes`](crate::Options::max_image_bytes).
+fn convert_all(doc: &Document, jobs: &[ObjectId], masks: &BTreeSet<ObjectId>, lossy: bool, lossless: bool, limit: usize) -> Vec<(ObjectId, usize, Outcome)> {
+    let memory = Memory::new(limit);
     let next = AtomicUsize::new(0);
     let done: Mutex<Vec<(usize, ObjectId, usize, Outcome)>> = Mutex::new(Vec::new());
     let mut threads = 1;
@@ -153,7 +212,7 @@ fn convert_all(doc: &Document, jobs: &[ObjectId], masks: &BTreeSet<ObjectId>, lo
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let Some(id) = jobs.get(i) else { break };
                 let Some(Object::Stream(s)) = doc.objects.get(id) else { continue };
-                if let Some(outcome) = convert(doc, s, lossy && !masks.contains(id), lossless) {
+                if let Some(outcome) = convert(doc, s, lossy && !masks.contains(id), lossless, &memory) {
                     if let Ok(mut d) = done.lock() {
                         d.push((i, *id, s.content.len(), outcome));
                     }
@@ -171,7 +230,7 @@ fn convert_all(doc: &Document, jobs: &[ObjectId], masks: &BTreeSet<ObjectId>, lo
 }
 
 /// A smaller stream for image `s`, when there is one.
-fn convert(doc: &Document, s: &Stream, lossy: bool, lossless: bool) -> Option<Outcome> {
+fn convert(doc: &Document, s: &Stream, lossy: bool, lossless: bool, memory: &Memory) -> Option<Outcome> {
     let (comps, plain) = components(doc, s.dict.get(b"ColorSpace").ok()?)?;
     if !matches!(s.dict.get(b"BitsPerComponent"), Ok(Object::Integer(8))) {
         return None;
@@ -181,8 +240,44 @@ fn convert(doc: &Document, s: &Stream, lossy: bool, lossless: bool) -> Option<Ou
     if width < MIN_EDGE || height < MIN_EDGE {
         return None;
     }
-    let mut data = samples(s)?;
     let expected = width.checked_mul(height)?.checked_mul(comps)?;
+    let size = Size { width, height, comps };
+    if expected > memory.limit {
+        return if lossless { convert_by_rows(s, size) } else { None };
+    }
+    // Samples, their brightness, a JPEG and what it decodes to: up to
+    // four times the samples at once.
+    let held = memory.take(expected.saturating_mul(4));
+    let outcome = convert_in_memory(s, size, lossy && plain, lossless);
+    memory.give(held);
+    outcome
+}
+
+/// Pixel dimensions of an image.
+#[derive(Clone, Copy)]
+struct Size {
+    width: usize,
+    height: usize,
+    comps: usize,
+}
+
+/// The largest stream a lossless repack of `s` may have to be used. A
+/// Flate stream is only replaced for a real gain; everything else (LZW,
+/// RunLength, uncompressed) as soon as the new one is smaller.
+fn pack_limit(s: &Stream) -> usize {
+    let old = s.content.len();
+    if matches!(s.dict.get(b"Filter"), Ok(Object::Name(n)) if n == b"FlateDecode") {
+        (old as f64 * PACK_GAIN) as usize
+    } else {
+        old
+    }
+}
+
+/// The usual way: decode the image, look at it, store it as JPEG or pack it.
+fn convert_in_memory(s: &Stream, size: Size, lossy: bool, lossless: bool) -> Option<Outcome> {
+    let Size { width, height, comps } = size;
+    let expected = width * height * comps;
+    let mut data = samples(s)?;
     // (Up to two bytes of line end after the data are common.)
     if data.len() < expected || data.len() > expected + 2 {
         return None;
@@ -190,7 +285,7 @@ fn convert(doc: &Document, s: &Stream, lossy: bool, lossless: bool) -> Option<Ou
     data.truncate(expected);
     let raw = Raw { width, height, comps, data };
     let old = s.content.len();
-    if lossy && plain && !s.dict.has(b"SMask") && !s.dict.has(b"Mask") && default_decode(&s.dict) && photo_like(&raw) {
+    if lossy && !s.dict.has(b"SMask") && !s.dict.has(b"Mask") && default_decode(&s.dict) && photo_like(&raw) {
         if let Some((jpeg, similarity)) = best_jpeg(&raw, (old as f64 * JPEG_GAIN) as usize) {
             let mut dict = s.dict.clone();
             dict.set("Filter", Object::Name(b"DCTDecode".to_vec()));
@@ -201,16 +296,134 @@ fn convert(doc: &Document, s: &Stream, lossy: bool, lossless: bool) -> Option<Ou
         }
     }
     if lossless {
-        let packed = pack(&raw, s.dict.clone());
-        // A Flate stream is only replaced for a real gain; everything
-        // else (LZW, RunLength, uncompressed) as soon as this is smaller.
-        let flate = matches!(s.dict.get(b"Filter"), Ok(Object::Name(n)) if n == b"FlateDecode");
-        let limit = if flate { (old as f64 * PACK_GAIN) as usize } else { old };
-        if packed.content.len() <= limit {
+        let packed = pack(&raw, s.dict.clone())?;
+        if packed.content.len() <= pack_limit(s) {
             return Some(Outcome::Packed(packed));
         }
     }
     None
+}
+
+/// An image too large to hold: its rows are decoded one after the other
+/// and packed as they come. Without loss, whatever the image shows.
+fn convert_by_rows(s: &Stream, size: Size) -> Option<Outcome> {
+    let mut rows = Rows::new(s, size)?;
+    let packed = pack_rows(&mut |line| rows.next(line), size, s.dict.clone())?;
+    if rows.at_end() && packed.content.len() <= pack_limit(s) {
+        return Some(Outcome::Packed(packed));
+    }
+    None
+}
+
+/// The rows of an image that is stored uncompressed or with Flate, with or
+/// without a predictor, read one at a time.
+struct Rows<'a> {
+    source: Box<dyn Read + 'a>,
+    /// 1: none, 2: TIFF, 10 and above: PNG.
+    predictor: i64,
+    comps: usize,
+    above: Vec<u8>,
+}
+
+impl<'a> Rows<'a> {
+    /// `None` for any other way of storing an image (it is left alone).
+    fn new(s: &'a Stream, size: Size) -> Option<Rows<'a>> {
+        let filter = match s.dict.get(b"Filter") {
+            Err(_) => None,
+            Ok(Object::Name(n)) => Some(n.as_slice()),
+            Ok(Object::Array(a)) if a.len() == 1 => Some(a[0].as_name().ok()?),
+            Ok(_) => return None,
+        };
+        let mut predictor = 1;
+        let source: Box<dyn Read + 'a> = match filter {
+            None => Box::new(&s.content[..]),
+            Some(b"FlateDecode") => {
+                let parms = match s.dict.get(b"DecodeParms") {
+                    Ok(Object::Dictionary(d)) => Some(d),
+                    Ok(Object::Array(a)) => match a.first() {
+                        Some(Object::Dictionary(d)) => Some(d),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(p) = parms {
+                    if let Some(p) = util::take_predictor(&mut p.clone()) {
+                        if p.bits != 8 || p.colors != size.comps || p.columns != size.width || !matches!(p.kind, 2 | 10..=15) {
+                            return None;
+                        }
+                        predictor = p.kind;
+                    }
+                }
+                Box::new(flate2::read::ZlibDecoder::new(&s.content[..]))
+            }
+            Some(_) => return None,
+        };
+        Some(Rows { source, predictor, comps: size.comps, above: vec![0; size.width * size.comps] })
+    }
+
+    /// The next row into `line`; `false` when the data ends or is invalid.
+    fn next(&mut self, line: &mut [u8]) -> bool {
+        let n = self.comps;
+        let mut filter = [0u8];
+        if self.predictor >= 10 && self.source.read_exact(&mut filter).is_err() {
+            return false;
+        }
+        if self.source.read_exact(line).is_err() {
+            return false;
+        }
+        if self.predictor == 2 {
+            filter[0] = 1;
+        }
+        let above = &self.above;
+        match filter[0] {
+            0 => {}
+            1 => {
+                for i in n..line.len() {
+                    line[i] = line[i].wrapping_add(line[i - n]);
+                }
+            }
+            2 => {
+                for (v, a) in line.iter_mut().zip(above) {
+                    *v = v.wrapping_add(*a);
+                }
+            }
+            3 => {
+                for i in 0..n {
+                    line[i] = line[i].wrapping_add(above[i] / 2);
+                }
+                for i in n..line.len() {
+                    line[i] = line[i].wrapping_add(((line[i - n] as u16 + above[i] as u16) / 2) as u8);
+                }
+            }
+            4 => {
+                for i in 0..n {
+                    line[i] = line[i].wrapping_add(above[i]);
+                }
+                for i in n..line.len() {
+                    line[i] = line[i].wrapping_add(util::paeth(line[i - n], above[i], above[i - n]));
+                }
+            }
+            _ => return false,
+        }
+        if self.predictor >= 10 {
+            self.above.copy_from_slice(line);
+        }
+        true
+    }
+
+    /// Nothing follows the rows read so far (up to two bytes of line end
+    /// are common).
+    fn at_end(&mut self) -> bool {
+        let mut rest = [0u8; 3];
+        let mut n = 0;
+        while n < rest.len() {
+            match self.source.read(&mut rest[n..]) {
+                Ok(0) | Err(_) => break,
+                Ok(more) => n += more,
+            }
+        }
+        n <= 2
+    }
 }
 
 /// Components per pixel of a colour space, and whether the samples are
@@ -284,6 +497,7 @@ fn samples(s: &Stream) -> Option<Vec<u8>> {
 fn photo_like(raw: &Raw) -> bool {
     let (w, h, n) = (raw.width, raw.height, raw.comps);
     let mut flat = 0usize;
+    let drawn = FLAT_SHARE * ((w - 1) * (h - 1)) as f64;
     for y in 0..h - 1 {
         let line = &raw.data[y * w * n..(y + 1) * w * n];
         let below = &raw.data[(y + 1) * w * n..(y + 2) * w * n];
@@ -291,9 +505,10 @@ fn photo_like(raw: &Raw) -> bool {
             let p = &line[x * n..(x + 1) * n];
             flat += (p == &line[(x + 1) * n..(x + 2) * n] && p == &below[x * n..(x + 1) * n]) as usize;
         }
-    }
-    if flat as f64 >= FLAT_SHARE * ((w - 1) * (h - 1)) as f64 {
-        return false;
+        // (The rest of the image cannot change that any more.)
+        if flat as f64 >= drawn {
+            return false;
+        }
     }
     let limit = if n == 1 { PALETTE_GREYS } else { PALETTE_COLOURS };
     let mut colours = BTreeSet::new();
@@ -493,17 +708,126 @@ fn png_filter(filter: u8, line: &[u8], above: &[u8], n: usize, out: &mut [u8]) -
     cost
 }
 
+/// [`pack_rows`] for samples that are in memory.
+fn pack(raw: &Raw, dict: Dictionary) -> Option<Stream> {
+    let mut rows = raw.data.chunks_exact(raw.width * raw.comps);
+    let mut next = |line: &mut [u8]| match rows.next() {
+        Some(row) => {
+            line.copy_from_slice(row);
+            true
+        }
+        None => false,
+    };
+    pack_rows(&mut next, Size { width: raw.width, height: raw.height, comps: raw.comps }, dict)
+}
+
 /// Flate with the PNG predictor, the filter of every row chosen by the
 /// usual rule (smallest sum of absolute differences).
-fn pack(raw: &Raw, mut dict: Dictionary) -> Stream {
-    let (n, row) = (raw.comps, raw.width * raw.comps);
-    let mut out = Vec::with_capacity(raw.data.len() + raw.height);
+///
+/// `next` fills in one row of samples per call, from the top; `None` when
+/// it runs out before the image is complete. The rows are taken in bands
+/// of about [`BAND`] bytes, and with more than one band each is filtered
+/// and compressed on its own core. Every band ends on a byte boundary
+/// (a sync flush), so the bands one after the other are one Flate stream.
+/// At no time more than one band per core is held, however large the image.
+fn pack_rows(next: &mut dyn FnMut(&mut [u8]) -> bool, size: Size, mut dict: Dictionary) -> Option<Stream> {
+    let (n, row) = (size.comps, size.width * size.comps);
+    let per_band = (BAND / row).max(1);
+    let bands = size.height.div_ceil(per_band);
+    let mut threads = 0;
+    if bands > 1 {
+        threads = 1;
+        if let Ok(cores) = std::thread::available_parallelism() {
+            threads = cores.get().min(8).min(bands);
+        }
+    }
+    // (band number, the row above the band, the rows of the band)
+    let (jobs, queue) = std::sync::mpsc::sync_channel::<(usize, Vec<u8>, Vec<u8>)>(0);
+    let queue = Mutex::new(queue);
+    let done: Mutex<Vec<(usize, Option<Band>)>> = Mutex::new(Vec::new());
+    let mut complete = true;
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let job = match queue.lock() {
+                    Ok(q) => q.recv(),
+                    Err(_) => break,
+                };
+                let Ok((i, above, band)) = job else { break };
+                let packed = pack_band(&above, &band, row, n, i + 1 == bands);
+                if let Ok(mut d) = done.lock() {
+                    d.push((i, packed));
+                }
+            });
+        }
+        let mut above = vec![0u8; row];
+        for i in 0..bands {
+            let rows = per_band.min(size.height - i * per_band);
+            let mut band = vec![0u8; rows * row];
+            for line in band.chunks_exact_mut(row) {
+                complete = complete && next(line);
+            }
+            if !complete {
+                break;
+            }
+            let last = band[band.len() - row..].to_vec();
+            let above = std::mem::replace(&mut above, last);
+            if threads == 0 {
+                let packed = pack_band(&above, &band, row, n, true);
+                if let Ok(mut d) = done.lock() {
+                    d.push((i, packed));
+                }
+            } else if jobs.send((i, above, band)).is_err() {
+                break;
+            }
+        }
+        drop(jobs);
+    });
+    let mut parts = done.into_inner().ok()?;
+    if !complete || parts.len() != bands {
+        return None;
+    }
+    parts.sort_by_key(|p| p.0);
+    // zlib: header (deflate, 32 KiB window, default level), data, Adler-32.
+    let mut out = vec![0x78, 0x9C];
+    let mut check = 1u32;
+    for (_, part) in parts {
+        let part = part?;
+        out.extend_from_slice(&part.data);
+        check = adler_combine(check, part.check, part.len);
+    }
+    out.extend_from_slice(&check.to_be_bytes());
+    let mut parms = Dictionary::new();
+    parms.set("Predictor", 15);
+    parms.set("Colors", n as i64);
+    parms.set("BitsPerComponent", 8);
+    parms.set("Columns", size.width as i64);
+    dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
+    dict.set("DecodeParms", Object::Dictionary(parms));
+    let mut stream = Stream::new(dict, out);
+    stream.allows_compression = false;
+    Some(stream)
+}
+
+/// A band of rows, filtered and compressed.
+struct Band {
+    /// Raw deflate data, ending on a byte boundary.
+    data: Vec<u8>,
+    /// Adler-32 and length of the filtered rows.
+    check: u32,
+    len: usize,
+}
+
+/// Filter and compress the rows in `band`; `above` is the row before the
+/// first one (zeros at the top of the image).
+fn pack_band(above: &[u8], band: &[u8], row: usize, n: usize, last: bool) -> Option<Band> {
+    let mut deflate = Compress::new(Compression::default(), false);
+    let mut data = Vec::new();
+    let mut check = adler2::Adler32::new();
     let mut candidate = vec![0u8; row];
     let mut best = vec![0u8; row];
-    let zero = vec![0u8; row];
-    for y in 0..raw.height {
-        let line = &raw.data[y * row..(y + 1) * row];
-        let above = if y > 0 { &raw.data[(y - 1) * row..y * row] } else { &zero[..] };
+    let mut above = above;
+    for line in band.chunks_exact(row) {
         let (mut best_filter, mut best_cost) = (0u8, u64::MAX);
         // Up and Sub first: on drawn images most rows repeat the row
         // above or are one colour, and a filter that leaves only zeros
@@ -519,17 +843,47 @@ fn pack(raw: &Raw, mut dict: Dictionary) -> Stream {
                 break;
             }
         }
-        out.push(best_filter);
-        out.extend_from_slice(&best);
+        for piece in [&[best_filter][..], &best[..]] {
+            check.write_slice(piece);
+            deflate_into(&mut deflate, piece, &mut data, FlushCompress::None)?;
+        }
+        above = line;
     }
-    let mut parms = Dictionary::new();
-    parms.set("Predictor", 15);
-    parms.set("Colors", n as i64);
-    parms.set("BitsPerComponent", 8);
-    parms.set("Columns", raw.width as i64);
-    let mut stream = util::flate_stream(std::mem::take(&mut dict), &out);
-    stream.dict.set("DecodeParms", Object::Dictionary(parms));
-    stream
+    deflate_into(&mut deflate, &[], &mut data, if last { FlushCompress::Finish } else { FlushCompress::Sync })?;
+    data.shrink_to_fit();
+    Some(Band { data, check: check.checksum(), len: band.len() + band.len() / row })
+}
+
+/// Compress all of `input` onto the end of `out` and carry out `flush`.
+fn deflate_into(deflate: &mut Compress, mut input: &[u8], out: &mut Vec<u8>, flush: FlushCompress) -> Option<()> {
+    loop {
+        if out.capacity() - out.len() < 1024 {
+            out.reserve(out.len().max(4096));
+        }
+        let before = deflate.total_in();
+        let status = deflate.compress_vec(input, out, flush).ok()?;
+        input = &input[(deflate.total_in() - before) as usize..];
+        // A flush is complete when the compressor leaves room in `out`.
+        let finished = match flush {
+            FlushCompress::Finish => status == Status::StreamEnd,
+            _ => input.is_empty() && out.len() < out.capacity(),
+        };
+        if finished {
+            return Some(());
+        }
+    }
+}
+
+/// The Adler-32 of two pieces of data one after the other, from the
+/// checksum of each and the length of the second (as zlib combines them).
+fn adler_combine(first: u32, second: u32, second_len: usize) -> u32 {
+    const BASE: u64 = 65521;
+    let rem = second_len as u64 % BASE;
+    let (a1, b1) = ((first & 0xFFFF) as u64, (first >> 16) as u64);
+    let (a2, b2) = ((second & 0xFFFF) as u64, (second >> 16) as u64);
+    let a = (a1 + a2 + BASE - 1) % BASE;
+    let b = (rem * a1 + b1 + b2 + BASE - rem) % BASE;
+    (b << 16 | a) as u32
 }
 
 #[cfg(test)]
@@ -673,9 +1027,9 @@ mod tests {
         let doc = Document::with_version("1.7");
         let photo = common::photo(W, H, 3);
         let good = flate_image(name("DeviceRGB"), &photo);
-        assert!(matches!(convert(&doc, &good, true, true), Some(Outcome::Jpeg(..))));
-        assert!(matches!(convert(&doc, &good, false, true), Some(Outcome::Packed(_))));
-        assert!(convert(&doc, &good, false, false).is_none());
+        assert!(matches!(convert(&doc, &good, true, true, &Memory::new(LARGE)), Some(Outcome::Jpeg(..))));
+        assert!(matches!(convert(&doc, &good, false, true, &Memory::new(LARGE)), Some(Outcome::Packed(_))));
+        assert!(convert(&doc, &good, false, false, &Memory::new(LARGE)).is_none());
 
         let mut cases: Vec<(&str, Stream)> = Vec::new();
         let mut s = good.clone();
@@ -712,17 +1066,17 @@ mod tests {
         s.dict.set("Filter", vec![Object::Integer(7)]);
         cases.push(("odd filter in a chain", s));
         for (why, s) in &cases {
-            assert!(convert(&doc, s, true, true).is_none(), "{why}");
+            assert!(convert(&doc, s, true, true, &Memory::new(LARGE)).is_none(), "{why}");
         }
 
         // Two bytes of line end after the samples are fine.
         let mut padded = photo.clone();
         padded.extend_from_slice(b"\r\n");
-        assert!(matches!(convert(&doc, &flate_image(name("DeviceRGB"), &padded), true, true), Some(Outcome::Jpeg(..))));
+        assert!(matches!(convert(&doc, &flate_image(name("DeviceRGB"), &padded), true, true, &Memory::new(LARGE)), Some(Outcome::Jpeg(..))));
         // An ASCII85 chain around Flate is lossless too.
         let mut chained = good.clone();
         chained.dict.set("Filter", vec![name("FlateDecode")]);
-        assert!(matches!(convert(&doc, &chained, true, true), Some(Outcome::Jpeg(..))));
+        assert!(matches!(convert(&doc, &chained, true, true, &Memory::new(LARGE)), Some(Outcome::Jpeg(..))));
 
         // Pure noise: a JPEG that is close enough is not smaller, and no
         // predictor helps either.
@@ -737,7 +1091,7 @@ mod tests {
         let (jpeg, similarity) = best_jpeg(&raw, usize::MAX).expect("the highest quality is close enough");
         assert!(similarity.ssim >= SSIM_MIN && similarity.psnr >= PSNR_MIN && jpeg.len() > noise.len() * 4 / 5, "{similarity:?} {}", jpeg.len());
         assert!(best_jpeg(&raw, 100).is_none(), "the limit ends the search");
-        assert!(convert(&doc, &flate_image(name("DeviceRGB"), &noise), true, true).is_none());
+        assert!(convert(&doc, &flate_image(name("DeviceRGB"), &noise), true, true, &Memory::new(LARGE)).is_none());
         // Not photographs: flat, or few colours.
         let drawing = Raw { width: W, height: H, comps: 3, data: common::drawing(W, H) };
         assert!(!photo_like(&drawing));
@@ -809,16 +1163,146 @@ mod tests {
         let masks = mask_streams(&doc);
         assert_eq!(masks, BTreeSet::from([soft, stencil]));
 
-        assert!(convert_all(&doc, &[], &masks, true, true).is_empty());
+        assert!(convert_all(&doc, &[], &masks, true, true, LARGE).is_empty());
         // Jobs that are no stream are skipped; results keep the job order.
         let jobs = [plain, (9000, 0), stencil, a, b, soft];
-        let results = convert_all(&doc, &jobs, &masks, true, true);
+        let results = convert_all(&doc, &jobs, &masks, true, true, LARGE);
         let ids: Vec<ObjectId> = results.iter().map(|r| r.0).collect();
         assert_eq!(ids, [plain, stencil, a, b, soft]);
         for (id, old, outcome) in &results {
             assert_eq!(*old, doc.objects.get(id).unwrap().as_stream().unwrap().content.len());
             // Only the image that neither is a mask nor has one becomes a JPEG.
             assert_eq!(matches!(outcome, Outcome::Jpeg(..)), *id == plain, "{id:?}");
+        }
+    }
+
+    /// What a zlib reader makes of a packed stream: the filtered rows, with
+    /// the checksum verified.
+    fn inflate(s: &Stream) -> Vec<u8> {
+        let mut out = Vec::new();
+        flate2::read::ZlibDecoder::new(&s.content[..]).read_to_end(&mut out).expect("a valid zlib stream");
+        out
+    }
+
+    /// Images above the memory limit are decoded and packed row by row, in
+    /// bands on several cores, and keep every sample.
+    #[test]
+    fn large_images_are_packed_row_by_row() {
+        let doc = Document::with_version("1.7");
+        // Three bands (the last one short): a drawing with a photograph
+        // across the top, so that every PNG filter is chosen somewhere.
+        let (w, h) = (1500usize, 2000usize);
+        assert_eq!((h * w * 3).div_ceil(BAND / (w * 3) * (w * 3)), 3);
+        let mut data = common::drawing(w, h);
+        data[..w * 3 * 200].copy_from_slice(&common::photo(w, 200, 3));
+        let size = Size { width: w, height: h, comps: 3 };
+        let small = Memory::new(1 << 20);
+        let image = |extra: Dictionary, content: Vec<u8>| common::image_stream(w, h, name("DeviceRGB"), extra, content);
+        let zlib = |bytes: &[u8]| util::flate(bytes);
+        let png = dictionary! { "Predictor" => 15, "Colors" => 3, "Columns" => w as i64 };
+        let mut tiff = data.clone();
+        for line in tiff.chunks_mut(w * 3) {
+            for i in (3..line.len()).rev() {
+                line[i] = line[i].wrapping_sub(line[i - 3]);
+            }
+        }
+        let mut padded = data.clone();
+        padded.extend_from_slice(b"\r\n");
+        let stored: Vec<(&str, Stream)> = vec![
+            ("uncompressed, with a line end", image(Dictionary::new(), padded)),
+            ("Flate", image(dictionary! { "Filter" => "FlateDecode" }, zlib(&data))),
+            ("Flate in a chain of one, parameters without predictor", image(dictionary! { "Filter" => vec![name("FlateDecode")], "DecodeParms" => vec![Object::Dictionary(dictionary! { "Columns" => 1 })] }, zlib(&data))),
+            ("PNG predictor, all five filters", image(dictionary! { "Filter" => "FlateDecode", "DecodeParms" => png.clone() }, zlib(&common::png_predict(&data, w * 3, 3)))),
+            ("TIFF predictor", image(dictionary! { "Filter" => "FlateDecode", "DecodeParms" => vec![Object::Dictionary(dictionary! { "Predictor" => 2, "Colors" => 3, "Columns" => w as i64 })] }, zlib(&tiff))),
+        ];
+        let mut packed_once = None;
+        for (how, s) in &stored {
+            let mut rows = Rows::new(s, size).expect(how);
+            let packed = pack_rows(&mut |line| rows.next(line), size, s.dict.clone()).expect(how);
+            assert!(rows.at_end(), "{how}");
+            assert_eq!(inflate(&packed).len(), (w * 3 + 1) * h, "{how}");
+            assert_eq!(samples(&packed).expect(how), data, "{how}");
+            assert_eq!(filter(&packed), b"FlateDecode");
+            // The same bytes as from the samples in memory.
+            let in_memory = pack(&Raw { width: w, height: h, comps: 3, data: data.clone() }, s.dict.clone()).unwrap();
+            assert_eq!(packed.content, in_memory.content, "{how}");
+            packed_once = Some(packed);
+        }
+        // Through the front door: above the limit an image is packed, never
+        // made a JPEG, and left alone when only JPEG was asked for.
+        assert!(matches!(convert(&doc, &stored[0].1, true, true, &small), Some(Outcome::Packed(p)) if samples(&p).unwrap() == data));
+        assert!(convert(&doc, &stored[0].1, true, false, &small).is_none());
+        let photo = image_of(common::photo(W, H, 3));
+        assert!(matches!(convert(&doc, &photo, true, true, &Memory::new(LARGE)), Some(Outcome::Jpeg(..))));
+        assert!(matches!(convert(&doc, &photo, true, true, &Memory::new(W * H * 3 - 1)), Some(Outcome::Packed(_))));
+        // What is packed already does not get smaller again.
+        assert!(convert(&doc, &packed_once.unwrap(), true, true, &small).is_none());
+
+        // Stored in a way that cannot be read row by row, or damaged: left alone.
+        let mut cases: Vec<(&str, Stream)> = Vec::new();
+        cases.push(("LZW", image(dictionary! { "Filter" => "LZWDecode" }, common::lzw_encode(&data[..w * 3 * 40]))));
+        cases.push(("two filters", image(dictionary! { "Filter" => vec![name("ASCII85Decode"), name("FlateDecode")] }, zlib(&data))));
+        cases.push(("odd filter", image(dictionary! { "Filter" => 7 }, zlib(&data))));
+        cases.push(("odd filter in a chain", image(dictionary! { "Filter" => vec![Object::Integer(7)] }, zlib(&data))));
+        cases.push(("predictor for other rows", image(dictionary! { "Filter" => "FlateDecode", "DecodeParms" => dictionary! { "Predictor" => 15, "Colors" => 3, "Columns" => w as i64 + 1 } }, zlib(&data))));
+        cases.push(("unknown predictor", image(dictionary! { "Filter" => "FlateDecode", "DecodeParms" => dictionary! { "Predictor" => 3, "Colors" => 3, "Columns" => w as i64 } }, zlib(&data))));
+        cases.push(("too short", image(Dictionary::new(), data[..data.len() - 1].to_vec())));
+        let mut long = data.clone();
+        long.extend_from_slice(b"abc");
+        cases.push(("too long", image(Dictionary::new(), long)));
+        let mut odd = common::png_predict(&data, w * 3, 3);
+        odd[(w * 3 + 1) * 7] = 9;
+        cases.push(("invalid PNG filter", image(dictionary! { "Filter" => "FlateDecode", "DecodeParms" => png.clone() }, zlib(&odd))));
+        cases.push(("PNG rows end early", image(dictionary! { "Filter" => "FlateDecode", "DecodeParms" => png }, zlib(&common::png_predict(&data[..w * 3 * 50], w * 3, 3)))));
+        let mut broken = zlib(&data);
+        broken.truncate(broken.len() / 2);
+        cases.push(("Flate data cut off", image(dictionary! { "Filter" => "FlateDecode" }, broken)));
+        for (why, s) in &cases {
+            assert!(convert(&doc, s, true, true, &small).is_none(), "{why}");
+        }
+    }
+
+    fn image_of(samples: Vec<u8>) -> Stream {
+        common::image_stream(W, H, name("DeviceRGB"), Dictionary::new(), samples)
+    }
+
+    #[test]
+    fn memory_is_shared_between_the_threads() {
+        let memory = Memory::new(100);
+        // Never more than everything: the largest image runs alone.
+        assert_eq!(memory.take(1000), 400);
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                let got = memory.take(50);
+                memory.give(got);
+                got
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert!(!waiting.is_finished(), "nothing is free yet");
+            memory.give(400);
+            assert_eq!(waiting.join().unwrap(), 50);
+        });
+        assert_eq!(*memory.free.lock().unwrap(), 400);
+        // Several images in a small budget still all get their turn.
+        let mut doc = Document::with_version("1.7");
+        let mut jobs = Vec::new();
+        for _ in 0..6 {
+            jobs.push(doc.add_object(image_of(common::photo(W, H, 3))));
+        }
+        assert_eq!(convert_all(&doc, &jobs, &BTreeSet::new(), true, true, W * H * 3).len(), 6);
+    }
+
+    #[test]
+    fn checksums_of_bands_combine() {
+        let data = common::photo(400, 300, 1);
+        let sum = |bytes: &[u8]| {
+            let mut a = adler2::Adler32::new();
+            a.write_slice(bytes);
+            a.checksum()
+        };
+        for cut in [0, 1, 5000, 70_000, data.len()] {
+            let (first, second) = data.split_at(cut);
+            assert_eq!(adler_combine(sum(first), sum(second), second.len()), sum(&data), "{cut}");
         }
     }
 
@@ -853,14 +1337,14 @@ mod tests {
     fn packing_keeps_every_sample() {
         for comps in [1usize, 3, 4] {
             let data = common::photo(W, H, comps);
-            let packed = pack(&Raw { width: W, height: H, comps, data: data.clone() }, dictionary! { "Subtype" => "Image" });
+            let packed = pack(&Raw { width: W, height: H, comps, data: data.clone() }, dictionary! { "Subtype" => "Image" }).unwrap();
             assert_eq!(filter(&packed), b"FlateDecode");
             assert_eq!(samples(&packed).unwrap(), data);
             assert!(packed.content.len() < util::flate(&data).len(), "{comps} channels");
         }
         // Flat rows take the filter that costs nothing.
         let flat = vec![200u8; W * H];
-        let packed = pack(&Raw { width: W, height: H, comps: 1, data: flat.clone() }, Dictionary::new());
+        let packed = pack(&Raw { width: W, height: H, comps: 1, data: flat.clone() }, Dictionary::new()).unwrap();
         assert_eq!(samples(&packed).unwrap(), flat);
     }
 }

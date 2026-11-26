@@ -42,6 +42,13 @@ PDF/A without Ghostscript, at every level (#3).
     33 700); such coordinates are written as the nearest whole number, which
     moves a line by less than 0.02 mm on that plan. Later parts have no such
     limit and stay untouched.
+  - Page-size images (a scanned or rendered plan: a few megabytes in the
+    file, gigabytes of samples) are never held in memory as a whole. Above
+    512 MiB of samples an image is decoded row by row and packed in bands
+    on all cores. Three such plans of 2.4 to 3.0 GB of samples take 2.0 to
+    2.6 s and 64 to 76 MiB each, where Ghostscript takes 18 to 23 s and
+    does not make them smaller (here: 45 % smaller, every sample the
+    same). Images of that size are not stored as JPEG.
   - Clear errors instead of a non-conformant file: a password-protected
     input, PDF/A-4f without an attachment.
   - Smaller files, without loss: data other programs store for their own
@@ -74,7 +81,7 @@ PDF/A without Ghostscript, at every level (#3).
   eleven levels: 302 conversions pass, 39 are the expected refusals
   (password-protected input, 4f without an attachment), none fails.
   `just pdfa-coverage` reports the test coverage (every function runs,
-  94.5 % of the lines), `just pdfa-bench` compares speed, size and
+  94.7 % of the lines), `just pdfa-bench` compares speed, size and
   conformance with Ghostscript: on the test files and on 17 documents
   shipped with Ghostscript the built-in converter is 10 to 14 times faster,
   and every output validates. Its files are still larger (7.8 MiB against
