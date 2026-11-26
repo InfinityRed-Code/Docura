@@ -172,7 +172,9 @@ pub struct AnnotationInfo {
     pub page: u32,
     /// PDF /Subtype name, e.g. "Highlight", "Text", "Square", "Ink", "FreeText", "Stamp".
     pub subtype: String,
-    /// Bounding rect in our top-origin RectPt convention.
+    /// Bounding rect in our top-origin RectPt convention. For a sticky note
+    /// ("Text") the square its upright icon is shown in, pinned at the
+    /// top-left corner; a view rotation turns the pin but not the icon.
     pub rect_pt: RectPt,
     /// RGB color in 0..1 if /C is present.
     pub color: Option<[f32; 3]>,

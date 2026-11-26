@@ -10,6 +10,7 @@ import { dom, setStatus } from "./dom";
 import { refreshIcons } from "./icons";
 import { applyDocSnapshot, markDirty, refreshUndoUi } from "./doc";
 import { effectiveRotation, goToPage, navigateTo, rotateRectToSlot, setWheelZoomMode } from "./viewer";
+import { noteBoxInSlot, noteRectInPage } from "./note-geom";
 
 // ---------- Annotation tools (markup + shapes) ----------
 
@@ -136,7 +137,8 @@ function annotationAtPagePoint(pageIdx: number, px: number, py: number): Annotat
   let best: AnnotationInfo | null = null;
   for (const a of state.cachedAnnotations) {
     if (a.page !== pageIdx) continue;
-    const r = a.rect_pt;
+    // A note icon stays upright in a rotated view: hit what is shown.
+    const r = a.subtype === "Text" ? noteRectInPage(a.rect_pt, effectiveRotation(pageIdx)) : a.rect_pt;
     const x0 = Math.min(r.x0, r.x1), x1 = Math.max(r.x0, r.x1);
     const y0 = Math.min(r.y0, r.y1), y1 = Math.max(r.y0, r.y1);
     if (px >= x0 && px <= x1 && py >= y0 && py <= y1) best = a;
@@ -864,7 +866,8 @@ export function renderNoteHotspotsFor(idx: number) {
   const rot = effectiveRotation(idx);
   for (const a of state.cachedAnnotations) {
     if (a.subtype !== "Text" || a.page !== idx) continue;
-    const box = rotateRectToSlot(a.rect_pt, rot, sz, slot.img.width, slot.img.height);
+    // The icon is drawn upright at its pinned corner, whatever the rotation.
+    const box = noteBoxInSlot(a.rect_pt, rot, sz, slot.img.width, slot.img.height);
     if (box.width <= 0 || box.height <= 0) continue;
 
     const popup = buildNotePopup(a);

@@ -34,6 +34,7 @@ use pdfium_render::prelude::*;
 #[cfg(windows)]
 mod print_win;
 mod fontmatch;
+mod notes;
 mod proxy;
 mod textedit;
 
@@ -171,6 +172,9 @@ struct DocEntry {
     sizes: Vec<Option<PageSize>>,
     // Outline built lazily on first request. `None` = not yet walked.
     outline: Option<Vec<OutlineNode>>,
+    // Colours of the sticky notes PDFium reports none for; read from the
+    // file when the first such note is drawn (see `notes`).
+    note_colors: std::cell::OnceCell<notes::NoteColors>,
 }
 
 impl Drop for DocEntry {
@@ -188,6 +192,7 @@ impl Drop for DocEntry {
 
 struct Inner {
     docs: HashMap<DocumentId, DocEntry>,
+    note_icons: notes::IconCache,
 }
 
 // SAFETY: All access to `Inner` (and therefore to any `PdfDocument` it
@@ -244,7 +249,21 @@ impl DocEntry {
             page_count,
             sizes: vec![None; page_count as usize],
             outline: None,
+            note_colors: std::cell::OnceCell::new(),
         })
+    }
+
+    /// The file as opened (not a render proxy).
+    fn file_bytes(&self) -> &[u8] {
+        match &self.orig {
+            Some(orig) => orig,
+            // SAFETY: `bytes_raw` is live until the entry is dropped.
+            None => unsafe { &*self.bytes_raw },
+        }
+    }
+
+    fn note_colors(&self) -> &notes::NoteColors {
+        self.note_colors.get_or_init(|| notes::read_note_colors(self.file_bytes()))
     }
 
     /// Document to render at `zoom`: above the downsampled proxy's
@@ -272,6 +291,7 @@ impl PdfiumEngine {
         Ok(Self {
             inner: Mutex::new(Inner {
                 docs: HashMap::new(),
+                note_icons: notes::IconCache::default(),
             }),
         })
     }
@@ -405,12 +425,10 @@ impl PdfEngine for PdfiumEngine {
     fn render(&self, req: RenderRequest) -> CoreResult<RenderedPage> {
         proxy::full_speed();
         let t_lock = std::time::Instant::now();
-        let inner = self.inner.lock();
+        let mut inner = self.inner.lock();
         let lock_t = t_lock.elapsed();
-        let entry = inner
-            .docs
-            .get(&req.document)
-            .ok_or(CoreError::DocumentNotLoaded)?;
+        let Inner { docs, note_icons } = &mut *inner;
+        let entry = docs.get(&req.document).ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.render_doc(req.zoom.0).ok_or(CoreError::DocumentNotLoaded)?;
         let t_page = std::time::Instant::now();
         let page = document
@@ -426,11 +444,29 @@ impl PdfEngine for PdfiumEngine {
         };
         let config = PdfRenderConfig::new()
             .scale_page_by_factor(req.zoom.0)
-            .rotate(rot, true);
+            .rotate(rot, true)
+            // The note icons are drawn into the same bitmap, in this order.
+            .set_reverse_byte_order(true);
         let t_render = std::time::Instant::now();
+        // Sticky-note icons are painted here, upright (see `notes`).
+        let bindings = document.bindings();
+        let page_handle = bindings.get_handle_from_page(&page);
+        let sticky =
+            notes::HiddenNotes::hide(bindings, page_handle, req.page.0, || entry.note_colors());
         let bitmap = page
             .render_with_config(&config)
             .map_err(|e| CoreError::Engine(format!("render: {e}")))?;
+        sticky.draw(
+            note_icons,
+            bindings.get_handle_from_bitmap(&bitmap),
+            page_handle,
+            (0, 0),
+            (bitmap.width() as i32, bitmap.height() as i32),
+            req.rotation as i32,
+            req.zoom.0,
+            true,
+        );
+        drop(sticky);
         let render_t = t_render.elapsed();
         let width = bitmap.width() as u32;
         let height = bitmap.height() as u32;
@@ -768,8 +804,9 @@ impl PdfEngine for PdfiumEngine {
             return Err(CoreError::Engine(format!("bad region size {width}x{height}")));
         }
         proxy::full_speed();
-        let inner = self.inner.lock();
-        let entry = inner.docs.get(&req.document).ok_or(CoreError::DocumentNotLoaded)?;
+        let mut inner = self.inner.lock();
+        let Inner { docs, note_icons } = &mut *inner;
+        let entry = docs.get(&req.document).ok_or(CoreError::DocumentNotLoaded)?;
         let document = entry.render_doc(req.zoom.0).ok_or(CoreError::DocumentNotLoaded)?;
         let t = std::time::Instant::now();
         let page = document
@@ -794,16 +831,13 @@ impl PdfEngine for PdfiumEngine {
         // Draw the whole page shifted by (-x, -y): PDFium clips to the
         // bitmap and skips page objects (image tiles) outside it entirely.
         const FPDF_ANNOT: i32 = 0x01;
-        bindings.FPDF_RenderPageBitmap(
-            bmp,
-            bindings.get_handle_from_page(&page),
-            -x,
-            -y,
-            full_w,
-            full_h,
-            rot,
-            FPDF_ANNOT,
-        );
+        let page_handle = bindings.get_handle_from_page(&page);
+        // Sticky-note icons are painted here, upright (see `notes`).
+        let sticky =
+            notes::HiddenNotes::hide(bindings, page_handle, req.page.0, || entry.note_colors());
+        bindings.FPDF_RenderPageBitmap(bmp, page_handle, -x, -y, full_w, full_h, rot, FPDF_ANNOT);
+        sticky.draw(note_icons, bmp, page_handle, (-x, -y), (full_w, full_h), rot, req.zoom.0, false);
+        drop(sticky);
         let rgba = bitmap.as_rgba_bytes();
         tracing::info!(
             "pdfium::render_region page={} zoom={:.2} at {x},{y} {width}x{height} of {full_w}x{full_h} level={:?} t={:?}",

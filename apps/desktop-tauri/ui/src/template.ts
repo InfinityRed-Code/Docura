@@ -1292,6 +1292,8 @@ export const CSS = `
   .textEdBar .teDone:hover { background:var(--accent-strong); }
   .noteLayer .noteHotspot { position:absolute; pointer-events:auto; cursor:pointer; border-radius:3px; }
   .noteLayer .noteHotspot:hover { outline:1px solid rgba(179,154,0,0.7); }
+  /* The eraser deletes the note under the pointer instead of opening it. */
+  body.eraseMode .noteLayer .noteHotspot { pointer-events:none; }
   .stickyNote { position:absolute; width:220px; z-index:20; background:#fff8b0; color:#000;
                 border:1px solid #b39a00; box-shadow:2px 2px 6px rgba(0,0,0,0.35);
                 font:13px "Segoe UI", Helvetica, Arial, sans-serif; pointer-events:auto; }
