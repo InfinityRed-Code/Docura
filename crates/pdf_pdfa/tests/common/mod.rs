@@ -133,6 +133,7 @@ pub fn corpus() -> Vec<Case> {
         Case { name: "edge_attachments", bytes: edge::edge_attachments(), expect: Expect::Ok },
         Case { name: "many_pages", bytes: edge::many_pages(), expect: Expect::Ok },
         Case { name: "images", bytes: images(), expect: Expect::Ok },
+        Case { name: "large_coordinates", bytes: large_coordinates(), expect: Expect::Ok },
     ];
     for c in &mut v {
         if c.expect == Expect::Ok && !matches!(c.name, "attachments" | "edge_attachments") {
@@ -1200,6 +1201,39 @@ pub fn images() -> Vec<u8> {
     let mut c = TEXT.to_vec();
     c.extend_from_slice(b"q 200 0 0 150 72 600 cm /Im1 Do Q\n");
     b.page(&c, dictionary! { "Font" => dictionary! { "F1" => f2 }, "XObject" => dictionary! { "Im1" => masked } }, Dictionary::new());
+    b.finish()
+}
+
+/// A large drawing in a fine unit, the way Ghostscript writes plans: an A0
+/// page with everything in 1/720 inch, so coordinates pass 32767, the
+/// largest real number PDF/A-1 allows. On the page, in a `cm`, in a dash
+/// pattern and in a form XObject.
+pub fn large_coordinates() -> Vec<u8> {
+    let mut b = B::new();
+    let f = helv(&mut b);
+    let form = b.doc.add_object(Stream::new(
+        dictionary! {
+            "Type" => "XObject", "Subtype" => "Form",
+            "BBox" => vec![0.into(), 0.into(), 40000.into(), 40000.into()],
+            "Matrix" => vec![Object::Real(0.02), 0.into(), 0.into(), Object::Real(0.02), 0.into(), 0.into()],
+        },
+        b"1 0 0 RG 200 w 100 100 39000.5 39000.5 re S 100 100 m 39100.5 39100.5 l S".to_vec(),
+    ));
+    let content = b"0.1 0 0 0.1 0 0 cm\n\
+        q 0 0 33704 23839 re W n\n\
+        5.4 w 0 G 33704.4 23839.4 m 0.601563 23839.4 l S\n\
+        33562.8 8419.4 m 33704.4 8419.4 l S\n\
+        33420.6 5491.4 m 33420.6 100.4 l 100.4 100.4 l S\n\
+        0 0 1 RG 20 w 100.5 100.5 m 33600.5 23700.5 l S\n\
+        0 0.5 0 RG [300.5 33000.5] 0 d 100 12000 m 33700.5 12000 l S [] 0 d\n\
+        BT /F1 400 Tf 1000 20000 Td (Plan mit gro\xdfen Koordinaten) Tj ET\n\
+        q 1 0 0 1 32800.5 500 cm /Fm1 Do Q\n\
+        Q\n";
+    b.page(
+        content,
+        dictionary! { "Font" => dictionary! { "F1" => f }, "XObject" => dictionary! { "Fm1" => form } },
+        dictionary! { "MediaBox" => vec![0.into(), 0.into(), Object::Real(3370.4), Object::Real(2383.9)] },
+    );
     b.finish()
 }
 

@@ -158,6 +158,16 @@ gebaut, CFF wird vollständig eingebettet).
   `Lang` aus Einstellung bzw. `de-DE`/`en-US` je UI-Sprache).
 - **Teil 4:** PDF 2.0-Header, `pdfaid:rev`, kein Info-Dictionary, 4e behält
   3D/RichMedia nur bei U3D/PRC, 4f verlangt Anhang.
+- **Zahlengrenzen (nur Teil 1):** PDF/A-1 erlaubt reelle Zahlen nur bis
+  ±32767. Große Zeichnungen in feiner Einheit liegen darüber: ein A0-Plan, den
+  Ghostscript in 1/720 Zoll schreibt, hat Koordinaten bis 33 700. Solche
+  Operanden in Seiteninhalten, Form-XObjects und Mustern werden zur nächsten
+  ganzen Zahl (ganze Zahlen dürfen bis 2³¹ − 1 gehen). Die Verschiebung ist
+  höchstens eine halbe Einheit des jeweiligen Koordinatensystems; weil dieses
+  System verkleinert werden muss, damit es auf eine Seite passt, sind das auf
+  dem Papier unter 0,22 pt, beim A0-Plan 0,05 pt (0,02 mm). Nur die
+  betroffenen Operationen werden neu geschrieben, alles andere bleibt Byte
+  für Byte. Ab Teil 2 gibt es die Grenze nicht, dort ändert sich nichts.
 
 ## 5. Tests, Abdeckung, Leistung
 
@@ -170,7 +180,7 @@ gebaut, CFF wird vollständig eingebettet).
   Device-Farben (RGB/CMYK/Gray), JPX, Annotationen inkl. FreeText/Stempel/
   Formen aus `pdf_mutate`, Formulare, Anhänge, verschlüsselte Eingabe (mit und
   ohne Passwort), JavaScript/Aktionen, gedrehte Seiten, OCR-Textlayer,
-  optionaler Inhalt, LZW, Signatur.
+  optionaler Inhalt, LZW, Signatur, Plan mit Koordinaten über 32767.
 - **Matrix-Test:** jede Korpusdatei × jede Stufe → veraPDF muss PASS melden
   (oder die Konvertierung liefert den erwarteten klaren Fehler).
 - **Abdeckung:** `cargo llvm-cov -p pdf_pdfa` (Ziel: jede öffentliche Funktion
@@ -181,16 +191,16 @@ gebaut, CFF wird vollständig eingebettet).
 
 Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
 
-- **veraPDF-Matrix** (`just pdfa-check`): 30 synthetische Dateien × 11 Stufen,
-  292 × PASS, 0 × FAIL, 38 erwartete Ablehnungen (Datei mit Benutzerkennwort,
+- **veraPDF-Matrix** (`just pdfa-check`): 31 synthetische Dateien × 11 Stufen,
+  302 × PASS, 0 × FAIL, 39 erwartete Ablehnungen (Datei mit Benutzerkennwort,
   4f ohne Anhang).
 - **Echte Dokumente:** die 17 PDFs, die Ghostscript 10.07.1 mitbringt
   (`doc/`, `examples/`; Handbuch mit 8000 Objekten, Illustrator-Grafiken,
   DeviceN, Anmerkungen), bestehen in allen zehn Stufen außer 4f (dort fehlt
   ihnen der Anhang) die Prüfung: 170 von 170.
 - **Abdeckung** (`just pdfa-coverage`, Unit-Tests, Matrix und
-  Wiedergabetest): 100 % der Funktionen (1200 von 1200, Closures und
-  Testcode mitgezählt), 94,5 % der Zeilen (10 496, davon 577 nicht
+  Wiedergabetest): 100 % der Funktionen (1215 von 1215, Closures und
+  Testcode mitgezählt), 94,5 % der Zeilen (10 560, davon 576 nicht
   ausgeführt). Von der Messung ausgenommen sind nur die Beispielprogramme
   und der Test-Korpus, wie bisher.
 - **Wiedergabetest** (`cargo test -p pdf_pdfa --test fidelity`): Jede
@@ -203,7 +213,7 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
   komprimierten Bildern. Dort wird jede geänderte Seite gegen die
   Fassung ohne Größenreduktion gemessen (SSIM der Helligkeit, PSNR über
   RGB) und muss über den Schranken des Konverters bleiben. Ergebnis:
-  92 Konvertierungen, 1490 Seiten, 770 727 Textläufe, kein Textunterschied,
+  94 Konvertierungen, 1492 Seiten, 770 729 Textläufe, kein Textunterschied,
   kein Pixelunterschied in der verlustfreien Fassung. Dokumente mit neu
   komprimierten Bildern:
 
@@ -221,17 +231,47 @@ Stand (Messung auf dem Entwicklungsrechner, Windows 11, Release-Build):
 
   | Dateien | Stufe | intern | Ghostscript | Faktor | Größe intern vorher | Größe intern, Bilder verlustfrei | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
   |---|---|---|---|---|---|---|---|---|---|---|
-  | Korpus (29) | 1b | 1,61 s | 15,73 s | 9,8× | 4296 KiB | 3911 KiB | 3847 KiB | 1676 KiB | 29/29 | 0/29 |
-  | Korpus (29) | 2b | 0,38 s | 5,14 s | 13,5× | 1924 KiB | 1427 KiB | 1362 KiB | 275 KiB | 29/29 | 0/29 |
-  | Korpus (29) | 3b | 0,38 s | 5,13 s | 13,6× | 1912 KiB | 1415 KiB | 1351 KiB | 275 KiB | 29/29 | 0/29 |
+  | Korpus (30) | 1b | 1,61 s | 16,05 s | 10,0× | 4316 KiB | 3931 KiB | 3866 KiB | 1681 KiB | 30/30 | 0/30 |
+  | Korpus (30) | 2b | 0,38 s | 5,47 s | 14,3× | 1943 KiB | 1446 KiB | 1381 KiB | 280 KiB | 30/30 | 0/30 |
+  | Korpus (30) | 3b | 0,38 s | 5,48 s | 14,3× | 1931 KiB | 1434 KiB | 1370 KiB | 280 KiB | 30/30 | 0/30 |
   | Ghostscript-Dokumente (17) | 1b | 1,17 s | 13,40 s | 11,4× | 19,22 MiB | 11,78 MiB | 9,21 MiB | 6,16 MiB | 17/17 | 0/17 |
   | Ghostscript-Dokumente (17) | 2b | 0,75 s | 7,84 s | 10,4× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
   | Ghostscript-Dokumente (17) | 3b | 0,75 s | 7,84 s | 10,5× | 17,83 MiB | 10,40 MiB | 7,83 MiB | 4,69 MiB | 17/17 | 0/17 |
 
   „Vorher“ ist die Ausgabe ohne jede Größenreduktion, „Bilder verlustfrei“
   die mit der Einstellung „Bilder verlustfrei lassen“, „jetzt“ der Standard.
-  Die 30. Korpusdatei (Benutzerkennwort) lehnt der interne Konverter ab;
+  Die 31. Korpusdatei (Benutzerkennwort) lehnt der interne Konverter ab;
   Ghostscript liefert für sie ohne Fehlermeldung ein leeres Dokument.
+- **Pläne (lokal):** fünf Baupläne des Owners, 28,7 MiB, nicht im Repository
+  (`just pdfa-bench <Ordner>`, Median aus 3 Läufen):
+
+  | Dateien | Stufe | intern | intern, Bilder verlustfrei | Ghostscript | Größe intern vorher | Größe intern, Bilder verlustfrei | Größe intern jetzt | Größe Ghostscript | veraPDF intern | veraPDF Ghostscript |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | Pläne (5) | 1b | 65,5 s | 53,6 s | 60,1 s | 28,62 MiB | 15,54 MiB | 15,54 MiB | 27,56 MiB | 5/5 | 0/5 |
+  | Pläne (5) | 2b | 65,6 s | 53,5 s | 60,1 s | 28,59 MiB | 15,51 MiB | 15,51 MiB | 27,54 MiB | 5/5 | 0/5 |
+  | Pläne (5) | 3b | 65,5 s | wie 2b | 60,0 s | 28,59 MiB | 15,51 MiB | 15,51 MiB | 27,54 MiB | 5/5 | 0/5 |
+
+  - Drei der fünf Pläne bestehen aus einem einzigen seitengroßen Bild
+    (33 704 × 23 839 und 42 520 × 23 839 Pixel, 2,4 bis 3,0 GB Rohdaten). Das
+    verlustfreie Neupacken halbiert sie fast (27,36 → 15,02 MiB) und kostet
+    je Plan 16 bis 21 s; mit Bildkompression (Standard) kommen weitere 4 bis
+    5 s dazu, weil jedes Bild erst untersucht wird. Ghostscript braucht 18
+    bis 23 s und spart nichts. Auf diesen Plänen ist der interne Konverter
+    deshalb nicht schneller als Ghostscript; die
+    beiden Vektorpläne brauchen 0,02 bis 0,05 s gegen 0,24 bis 0,37 s.
+    („Bilder verlustfrei“: ein Lauf statt Median.)
+  - Arbeitsspeicher: eine solche Konvertierung braucht in der Spitze 4,6 bis
+    5,7 GiB.
+  - Kein Bild wurde verlustbehaftet neu kodiert: die großen Bilder gelten als
+    Zeichnung, alle übrigen sind schon JPEG und bleiben Byte für Byte. Die
+    dekodierten Bilddaten von Quelle und Ausgabe sind gleich (SHA-256 über
+    alle Samples), und jede geprüfte Seite rendert in PDFium pixelgleich zur
+    Quelle (SSIM 1, lange Seite 6000 Pixel; sieben Seiten, 1b und 2b, mit und
+    ohne Bildkompression). Ausnahme ist der Plan im nächsten Punkt in 1b.
+  - Einzige messbare Änderung: Ein Vektorplan hat Koordinaten über 32767,
+    die in PDF/A-1 gerundet werden (siehe „Zahlengrenzen“). Gegen die Quelle
+    gemessen bei 12 000 Pixeln Breite: SSIM 0,99999, PSNR 60,0 dB, 0,018 % der
+    Pixel verschieden. Ab Teil 2 ist auch dieser Plan pixelgleich.
 
 ### Größe: was getan ist und was bleibt
 

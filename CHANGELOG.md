@@ -37,6 +37,11 @@ PDF/A without Ghostscript, at every level (#3).
   - PDF/A-1 pages with transparency, JPEG 2000 or more than eight DeviceN
     colorants, and pages whose font cannot be repaired, are stored as an
     image with an invisible text layer, so they stay searchable.
+  - PDF/A-1 limits real numbers to ±32767. Large drawings in a fine unit go
+    beyond that (an A0 plan written in 1/720 inch has coordinates up to
+    33 700); such coordinates are written as the nearest whole number, which
+    moves a line by less than 0.02 mm on that plan. Later parts have no such
+    limit and stay untouched.
   - Clear errors instead of a non-conformant file: a password-protected
     input, PDF/A-4f without an attachment.
   - Smaller files, without loss: data other programs store for their own
@@ -45,7 +50,7 @@ PDF/A without Ghostscript, at every level (#3).
     document does not use and the tables no PDF viewer reads; images
     stored without loss are packed tighter (Flate with a PNG predictor).
     Text and rendering stay identical: a test compares the extracted text
-    and every rendered page with and without the reduction (1490 pages, no
+    and every rendered page with and without the reduction (1492 pages, no
     pixel differs). Fonts a form needs for new input, Type 1 fonts and
     fonts whose use cannot be told for sure are left as they are.
   - **Photographs are stored as JPEG**, as Ghostscript does, but more
@@ -65,8 +70,8 @@ PDF/A without Ghostscript, at every level (#3).
   "Ghostscript" (the previous method, only 1b/2b/3b). All levels are offered
   in the settings and in the convert pane.
 - **Conformance tests against veraPDF.** `just pdfa-check` stages veraPDF
-  (`scripts/fetch-verapdf.ps1`) and validates 30 synthetic test files at all
-  eleven levels: 292 conversions pass, 38 are the expected refusals
+  (`scripts/fetch-verapdf.ps1`) and validates 31 synthetic test files at all
+  eleven levels: 302 conversions pass, 39 are the expected refusals
   (password-protected input, 4f without an attachment), none fails.
   `just pdfa-coverage` reports the test coverage (every function runs,
   94.5 % of the lines), `just pdfa-bench` compares speed, size and
