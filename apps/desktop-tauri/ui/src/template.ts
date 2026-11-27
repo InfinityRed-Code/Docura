@@ -1366,29 +1366,51 @@ export const CSS = `
   .threeDImportOpts { display:flex; gap:1.2rem; }
   .threeDImportOpts label { flex-direction:row !important; align-items:center; gap:0.4rem !important; }
   .formLayer { position:absolute; inset:0; pointer-events:none; }
+  /* A field shows the page's own rendering of it; the overlay tints it
+     (multiply keeps the text below black) and holds an editor that is
+     invisible until focused. Lengths are page points times --pt (CSS pixels
+     per point, set on the slot), so everything scales with the page. */
   .formLayer .formField { position:absolute; pointer-events:auto;
                   background: #d6e7ff; border: 1px solid rgba(74,140,255,0.55);
-                  box-sizing:border-box; }
+                  box-sizing:border-box; mix-blend-mode:multiply; }
   .formLayer .formField:hover { background: #c6dbfb; border-color: rgba(74,140,255,0.9); }
-  .formLayer input[type=text], .formLayer input[type=password], .formLayer textarea, .formLayer select {
-                  width:100%; height:100%; box-sizing:border-box; padding:0 2px;
-                  border:0; background: #d6e7ff; color:#000; font: inherit;
-                  font-family: Helvetica, Arial, sans-serif; resize:none; }
-  .formLayer input[type=text]:focus, .formLayer input[type=password]:focus, .formLayer textarea:focus, .formLayer select:focus {
-                  background: #ffffff; outline:1px solid var(--accent); }
-  .formLayer .formCheck { display:flex; align-items:center; justify-content:center; cursor:pointer; }
-  .formLayer .formCheck input { margin:0; transform: scale(1.2); }
+  .formLayer .formField:focus-within, .formLayer .formField.stale { mix-blend-mode:normal; }
+  .formLayer .fieldEd {
+                  position:absolute; left:50%; top:50%; box-sizing:border-box; margin:0;
+                  width: calc(var(--ew) * var(--pt) * 1px); height: calc(var(--eh) * var(--pt) * 1px);
+                  transform: translate(-50%, -50%) rotate(calc(var(--turns) * 90deg));
+                  padding: 0 calc(var(--pad) * var(--pt) * 1px);
+                  border:0; border-radius:0; outline:0; resize:none; overflow:hidden; appearance:none;
+                  font: var(--fst) var(--fwt) calc(var(--fs) * var(--pt) * 1px) / normal var(--ff);
+                  text-align: var(--align); color: transparent; background: transparent; }
+  .formLayer .multiline .fieldEd { line-height:1.15; white-space:pre-wrap;
+                  padding: calc(var(--pad) * var(--pt) * 1px); }
+  .formLayer select.fieldEd { opacity:0; cursor:pointer; appearance:auto; }
+  .formLayer select.fieldEd option { padding:0; min-height:0; line-height:1.15; }
+  .formLayer .formField.stale .fieldEd { color: var(--fc); background: #d6e7ff; opacity:1; }
+  .formLayer .formField .fieldEd:focus { color: var(--fc); background: #ffffff; opacity:1;
+                  outline: 1px solid var(--accent); }
+  .formLayer .formCheck { cursor:pointer; }
+  .formLayer .formCheck input { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; }
+  .formLayer .formCheck:focus-within { outline: 1px solid var(--accent); mix-blend-mode:multiply; }
+  /* Until the page shows the new state: the mark drawn here, in the box. */
+  .formLayer .formCheck.stale { background: #d6e7ff; mix-blend-mode:normal; }
+  .formLayer .formCheck.stale.on::after { content:""; position:absolute; inset:18%; background:#000; pointer-events:none;
+                  clip-path: polygon(8% 52%, 22% 38%, 40% 58%, 78% 12%, 92% 26%, 40% 88%); }
+  .formLayer .formCheck.stale.on[data-kind=radio]::after { inset:28%; border-radius:50%; clip-path:none; }
   .formLayer .formField.readonly { background: #e8e8e8; border-color: rgba(150,150,150,0.5); }
-  .formLayer .formField.readonly input, .formLayer .formField.readonly textarea, .formLayer .formField.readonly select { background: #e8e8e8; }
+  .formLayer .formField.readonly .fieldEd:focus, .formLayer .formField.readonly.stale .fieldEd { background: #e8e8e8; }
   .formLayer .formField.required { border-color: rgba(220,160,40,0.85); }
   .formLayer .formField.invalid { border: 2px solid #d04848; box-shadow: 0 0 0 2px rgba(208,72,72,0.25); }
   .ribbonGroup.hidden { display:none; }
+  /* Night mode shows the page inverted (dark): tint it instead of multiplying. */
+  body.dark .formLayer .formField { background: rgba(74,140,255,0.22); mix-blend-mode:normal; }
+  body.dark .formLayer .formField:hover { background: rgba(74,140,255,0.32); }
+  body.dark .formLayer .formField.readonly { background: rgba(150,150,150,0.25); }
+  body.dark .formLayer .formCheck:focus-within { mix-blend-mode:normal; }
   body.formsNoHl .formLayer .formField { background: transparent; border-color: transparent; }
-  body.formsNoHl .formLayer input[type=text], body.formsNoHl .formLayer input[type=password],
-  body.formsNoHl .formLayer textarea, body.formsNoHl .formLayer select { background: transparent; }
-  body.formsNoHl .formLayer input:focus, body.formsNoHl .formLayer textarea:focus,
-  body.formsNoHl .formLayer select:focus { background:#fff; outline:1px solid var(--accent); }
-  .formLayer .formField.signature { background: rgba(160,80,160,0.08); border:1px dashed rgba(160,80,160,0.55); display:flex; align-items:center; justify-content:center; color:#a05ca0; font-size:0.78rem; pointer-events:none; }
+  body.formsNoHl .formLayer .formField.stale .fieldEd, body.formsNoHl .formLayer .formCheck.stale { background: #ffffff; }
+  .formLayer .formField.signature { background: rgba(160,80,160,0.08); border:1px dashed rgba(160,80,160,0.55); display:flex; align-items:center; justify-content:center; color:#a05ca0; font-size: min(0.78rem, calc(var(--fh) * var(--pt) * 0.6px)); overflow:hidden; mix-blend-mode:normal; pointer-events:none; }
   .searchPanel { position:absolute; top: 0.5rem; right: 1rem; background:var(--bg);
                  border:1px solid var(--border-2); border-radius:6px; padding: 0.35rem;
                  box-shadow:0 6px 20px rgba(20,30,50,0.18);

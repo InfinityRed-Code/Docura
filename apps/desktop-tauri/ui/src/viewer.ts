@@ -197,6 +197,14 @@ export function applyViewMode() {
   }
 }
 
+/** CSS pixels per page point of a slot, as the custom property `--pt`.
+ * Overlays that must keep the proportions of the page (form fields) size
+ * their text and paddings with it, so they follow a zoom step at once,
+ * without waiting for the page to be rendered again. */
+function setPointScale(slot: Slot, slotWidthPx: number, shownWidthPt: number) {
+  slot.wrap.style.setProperty("--pt", String(shownWidthPt > 0 ? slotWidthPx / shownWidthPt : 1));
+}
+
 export function sizeSlots() {
   if (state.slots.length === 0) return;
   state.zoom = computeZoom();
@@ -210,6 +218,7 @@ export function sizeSlots() {
     slot.wrap.style.height = `${h}px`;
     slot.img.width = w;
     slot.img.height = h;
+    setPointScale(slot, w, rs.w);
     scaleTextLayer(slot);
     if (slot.detail) placeDetail(slot.detail, state.zoom);
   }
@@ -239,6 +248,7 @@ export function evictSlot(idx: number) {
   slot.textKey = null;
   slot.highlightLayer.innerHTML = "";
   slot.linkLayer.innerHTML = "";
+  slot.formLayer.innerHTML = "";
   callbacks.evict3dFor(idx);
   slot.loaded = false;
   slot.lastZoom = null;
@@ -405,6 +415,7 @@ async function renderSlot(idx: number) {
     slot.img.height = ch;
     slot.wrap.style.width = `${cw}px`;
     slot.wrap.style.height = `${ch}px`;
+    setPointScale(slot, cw, rs.w);
     slot.placeholder.style.display = "none";
     slot.loaded = true;
     slot.lastZoom = zoomAtStart;
@@ -559,6 +570,8 @@ async function updateDetail(idx: number, vr: DOMRect, wr: DOMRect) {
     img.dataset.x1 = String(x1);
     img.dataset.y1 = String(y1);
     placeDetail(img, zoom);
+    // Fields that showed a stand-in until the page caught up can drop it.
+    callbacks.renderFormFor(idx);
   } catch {
     if (slot.detailKey === key) slot.detailKey = null;
   }
@@ -779,6 +792,28 @@ export function invalidateRenders() {
   state.renderEpoch++;
 }
 
+/** Marker of a detail window that shows the page before an edit. */
+export const STALE_DETAIL = "stale";
+
+/** Re-render the pages after an edit that changed what they show but
+ * nothing else (a form field was filled in). The present bitmaps and
+ * detail windows stay up until their replacements arrive. */
+export function refreshPageBitmaps() {
+  invalidateRenders();
+  for (const s of state.slots) {
+    s.baseGen = -1;
+    if (s.detail) s.detail.dataset.gen = STALE_DETAIL;
+  }
+  for (let i = 0; i < state.slots.length; i++) {
+    if (Math.abs(i - state.currentPage) <= MAX_RENDER_DIST) scheduleRender(i);
+  }
+}
+
+/** True once the slot shows the document as it is now. */
+export function slotIsCurrent(slot: Slot): boolean {
+  return slot.loaded && slot.baseGen === state.contentGen && slot.detail?.dataset.gen !== STALE_DETAIL;
+}
+
 export function reflow() {
   if (!state.currentDoc) return;
   invalidateRenders();
@@ -853,6 +888,9 @@ export function rotate(delta: number, docWide: boolean) {
     state.pageRotation.set(state.currentPage, (((cur + delta) % 4) + 4) % 4);
   }
   reflow();
+  // Percent-positioned overlays follow a zoom by themselves, a rotation
+  // moves them.
+  for (let i = 0; i < state.slots.length; i++) callbacks.renderFormFor(i);
 }
 
 export function setDarkMode(on: boolean) {

@@ -11,6 +11,24 @@ scope each tag landed.
 
 ## [Unreleased]
 
+### Fixed
+- **Form fields scale with the page (#28).** The text in a form field had a
+  fixed size on screen, whatever the zoom and whatever size the form asks
+  for; boxes stayed behind for a moment after each zoom step; on rotated
+  pages the text did not turn with the page; alignment was ignored; with the
+  field highlight switched off the value showed twice. A field that is not
+  being edited now shows the page's own rendering of it, so it matches the
+  document at every zoom, rotation and display scaling. The editor that
+  opens in a field uses the field's font size (in page points), colour,
+  alignment, padding and direction.
+- **Filled-in fields carry their appearance in the saved file.** Text and
+  choice fields get a new appearance stream with the font size of the field
+  (or a fitted size for auto-sized fields) instead of relying on
+  /NeedAppearances; viewers that ignore that flag showed them empty, and
+  viewers that honour it redrew every field of the document.
+- **Form fields no longer disappear at deep zoom**, where the page is drawn
+  through sharp detail windows.
+
 ## [1.4.0] — 2026-11-26
 
 PDF/A is built in, at every level, without Ghostscript (#3). 3D PDFs: U3D

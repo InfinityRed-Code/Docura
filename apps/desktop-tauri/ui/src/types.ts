@@ -236,6 +236,26 @@ export interface FormFieldInfo {
   multiline: boolean;
   password: boolean;
   max_len: number | null;
+  /** Position of the widget in its page's /Annots. */
+  annot_index?: number;
+  /** How the field's appearance sets its text (text and choice fields). */
+  text_style?: FieldTextStyle | null;
+}
+
+/** See pdf_types::FieldTextStyle. Sizes are in page points, like `rect_pt`. */
+export interface FieldTextStyle {
+  font_size_pt: number;
+  auto_size: boolean;
+  /** "Helv" | "Times" | "Cour" */
+  font_family: string;
+  bold: boolean;
+  italic: boolean;
+  color: [number, number, number];
+  /** 0 = left, 1 = centred, 2 = right */
+  align: number;
+  padding_pt: number;
+  /** Reading direction on the displayed page, quarter turns clockwise. */
+  turns: number;
 }
 
 /** A PDF 3D view (ISO 32000 13.6.4), see pdf_types::ThreeDView. */

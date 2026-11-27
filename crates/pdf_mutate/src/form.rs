@@ -1,10 +1,12 @@
 //! AcroForm field value writes via lopdf.
 //!
 //! Strategy: locate the field by its fully-qualified name (PDF 1.7 §12.7.3.2 —
-//! parent /T concatenated with `.` separator), set /V, mirror /AS on the
-//! widget kids when the field is a Btn (checkbox / radio), then set
-//! /AcroForm/NeedAppearances so PDFium / Acrobat regenerate the appearance
-//! stream on next render.
+//! parent /T concatenated with `.` separator), set /V, then bring what the
+//! widgets show in line with it: text and choice fields get a new appearance
+//! stream (`form_ap`), check boxes and radio buttons switch their /AS.
+//! /NeedAppearances is only asked for where no appearance could be written:
+//! with it set, viewers discard the appearances of every field of the
+//! document, including the untouched ones.
 
 use std::collections::HashSet;
 
@@ -222,6 +224,21 @@ fn checkbox_on_name(doc: &Document, widget_id: ObjectId) -> Option<Vec<u8>> {
     None
 }
 
+/// Redraws the text or choice field `field` on all its widgets. A widget
+/// whose appearance cannot be written loses its stale one and leaves the
+/// drawing to the viewer.
+fn refresh_text_appearances(doc: &mut Document, field: ObjectId) {
+    for w in widget_kids(doc, field) {
+        if let Err(e) = crate::form_ap::write_appearance(doc, w) {
+            tracing::warn!("form: no appearance for widget {w:?}: {e}");
+            if let Ok(d) = doc.get_dictionary_mut(w) {
+                d.remove(b"AP");
+            }
+            set_need_appearances(doc);
+        }
+    }
+}
+
 fn set_need_appearances(doc: &mut Document) {
     if let Ok(af_id) = get_acroform_id(doc) {
         if let Ok(af) = doc.get_dictionary_mut(af_id) {
@@ -264,22 +281,13 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
     match ft.as_slice() {
         b"Tx" | b"Ch" => {
             let v = pdf_string_text(value);
-            let widgets = widget_kids(doc, target);
             if let Ok(d) = doc.get_dictionary_mut(target) {
                 d.set("V", v);
-                d.remove(b"AP"); // force regeneration on viewers that honor NeedAppearances
+                // /I lists the selected options of a choice field and must
+                // not contradict /V.
+                d.remove(b"I");
             }
-            // The widget kid carries the visible /AP stream. Strip it so our
-            // PDFium renderer (which doesn't run FFLDraw) doesn't keep
-            // painting the stale appearance under the HTML overlay.
-            for w in widgets {
-                if w == target {
-                    continue;
-                }
-                if let Ok(d) = doc.get_dictionary_mut(w) {
-                    d.remove(b"AP");
-                }
-            }
+            refresh_text_appearances(doc, target);
         }
         b"Btn" if value.starts_with("radio:") => {
             // Radio group: "radio:<n>" turns on the n-th widget (PDFium's
@@ -292,7 +300,12 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
             let chosen = *widgets
                 .get(idx)
                 .ok_or_else(|| MutateError::Parse(format!("radio option {idx} not found in {name}")))?;
-            let on_name = checkbox_on_name(doc, chosen).unwrap_or_else(|| idx.to_string().into_bytes());
+            let drawn = checkbox_on_name(doc, chosen);
+            if drawn.is_none() {
+                // Nothing to show for the chosen state: the viewer draws it.
+                set_need_appearances(doc);
+            }
+            let on_name = drawn.unwrap_or_else(|| idx.to_string().into_bytes());
             if let Ok(d) = doc.get_dictionary_mut(target) {
                 d.set("V", Object::Name(on_name.clone()));
             }
@@ -315,11 +328,12 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
                 "yes" | "on" | "true" | "1"
             );
             let widgets = widget_kids(doc, target);
-            let on_name: Option<Vec<u8>> = widgets
-                .iter()
-                .find_map(|&w| checkbox_on_name(doc, w))
-                .or_else(|| Some(b"Yes".to_vec()));
-            let on_name = on_name.unwrap_or_else(|| b"Yes".to_vec());
+            let drawn: Option<Vec<u8>> = widgets.iter().find_map(|&w| checkbox_on_name(doc, w));
+            if drawn.is_none() {
+                // No appearance for the checked state: the viewer draws it.
+                set_need_appearances(doc);
+            }
+            let on_name = drawn.unwrap_or_else(|| b"Yes".to_vec());
             let new_v = if want_on {
                 Object::Name(on_name.clone())
             } else {
@@ -344,7 +358,6 @@ pub fn set_field_value(doc: &mut Document, name: &str, value: &str) -> MutateRes
             )));
         }
     }
-    set_need_appearances(doc);
     Ok(())
 }
 
@@ -377,23 +390,15 @@ pub fn reset_form(doc: &mut Document) -> MutateResult<()> {
         let dv = doc.get_dictionary(fid).ok().and_then(|d| d.get(b"DV").ok().cloned());
         match ft.as_slice() {
             b"Tx" | b"Ch" => {
-                let widgets = widget_kids(doc, fid);
                 if let Ok(d) = doc.get_dictionary_mut(fid) {
                     if let Some(dv) = dv {
                         d.set("V", dv);
                     } else {
                         d.remove(b"V");
                     }
-                    d.remove(b"AP");
+                    d.remove(b"I");
                 }
-                for w in widgets {
-                    if w == fid {
-                        continue;
-                    }
-                    if let Ok(d) = doc.get_dictionary_mut(w) {
-                        d.remove(b"AP");
-                    }
-                }
+                refresh_text_appearances(doc, fid);
             }
             b"Btn" => {
                 let widgets = widget_kids(doc, fid);
@@ -410,7 +415,6 @@ pub fn reset_form(doc: &mut Document) -> MutateResult<()> {
             _ => {}
         }
     }
-    set_need_appearances(doc);
     Ok(())
 }
 
@@ -489,6 +493,172 @@ mod tests {
         assert_eq!(as_of(&doc, kids[1]), b"Off");
         assert_eq!(as_of(&doc, kids[2]), b"C");
         assert!(set_field_value(&mut doc, "Choice", "radio:7").is_err());
+    }
+
+    /// One text field "Name" (200 x 22) with its widget merged in, a
+    /// regular /Helv in the form's /DR and `extra` on top of the basics.
+    fn text_doc(da: &str, extra: lopdf::Dictionary) -> (Document, ObjectId) {
+        let mut doc = Document::with_version("1.5");
+        let pages = doc.new_object_id();
+        let helv = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding",
+        });
+        let mut field = dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => "Tx",
+            "T" => Object::string_literal("Name"),
+            "Rect" => vec![100.into(), 700.into(), 300.into(), 722.into()],
+            "DA" => Object::string_literal(da),
+        };
+        for (k, v) in extra.iter() {
+            field.set(k.clone(), v.clone());
+        }
+        let field = doc.add_object(field);
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            "Annots" => vec![field.into()],
+        });
+        doc.objects.insert(pages, Object::Dictionary(dictionary! {
+            "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1,
+        }));
+        let af = doc.add_object(dictionary! {
+            "Fields" => vec![field.into()],
+            "DR" => dictionary! { "Font" => dictionary! { "Helv" => helv } },
+        });
+        let cat = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages, "AcroForm" => af });
+        doc.trailer.set("Root", cat);
+        (doc, field)
+    }
+
+    /// The widget's normal appearance: (stream dictionary, content).
+    fn appearance(doc: &Document, widget: ObjectId) -> (lopdf::Dictionary, String) {
+        let ap = doc.get_dictionary(widget).unwrap().get(b"AP").unwrap().as_dict().unwrap();
+        let n = ap.get(b"N").unwrap().as_reference().unwrap();
+        let s = doc.get_object(n).unwrap().as_stream().unwrap();
+        (s.dict.clone(), String::from_utf8_lossy(&s.content).into_owned())
+    }
+
+    fn need_appearances(doc: &Document) -> bool {
+        let af = get_acroform_id(doc).unwrap();
+        doc.get_dictionary(af).unwrap().has(b"NeedAppearances")
+    }
+
+    #[test]
+    fn text_value_is_drawn_with_the_font_size_of_the_field() {
+        let (mut doc, field) = text_doc("/Helv 12 Tf 0 0 1 rg", dictionary! {});
+        set_field_value(&mut doc, "Name", "Hamburg").unwrap();
+        let (dict, content) = appearance(&doc, field);
+        assert!(content.contains("/Helv 12 Tf 0 0 1 rg"), "{content}");
+        // Left aligned at the 2 pt padding, capitals centred in the 22 pt box.
+        assert!(content.contains("1 0 0 1 2 6.692 Tm (Hamburg) Tj"), "{content}");
+        assert_eq!(dict.get(b"BBox").unwrap().as_array().unwrap().len(), 4);
+        // The other fields of a document keep their appearances: no
+        // /NeedAppearances that would have every viewer redraw them.
+        assert!(!need_appearances(&doc));
+        let styles = crate::form_ap::text_styles(&doc);
+        let st = &styles[&(0, 0)];
+        assert_eq!((st.font_size_pt, st.auto_size, st.align, st.padding_pt, st.turns), (12.0, false, 0, 2.0, 0));
+        assert_eq!(st.color, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn auto_size_fills_the_field_and_shrinks_for_long_values() {
+        let (mut doc, field) = text_doc("/Helv 0 Tf 0 g", dictionary! {});
+        set_field_value(&mut doc, "Name", "Hi").unwrap();
+        // (22 - 2) / 1.15 = 17.39.
+        assert!(appearance(&doc, field).1.contains("/Helv 17.39 Tf"), "{}", appearance(&doc, field).1);
+        assert_eq!(crate::form_ap::text_styles(&doc)[&(0, 0)].font_size_pt, 17.39);
+        assert!(crate::form_ap::text_styles(&doc)[&(0, 0)].auto_size);
+
+        set_field_value(&mut doc, "Name", &"W".repeat(40)).unwrap();
+        // 40 capital W are 37.76 em wide: 196 pt / 37.76.
+        let size = crate::form_ap::text_styles(&doc)[&(0, 0)].font_size_pt;
+        assert_eq!(size, 5.19);
+        assert!(appearance(&doc, field).1.contains("/Helv 5.19 Tf"));
+    }
+
+    #[test]
+    fn alignment_border_and_background_are_part_of_the_appearance() {
+        let extra = dictionary! {
+            "Q" => 2,
+            "MK" => dictionary! {
+                "BC" => vec![Object::Real(1.0), Object::Real(0.0), Object::Real(0.0)],
+                "BG" => vec![Object::Real(0.9)],
+            },
+            "BS" => dictionary! { "W" => 2 },
+        };
+        let (mut doc, field) = text_doc("/Helv 10 Tf 0 g", extra);
+        set_field_value(&mut doc, "Name", "WW").unwrap();
+        let (_, content) = appearance(&doc, field);
+        assert!(content.contains("q 0.9 g 0 0 200 22 re f Q"), "{content}");
+        assert!(content.contains("q 1 0 0 RG 2 w 1 1 198 20 re S Q"), "{content}");
+        // Right aligned: 200 - padding (2 x border) - 2 x 0.944 em x 10.
+        assert!(content.contains("1 0 0 1 177.12 7.41 Tm (WW) Tj"), "{content}");
+        let st = &crate::form_ap::text_styles(&doc)[&(0, 0)];
+        assert_eq!((st.align, st.padding_pt), (2, 4.0));
+    }
+
+    #[test]
+    fn multiline_text_wraps_and_keeps_line_breaks() {
+        let extra = dictionary! { "Ff" => 1 << 12, "Rect" => vec![100.into(), 600.into(), 160.into(), 700.into()] };
+        let (mut doc, field) = text_doc("/Helv 10 Tf 0 g", extra);
+        set_field_value(&mut doc, "Name", "one two three four\nfive").unwrap();
+        let (_, content) = appearance(&doc, field);
+        let lines: Vec<&str> = content.lines().filter(|l| l.ends_with("Tj")).collect();
+        // 56 pt of room: "one two" (34 pt) fits, "one two three" does not.
+        let texts: Vec<&str> = lines.iter().map(|l| &l[l.find('(').unwrap()..]).collect();
+        assert_eq!(texts, ["(one two) Tj", "(three four) Tj", "(five) Tj"], "{content}");
+        // 11.5 pt from baseline to baseline (leading 1.15), first one 0.92
+        // em below the padding.
+        let y = |l: &str| l.split(' ').nth(5).unwrap().parse::<f32>().unwrap();
+        assert!((y(lines[0]) - (100.0 - 2.0 - 9.2)).abs() < 0.01, "{content}");
+        assert!((y(lines[0]) - y(lines[1]) - 11.5).abs() < 0.01, "{content}");
+    }
+
+    #[test]
+    fn rotated_widget_gets_a_turned_appearance() {
+        // /MK /R 90 in a 22 x 200 rectangle: the text box is 200 x 22.
+        let extra = dictionary! {
+            "Rect" => vec![100.into(), 500.into(), 122.into(), 700.into()],
+            "MK" => dictionary! { "R" => 90 },
+        };
+        let (mut doc, field) = text_doc("/Helv 12 Tf 0 g", extra);
+        set_field_value(&mut doc, "Name", "Up").unwrap();
+        let (dict, content) = appearance(&doc, field);
+        let nums = |key: &[u8]| -> Vec<f32> {
+            dict.get(key).unwrap().as_array().unwrap().iter().map(|o| o.as_float().unwrap()).collect()
+        };
+        assert_eq!(nums(b"BBox"), [0.0, 0.0, 200.0, 22.0]);
+        assert_eq!(nums(b"Matrix"), [0.0, 1.0, -1.0, 0.0, 22.0, 0.0]);
+        assert!(content.contains("1 0 0 1 2 6.692 Tm (Up) Tj"), "{content}");
+        // On an unrotated page such a text reads bottom to top.
+        assert_eq!(crate::form_ap::text_styles(&doc)[&(0, 0)].turns, 3);
+    }
+
+    #[test]
+    fn text_outside_winansi_is_written_with_an_embedded_font() {
+        let (mut doc, field) = text_doc("/Helv 12 Tf 0 g", dictionary! {});
+        set_field_value(&mut doc, "Name", "Łódź").unwrap();
+        let (dict, content) = appearance(&doc, field);
+        let fonts = dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        let (_, font) = fonts.iter().next().unwrap();
+        let font = doc.get_dictionary(font.as_reference().unwrap()).unwrap();
+        assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+        // Glyph ids as a hex string, still 12 pt.
+        assert!(content.contains(" 12 Tf") && content.contains("> Tj"), "{content}");
+        assert_eq!(crate::form_ap::text_styles(&doc)[&(0, 0)].font_size_pt, 12.0);
+    }
+
+    #[test]
+    fn reset_redraws_the_default_value() {
+        let (mut doc, field) = text_doc("/Helv 9 Tf 0 g", dictionary! { "DV" => Object::string_literal("default") });
+        set_field_value(&mut doc, "Name", "typed").unwrap();
+        reset_form(&mut doc).unwrap();
+        let (_, content) = appearance(&doc, field);
+        assert!(content.contains("(default) Tj") && content.contains("/Helv 9 Tf"), "{content}");
+        assert!(!need_appearances(&doc));
     }
 
     #[test]

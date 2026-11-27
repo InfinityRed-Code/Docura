@@ -9,7 +9,13 @@ import { t } from "./i18n";
 import { dom, setStatus } from "./dom";
 import { refreshIcons } from "./icons";
 import { applyDocSnapshot, markDirty, refreshUndoUi } from "./doc";
-import { effectiveRotation, goToPage, navigateTo, rotateRectToSlot, setWheelZoomMode } from "./viewer";
+import {
+  effectiveRotation, goToPage, navigateTo, refreshPageBitmaps, rotateRectToSlot, setWheelZoomMode, slotIsCurrent,
+} from "./viewer";
+import {
+  cssAlign, cssColor, editorSize, fallbackFontSize, fieldBoxPercent, fontStack, shownRect, textTurns,
+  type ShownRect,
+} from "./form-geom";
 import { noteBoxInSlot, noteRectInPage } from "./note-geom";
 
 // ---------- Annotation tools (markup + shapes) ----------
@@ -1104,15 +1110,56 @@ function fieldKey(f: FormFieldInfo): string {
   return f.kind === "radio" ? `${f.id}#${f.export_value ?? ""}` : f.id;
 }
 
+// A field that is not being edited shows what the page render draws: its
+// own appearance, at the size, place and direction the document gives it.
+// The overlay only tints it. The editor inside is transparent until it has
+// the focus and is then set like the appearance (font size in page points,
+// padding, alignment, direction), so the text does not jump when a field is
+// entered or left. After a change the field keeps showing the editor's
+// content (class "stale") until the page has been rendered again.
+
+/** Marks a field whose new value the page does not show yet. */
+const STALE_PENDING = "pending";
+/** Counts committed form edits (see `settleStale`). */
+let formEditSeq = 0;
+
+function markStale(wrap: HTMLElement) {
+  wrap.classList.add("stale");
+  wrap.dataset.staleSeq = STALE_PENDING;
+}
+
+function clearStale(wrap: HTMLElement) {
+  wrap.classList.remove("stale");
+  delete wrap.dataset.staleSeq;
+}
+
+/** The backend took the edit(s) of field `name`: from now on a fresh page
+ * render shows them. */
+function settleStale(name: string) {
+  formEditSeq++;
+  for (const w of fieldWraps(name)) {
+    if (w.dataset.staleSeq === STALE_PENDING) w.dataset.staleSeq = String(formEditSeq);
+  }
+}
+
+function fieldWraps(name: string): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll(`.formField[data-field-id="${CSS.escape(name)}"]`),
+  ) as HTMLElement[];
+}
+
 function renderFormFor(pageIdx: number) {
   const slot = state.slots[pageIdx];
   if (!slot) return;
   const list = state.formFieldsByPage.get(pageIdx) ?? [];
   const sz = state.pageSizes[pageIdx];
-  if (!sz || !slot.loaded || slot.img.width === 0 || slot.img.height === 0) {
+  // Overlays belong to a page that has been rendered (an evicted slot has
+  // no bitmap); a re-render in progress keeps them.
+  if (!sz || !slot.img.getAttribute("src")) {
     slot.formLayer.innerHTML = "";
     return;
   }
+  const current = slotIsCurrent(slot);
   const existing = new Map<string, HTMLElement>();
   for (const w of Array.from(slot.formLayer.children) as HTMLElement[]) {
     const key = w.dataset.fieldKey;
@@ -1122,8 +1169,8 @@ function renderFormFor(pageIdx: number) {
   const seen = new Set<string>();
   const rot = effectiveRotation(pageIdx);
   for (const f of list) {
-    const box = rotateRectToSlot(f.rect_pt, rot, sz, slot.img.width, slot.img.height);
-    if (box.width <= 0 || box.height <= 0) continue;
+    const shown = shownRect(f.rect_pt, rot, sz);
+    if (shown.w <= 0 || shown.h <= 0) continue;
     const key = fieldKey(f);
     seen.add(key);
     let wrap = existing.get(key);
@@ -1133,14 +1180,39 @@ function renderFormFor(pageIdx: number) {
     } else {
       updateFormFieldWrap(wrap, f);
     }
-    wrap.style.left = `${box.left}px`;
-    wrap.style.top = `${box.top}px`;
-    wrap.style.width = `${box.width}px`;
-    wrap.style.height = `${box.height}px`;
+    placeFormField(wrap, f, shown, rot);
+    if (current && wrap.dataset.staleSeq && wrap.dataset.staleSeq !== STALE_PENDING) clearStale(wrap);
   }
   for (const [key, w] of existing) {
     if (!seen.has(key)) w.remove();
   }
+}
+
+/** Position and text setting of a field. Positions are shares of the slot
+ * and lengths are page points (scaled by the slot's `--pt`), so the field
+ * keeps its place and proportions when the slot is resized. */
+function placeFormField(wrap: HTMLElement, f: FormFieldInfo, shown: ShownRect, rot: number) {
+  const box = fieldBoxPercent(shown);
+  wrap.style.left = `${box.left}%`;
+  wrap.style.top = `${box.top}%`;
+  wrap.style.width = `${box.width}%`;
+  wrap.style.height = `${box.height}%`;
+  const st = f.text_style;
+  const turns = textTurns(st, rot);
+  const ed = editorSize(shown, turns);
+  const lines = (f.kind === "text" && f.multiline) || f.kind === "listbox";
+  const set = (k: string, v: string | number) => wrap.style.setProperty(k, String(v));
+  set("--fh", Math.min(shown.w, shown.h));
+  set("--ew", ed.w);
+  set("--eh", ed.h);
+  set("--turns", turns);
+  set("--fs", st?.font_size_pt ?? fallbackFontSize(ed.h, lines));
+  set("--pad", st?.padding_pt ?? 2);
+  set("--fc", cssColor(st?.color));
+  set("--ff", fontStack(st?.font_family));
+  set("--fwt", st?.bold ? "bold" : "normal");
+  set("--fst", st?.italic ? "italic" : "normal");
+  set("--align", cssAlign(st?.align));
 }
 
 function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
@@ -1158,6 +1230,9 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
       ? document.createElement("textarea")
       : document.createElement("input");
     if (!f.multiline) (ed as HTMLInputElement).type = f.password ? "password" : "text";
+    else wrap.classList.add("multiline");
+    ed.className = "fieldEd";
+    ed.spellcheck = false;
     ed.value = f.value ?? "";
     if (f.readonly) (ed as HTMLInputElement | HTMLTextAreaElement).readOnly = true;
     ed.addEventListener("blur", () => {
@@ -1165,6 +1240,7 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
       const v = (ed as HTMLInputElement | HTMLTextAreaElement).value;
       if (v === (wrap.dataset.lastValue ?? "")) return;
       wrap.dataset.lastValue = v;
+      markStale(wrap);
       void writeFormField(f.id, v);
     });
     (ed as HTMLElement).addEventListener("keydown", (evt: Event) => {
@@ -1186,24 +1262,38 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
     cb.type = "checkbox";
     cb.checked = (f.value ?? "Off") !== "Off";
     cb.disabled = f.readonly;
+    wrap.classList.toggle("on", cb.checked);
     cb.addEventListener("change", () => {
       if (wrap.classList.contains("readonly")) return;
       if (f.kind === "radio") {
         // Turn on exactly this option of the group ("radio:<index>").
         if (!cb.checked) { cb.checked = true; return; }
+        for (const w of fieldWraps(f.id)) {
+          w.classList.toggle("on", w === wrap);
+          markStale(w);
+        }
         void writeFormField(f.id, `radio:${f.export_value ?? "0"}`, true);
         return;
       }
+      wrap.classList.toggle("on", cb.checked);
+      markStale(wrap);
       void writeFormField(f.id, cb.checked ? "Yes" : "Off");
     });
     wrap.appendChild(cb);
   } else if (f.kind === "combobox" || f.kind === "listbox") {
     const sel = document.createElement("select");
-    if (f.kind === "listbox") sel.size = Math.max(2, f.options?.length ?? 2);
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "—";
-    sel.appendChild(blank);
+    sel.className = "fieldEd";
+    if (f.kind === "listbox") {
+      sel.size = Math.max(2, f.options?.length ?? 2);
+      wrap.classList.add("multiline");
+    } else {
+      // "No choice" for a drop-down. A list shows its options row by row
+      // as the page does, so it has no extra row.
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "—";
+      sel.appendChild(blank);
+    }
     for (const o of f.options ?? []) {
       const op = document.createElement("option");
       op.value = o;
@@ -1214,6 +1304,7 @@ function buildFormFieldWrap(f: FormFieldInfo): HTMLElement {
     if (f.readonly) sel.disabled = true;
     sel.addEventListener("change", () => {
       if (wrap.classList.contains("readonly")) return;
+      markStale(wrap);
       void writeFormField(f.id, sel.value);
     });
     wrap.appendChild(sel);
@@ -1241,7 +1332,10 @@ function updateFormFieldWrap(wrap: HTMLElement, f: FormFieldInfo) {
   } else if (f.kind === "checkbox" || f.kind === "radio") {
     const cb = wrap.querySelector("input[type=checkbox]") as HTMLInputElement | null;
     if (cb && cb !== active) cb.checked = (f.value ?? "Off") !== "Off";
-    if (cb) cb.disabled = f.readonly;
+    if (cb) {
+      cb.disabled = f.readonly;
+      wrap.classList.toggle("on", cb.checked);
+    }
   } else if (f.kind === "combobox" || f.kind === "listbox") {
     const sel = wrap.querySelector("select") as HTMLSelectElement | null;
     if (sel && sel !== active) sel.value = f.value ?? "";
@@ -1258,6 +1352,7 @@ async function writeFormField(name: string, value: string, reloadAll = false) {
       name,
       value,
     });
+    settleStale(name);
     if (updated) {
       const idx = state.formFields.findIndex((f) => f.id === name);
       if (idx >= 0) state.formFields[idx] = updated;
@@ -1273,10 +1368,15 @@ async function writeFormField(name: string, value: string, reloadAll = false) {
     }
     // A radio choice flips its siblings too — reload every widget state.
     if (reloadAll) await refreshFormFields();
+    // The page draws the field: render it again with the new value.
+    refreshPageBitmaps();
     markDirty();
     void refreshUndoUi();
     setStatus(t("form.fieldSaved", { name }));
   } catch (e) {
+    // Back to what the document holds.
+    for (const w of fieldWraps(name)) clearStale(w);
+    renderAllForms();
     setStatus(t("form.error", { e: String(e) }));
   }
 }

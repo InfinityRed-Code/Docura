@@ -1161,7 +1161,7 @@ fn ensure_dr_font(
 }
 
 /// The standard Type1 font `base_font`, registered in /DR as `key`.
-fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResult<ObjectId> {
+pub(crate) fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResult<ObjectId> {
     ensure_dr_font(doc, key, |doc| {
         Ok(doc.add_object(dictionary! {
             "Type" => "Font",
@@ -1173,7 +1173,7 @@ fn ensure_std_font(doc: &mut Document, key: &str, base_font: &str) -> MutateResu
 }
 
 /// The font a FreeText box is written with.
-enum TextFont {
+pub(crate) enum TextFont {
     /// One of the standard 14 fonts; strings are WinAnsi bytes.
     Standard,
     /// A bundled TrueType face, embedded as a Type0 font; strings are
@@ -1193,7 +1193,7 @@ impl TextFont {
 /// Resource key, font object and encoder for a FreeText font: a bundled
 /// family (see `pdf_fonts`) is embedded once per document and style, the
 /// standard families use the standard 14 fonts.
-fn freetext_font(
+pub(crate) fn freetext_font(
     doc: &mut Document,
     family: &str,
     bold: bool,
@@ -1314,7 +1314,7 @@ pub fn add_freetext_annotation(
     Ok(annot_id)
 }
 
-fn winansi_byte(c: char) -> u8 {
+pub(crate) fn winansi_byte(c: char) -> u8 {
     let cp = c as u32;
     if cp <= 0x7F {
         cp as u8
@@ -1335,7 +1335,7 @@ fn winansi_byte(c: char) -> u8 {
     }
 }
 
-fn pdf_literal_string(s: &str) -> Vec<u8> {
+pub(crate) fn pdf_literal_string(s: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(s.len() + 4);
     out.push(b'(');
     for c in s.chars() {

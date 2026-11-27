@@ -33,7 +33,7 @@ pub(crate) fn postscript_name(face: &Face) -> String {
 
 /// Glyph for `c`, falling back to "?" (then .notdef) for characters the
 /// font does not have.
-fn glyph(face: &Face, c: char) -> GlyphId {
+pub(crate) fn glyph(face: &Face, c: char) -> GlyphId {
     let c = if c == '\t' { ' ' } else { c };
     face.glyph_index(c)
         .or_else(|| face.glyph_index('?'))

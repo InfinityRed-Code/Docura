@@ -311,6 +311,37 @@ pub struct FormFieldInfo {
     pub multiline: bool,
     pub password: bool,
     pub max_len: Option<u32>,
+    /// Position of the widget in its page's /Annots array.
+    #[serde(default)]
+    pub annot_index: u32,
+    /// How the field's text is set, for text and choice fields: what the
+    /// editor on top of the page has to match.
+    #[serde(default)]
+    pub text_style: Option<FieldTextStyle>,
+}
+
+/// The text of a form field as its appearance draws it. Sizes are in the
+/// units of `FormFieldInfo::rect_pt`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldTextStyle {
+    /// Font size the appearance uses. For an auto-sized field (/DA size 0)
+    /// this is the size chosen for the current value.
+    pub font_size_pt: f32,
+    /// The field asks for automatic sizing (/DA size 0).
+    pub auto_size: bool,
+    /// Closest standard family: "Helv" | "Times" | "Cour".
+    pub font_family: String,
+    pub bold: bool,
+    pub italic: bool,
+    /// RGB text color, 0..1.
+    pub color: [f32; 3],
+    /// /Q: 0 = left, 1 = centred, 2 = right.
+    pub align: u8,
+    /// Distance from the widget's edge to the text (border plus padding).
+    pub padding_pt: f32,
+    /// Reading direction of the text on the displayed page in quarter turns
+    /// clockwise: the page's /Rotate minus the widget's own /MK /R.
+    pub turns: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

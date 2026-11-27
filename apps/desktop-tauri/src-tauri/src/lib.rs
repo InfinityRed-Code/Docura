@@ -2601,9 +2601,32 @@ async fn list_form_fields(
     document: DocumentId,
 ) -> Result<Vec<FormFieldInfo>, String> {
     let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || engine.list_form_fields(document).map_err(|e| e.to_string()))
+    tokio::task::spawn_blocking(move || styled_form_fields(engine.as_ref(), document))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// The document's form fields with the text styling of their appearances.
+/// The engine knows the widgets and their values; font size, alignment and
+/// rotation are read from the file itself, where the appearance streams
+/// are, and joined by the widget's place in its page's /Annots.
+fn styled_form_fields(
+    engine: &dyn PdfEngine,
+    document: DocumentId,
+) -> Result<Vec<FormFieldInfo>, String> {
+    let mut fields = engine.list_form_fields(document).map_err(|e| e.to_string())?;
+    if fields.is_empty() {
+        return Ok(fields);
+    }
+    let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+    // Fields without styling fall back to the editor's defaults.
+    if let Ok(mdoc) = pdf_mutate::MutableDoc::from_bytes(&bytes) {
+        let styles = mdoc.form_text_styles();
+        for f in &mut fields {
+            f.text_style = styles.get(&(f.page, f.annot_index)).cloned();
+        }
+    }
+    Ok(fields)
 }
 
 #[tauri::command]
@@ -2615,32 +2638,33 @@ async fn set_form_field(
 ) -> Result<Option<FormFieldInfo>, String> {
     let engine = state.engine.clone();
     let name_for_mutate = name.clone();
-    let (pre_bytes, new_bytes) =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Vec<u8>), String> {
-            let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
-            let mut mdoc =
-                pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
-            mdoc.set_form_field(&name_for_mutate, &value).map_err(|e| e.to_string())?;
-            let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
-            Ok((bytes, out))
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let (pre_bytes, new_bytes, styles) = tokio::task::spawn_blocking(move || {
+        let bytes = engine.document_bytes(document).map_err(|e| e.to_string())?;
+        let mut mdoc = pdf_mutate::MutableDoc::from_bytes(&bytes).map_err(|e| e.to_string())?;
+        mdoc.set_form_field(&name_for_mutate, &value).map_err(|e| e.to_string())?;
+        // The appearance just written, while the document is still parsed.
+        let styles = mdoc.form_text_styles();
+        let out = mdoc.to_bytes().map_err(|e| e.to_string())?;
+        Ok::<_, String>((bytes, out, styles))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     state.cache.lock().remove_document(document);
     let engine = state.engine.clone();
     tokio::task::spawn_blocking(move || engine.reload_bytes(document, new_bytes).map_err(|e| e.to_string()))
         .await
         .map_err(|e| e.to_string())??;
     state.undo.lock().record(document, pre_bytes);
-    // Return only the updated field. The UI keeps its current page bitmap and
-    // patches the in-memory form state in place — no full document reload,
-    // no image re-render flash.
+    // Return only the updated field: the UI patches its form state in place
+    // and re-renders the page, which now draws the field's new appearance.
     let engine = state.engine.clone();
     let updated = tokio::task::spawn_blocking(move || {
-        engine
-            .list_form_fields(document)
-            .map(|fields| fields.into_iter().find(|f| f.id == name))
-            .map_err(|e| e.to_string())
+        engine.list_form_fields(document).map_err(|e| e.to_string()).map(|fields| {
+            fields.into_iter().find(|f| f.id == name).map(|mut f| {
+                f.text_style = styles.get(&(f.page, f.annot_index)).cloned();
+                f
+            })
+        })
     })
     .await
     .map_err(|e| e.to_string())??;

@@ -34,6 +34,7 @@ use pdfium_render::prelude::*;
 #[cfg(windows)]
 mod print_win;
 mod fontmatch;
+mod forms;
 mod notes;
 mod proxy;
 mod textedit;
@@ -746,7 +747,9 @@ impl PdfEngine for PdfiumEngine {
         let mut out: Vec<FormFieldInfo> = Vec::new();
         for (page_idx, page) in document.pages().iter().enumerate() {
             let pv = page_view(&page);
-            for annot in page.annotations().iter() {
+            let annots = page.annotations();
+            for annot_index in 0..annots.len() {
+                let Ok(annot) = annots.get(annot_index) else { continue };
                 let Some(widget) = annot.as_widget_annotation() else { continue };
                 let Some(field) = widget.form_field() else { continue };
                 let Ok(bounds) = widget.bounds() else { continue };
@@ -772,6 +775,8 @@ impl PdfEngine for PdfiumEngine {
                     multiline,
                     password,
                     max_len: None,
+                    annot_index: annot_index as u32,
+                    text_style: None,
                 });
             }
         }
@@ -836,6 +841,11 @@ impl PdfEngine for PdfiumEngine {
         let sticky =
             notes::HiddenNotes::hide(bindings, page_handle, req.page.0, || entry.note_colors());
         bindings.FPDF_RenderPageBitmap(bmp, page_handle, -x, -y, full_w, full_h, rot, FPDF_ANNOT);
+        // Form fields are not part of that: PDFium draws widgets only through
+        // the form module (as `render` does via pdfium-render).
+        if document.form().is_some() {
+            forms::draw_widgets(bindings, document, bmp, page_handle, (-x, -y), (full_w, full_h), rot, FPDF_ANNOT);
+        }
         sticky.draw(note_icons, bmp, page_handle, (-x, -y), (full_w, full_h), rot, req.zoom.0, false);
         drop(sticky);
         let rgba = bitmap.as_rgba_bytes();

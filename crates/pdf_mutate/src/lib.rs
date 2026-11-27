@@ -15,6 +15,7 @@ use pdf_types::RectPt;
 mod annotations;
 mod encryption;
 mod form;
+mod form_ap;
 mod images;
 mod inspect;
 mod ocr;
@@ -22,6 +23,7 @@ mod overlay;
 mod read;
 mod truetype;
 mod redact;
+mod std_metrics;
 mod threed;
 mod xfdf;
 
@@ -30,6 +32,7 @@ pub use annotations::{
     ShapeAnnotation, ShapeKind, StampAnnotation, TextNoteAnnotation,
 };
 pub use encryption::{encrypt_pdf, is_encrypted_pdf, probably_encrypted, PermissionOptions};
+pub use form_ap::auto_size_single;
 pub use images::images_to_pdf;
 pub use threed::{c2w_look_at, ThreeDAnnotation};
 pub use ocr::OcrWord;
@@ -765,6 +768,12 @@ impl MutableDoc {
             t.elapsed()
         );
         Ok(())
+    }
+
+    /// How every text and choice field sets its text, keyed by page index
+    /// and position in the page's /Annots (see `form_ap`).
+    pub fn form_text_styles(&self) -> std::collections::HashMap<(u32, u32), pdf_types::FieldTextStyle> {
+        form_ap::text_styles(&self.inner)
     }
 
     /// Reset every AcroForm field to its /DV (default value) or remove /V.
